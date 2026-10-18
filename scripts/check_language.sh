@@ -34,7 +34,13 @@ scan_em_dash() {
 
 # Compliance phrasing that SPEC B1.12 forbids anywhere in docs or output text (case-insensitive).
 # SPEC.md and CLAUDEME.md are exempt: they state the rule and must quote the phrases.
-COMPLIANCE_RE='FIPS[- ]compliant|FIPS[- ]certified|IL[45] compliant|800-171 compliant|DoDD 3000\.09 compliant'
+# A claim pairs a regime (FIPS, IL4, IL5, 800-171, CMMC, FedRAMP, DoDD) with a status word
+# (compliant, certified, accredited, authorized), in either order, within one clause. The
+# approved sentence names environments, not a status, and passes: "uses FIPS 140-3 validated
+# cryptography to support integration into IL4/IL5 and NIST SP 800-171 environments".
+REGIME='(FIPS|IL ?[45]|800-171|CMMC|FedRAMP|DoDD)'
+STATUS='(compliant|compliance|certified|accredited|authori[sz]ed)'
+COMPLIANCE_RE="${REGIME}[^.;:]{0,40}\\b${STATUS}\\b|\\b${STATUS}[^.;:]{0,25}${REGIME}"
 
 # Prints forbidden compliance phrasing under a work tree; returns 1 if any.
 scan_compliance() {
@@ -89,11 +95,17 @@ if [ "${1:-}" = "--self-test" ]; then
 
   # Compliance phrasing: caught in a doc, allowed in SPEC.md where the rule quotes it.
   mkdir -p "$tmp/docs"
-  printf 'This tool is FIPS-compliant.\n' > "$tmp/docs/README.md"
+  printf 'This tool is FIPS-compliant.\nThe binary is IL4/IL5 compliant.\nIt is compliant with NIST SP 800-171.\nsfr is FedRAMP authorized.\n' > "$tmp/docs/README.md"
   printf 'Never say FIPS compliant.\n' > "$tmp/docs/SPEC.md"
+  printf 'sfr uses FIPS 140-3 validated cryptography to support integration into IL4/IL5 and NIST SP 800-171 environments.\n' > "$tmp/docs/APPROVED.md"
+  printf 'pub const BANNER: &str = "IL5 certified flight recorder";\n' > "$tmp/cli.rs"
   out="$(scan_compliance "$tmp" || true)"
-  printf '%s\n' "$out" | grep -q '^docs/README.md:1:' || { echo "FAIL: self-test: compliance claim missed"; exit 1; }
+  for n in 1 2 3 4; do
+    printf '%s\n' "$out" | grep -q "^docs/README.md:$n:" || { echo "FAIL: self-test: compliance claim on README line $n missed"; exit 1; }
+  done
+  printf '%s\n' "$out" | grep -q '^cli.rs:1:' || { echo "FAIL: self-test: compliance claim in Rust output text missed"; exit 1; }
   printf '%s\n' "$out" | grep -q 'docs/SPEC.md' && { echo "FAIL: self-test: SPEC.md should be exempt"; exit 1; }
+  printf '%s\n' "$out" | grep -q 'APPROVED.md' && { echo "FAIL: self-test: the approved sentence was flagged"; exit 1; }
 
   echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing)"
   exit 0
