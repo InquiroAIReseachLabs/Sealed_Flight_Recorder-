@@ -10,7 +10,7 @@ Targets: `ulog_ingest` (the ULog reader and the whole dry-run path) and `sfr_ver
 
 Arbitrary bytes go through the whole `seal --dry-run` path:
 
-1. `Px4Ingestor::ingest`: the ULog reader, SHA-256 and BLAKE3 of every byte, field decoding, and the event timeline. SHA-256 comes from a fuzz-only backend on the `sha2` crate, so the fuzz build does not need the FIPS module.
+1. `Px4Ingestor::ingest`: the ULog reader, SHA-256 and BLAKE3 of every byte, field decoding, and the event timeline. SHA-256 comes from `RustCrypto`, the backend every build uses.
 2. If the log is readable, `evaluate` with `examples/rules.extended.toml` (the core rules and every optional rule) and the baseline `# Firmware: 1.17.0`.
 3. `record::dry_run_json`, then `json::canonical`.
 
@@ -18,7 +18,7 @@ The target also checks that the logged size and `Summary.bytes` equal the input 
 
 ## Target `sfr_verify`
 
-Arbitrary bytes go to `sfr_core::verify::verify` without a log: the canonical-form scan, the schema checks, the Merkle tree over byte ranges, and Ed25519 verification (a fuzz-only backend on `sha2` and `ed25519-dalek`). Its seeds in `seeds/sfr_verify/` are records sealed from the shrunk logs below by an evaluation key whose public half is `seeds/sfr_verify_key.pub`; the private half was discarded. Besides panics, hangs and out-of-memory, the target treats any input that verifies but is not one of the seeds as a finding. Run it with the same commands as below, with `sfr_verify` and `seeds/sfr_verify` in place of `ulog_ingest` and `seeds/ulog_ingest`.
+Arbitrary bytes go to `sfr_core::verify::verify` without a log: the canonical-form scan, the schema checks, the Merkle tree over byte ranges, and Ed25519 verification (`RustCrypto`, the backend every build uses). Its seeds in `seeds/sfr_verify/` are records sealed from three of the seed logs below by an evaluation key whose public half is `seeds/sfr_verify_key.pub`; the private half was discarded. They were last sealed at Change Order 01, when records began to name their crypto crates, with `--seal-time 2026-10-18T15:00:00Z` and these rules and baselines: `pyulog_sample_first_65516` with `examples/rules.default.toml` and `testdata/baselines/pyulog_sample.params`; the two shrunk SITL logs with `examples/rules.extended.toml` and the golden baseline of the same flight (`v1.17.0_failsafe_gps_loss`, `v1.17.0_vtol_transition_abort`). Besides panics, hangs and out-of-memory, the target treats any input that verifies but is not one of the seeds as a finding. Run it with the same commands as below, with `sfr_verify` and `seeds/sfr_verify` in place of `ulog_ingest` and `seeds/ulog_ingest`.
 
 ## Seed corpus
 

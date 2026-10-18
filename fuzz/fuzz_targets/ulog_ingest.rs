@@ -7,58 +7,28 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sfr_core::crypto::{CryptoBackend, ModuleInfo, Sha256Stream};
+use sfr_core::crypto::CryptoBackend;
+use sfr_core::crypto::rustcrypto::RustCrypto;
 use sfr_core::evaluate::evaluate;
 use sfr_core::ingest::{FlightLogIngestor, Px4Ingestor};
 use sfr_core::json::canonical;
 use sfr_core::params::{Baseline, parse_baseline};
 use sfr_core::record::dry_run_json;
 use sfr_core::rules::{Rules, parse_rules};
-use sha2::Digest;
 use std::sync::LazyLock;
 
 const RULES_TEXT: &str = include_str!("../../examples/rules.extended.toml");
 const BASELINE_TEXT: &str = "# Firmware: 1.17.0\n";
 
-/// Fuzz-only SHA-256 backend (pure Rust, not the FIPS module).
-struct FuzzBackend;
-
-struct FuzzSha256(sha2::Sha256);
-
-impl Sha256Stream for FuzzSha256 {
-    fn update(&mut self, data: &[u8]) {
-        self.0.update(data);
-    }
-    fn finish(self: Box<Self>) -> [u8; 32] {
-        self.0.finalize().into()
-    }
-}
-
-impl CryptoBackend for FuzzBackend {
-    fn module_id(&self) -> &'static str {
-        "fuzz (sha2; not validated)"
-    }
-    fn sha256_stream(&self) -> Box<dyn Sha256Stream> {
-        Box::new(FuzzSha256(sha2::Sha256::new()))
-    }
-    fn module_info(&self) -> ModuleInfo {
-        ModuleInfo { profile: "fuzz", module: "sha2".into(), certificate: None }
-    }
-    fn ed25519_verify(&self, _public_key: &[u8; 32], _message: &[u8], _signature: &[u8; 64]) -> bool {
-        // Ingest never verifies signatures.
-        false
-    }
-}
-
 static RULES: LazyLock<Rules> =
     LazyLock::new(|| parse_rules(RULES_TEXT).expect("examples/rules.extended.toml must parse"));
 static BASELINE: LazyLock<Baseline> =
     LazyLock::new(|| parse_baseline(BASELINE_TEXT).expect("the fuzz baseline must parse"));
-static RULES_SHA256: LazyLock<[u8; 32]> = LazyLock::new(|| sha2::Sha256::digest(RULES_TEXT.as_bytes()).into());
+static RULES_SHA256: LazyLock<[u8; 32]> = LazyLock::new(|| RustCrypto.sha256(RULES_TEXT.as_bytes()));
 
 fuzz_target!(|data: &[u8]| {
     let mut input: &[u8] = data;
-    let Ok(ingested) = Px4Ingestor.ingest("fuzz.ulg", &mut input, &FuzzBackend) else {
+    let Ok(ingested) = Px4Ingestor.ingest("fuzz.ulg", &mut input, &RustCrypto) else {
         return;
     };
 

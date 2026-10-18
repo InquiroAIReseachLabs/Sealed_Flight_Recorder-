@@ -9,31 +9,14 @@ description = "Sealed Flight Record engine: ingest, events, rules, record, Merkl
 [lib]
 path = "src/lib.rs"
 
-# Crypto backends (SPEC B1.2, B1.10 Crypto). Code selects a backend by type, never by default, so
-# both may be compiled together under workspace feature unification. `sfr` enables crypto-fips
-# and `sfr-wasm` enables crypto-portable in Chunk 3; until then cargo-deny and the deny-list
-# check (both run with --all-features) gate this graph.
-[features]
-crypto-fips = ["dep:aws-lc-rs", "dep:aws-lc-fips-sys", "dep:zeroize"]
-crypto-portable = ["dep:sha2", "dep:ed25519-dalek", "dep:zeroize"]
-
 [dependencies]
-# FIPS module boundary: SHA-256, Ed25519 keygen, signing and verification.
-aws-lc-rs = { workspace = true, optional = true }
-# Held directly only to pin the module version (Cargo.lock records it).
-aws-lc-fips-sys = { workspace = true, optional = true }
-# Portable backend for the wasm32 sandbox only; not validated.
-sha2 = { workspace = true, optional = true }
-ed25519-dalek = { workspace = true, optional = true }
-zeroize = { workspace = true, optional = true }
-# Supplementary, non-approved digest of the raw log bytes (founder ruling; never anchors trust).
-blake3 = { workspace = true }
-toml = { workspace = true }
-
-[dev-dependencies]
-# Test-only SHA-256 and Ed25519 so `cargo test -p sfr-core` runs without choosing a backend.
+# Cryptography on every target (SPEC B1.10 Crypto): SHA-256, Ed25519, and the supplementary BLAKE3
+# digest of the raw log bytes (founder ruling; never anchors trust).
 sha2 = { workspace = true }
 ed25519-dalek = { workspace = true }
+blake3 = { workspace = true }
+zeroize = { workspace = true }
+toml = { workspace = true }
 
 [lints]
 workspace = true

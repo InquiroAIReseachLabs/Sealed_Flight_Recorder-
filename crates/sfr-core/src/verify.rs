@@ -38,8 +38,8 @@ pub struct Verified {
     pub fingerprint: String,
     /// Seal time, UTC.
     pub time_utc: String,
-    /// `seal.crypto_module` as one line.
-    pub crypto_module: String,
+    /// `seal.crypto_crates` as one line: each crate name and its crate version.
+    pub crypto_crates: String,
     /// Sealed overall status.
     pub status: String,
     /// Number of events.
@@ -373,21 +373,20 @@ fn standalone(
         problems.push("sealed with an evaluation key (custody file-evaluation); --require-hardware-key refuses it".to_string());
     }
 
-    let module = obj(seal, "crypto_module")?;
-    let crypto_module = format!(
-        "{} profile, {}, certificate {}",
-        string(module, "profile")?,
-        string(module, "module")?,
-        match module.get("certificate") {
-            Some(Value::Str(c)) => c.as_str(),
-            _ => "none",
-        }
-    );
+    let mut crates = Vec::new();
+    for c in array(seal, "crypto_crates")? {
+        let Value::Object(c) = c else {
+            return Err(fail(
+                "`seal.crypto_crates` holds something other than an object",
+            ));
+        };
+        crates.push(format!("{} {}", string(c, "name")?, string(c, "version")?));
+    }
     let verified = Verified {
         custody,
         fingerprint: recorded_fp.to_string(),
         time_utc: string(seal, "time_utc")?.to_string(),
-        crypto_module,
+        crypto_crates: crates.join(", "),
         status: status.to_string(),
         events: event_count,
         leaf_count,

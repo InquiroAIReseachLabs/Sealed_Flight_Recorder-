@@ -6,13 +6,15 @@
 //! with exit 4 until they are built. Exit codes follow SPEC B1.4.
 #![forbid(unsafe_code)]
 
-use sfr_core::crypto::fips::{FileKey, Fips};
+use sfr_core::crypto::rustcrypto::{FileKey, RustCrypto};
 use sfr_core::crypto::{CryptoBackend, Custody, Signer};
 use sfr_core::evaluate::{Evaluation, Status, evaluate};
 use sfr_core::exit_code;
 use sfr_core::ingest::{FlightLogIngestor, IngestError, Ingested, Px4Ingestor};
 use sfr_core::json::{self, Obj, Value};
-use sfr_core::keys::{fingerprint, parse_public_key_pem, pem_decode, pem_encode, public_key_pem};
+use sfr_core::keys::{
+    ed25519_pkcs8_v1_der, fingerprint, parse_public_key_pem, pem_decode, pem_encode, public_key_pem,
+};
 use sfr_core::params::{Baseline, parse_baseline};
 use sfr_core::record::dry_run_json;
 use sfr_core::rules::{Rules, parse_rules};
@@ -162,20 +164,20 @@ fn file_name(path: &str) -> String {
         .map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
 }
 
-fn module_line(crypto: &dyn CryptoBackend) -> String {
-    let m = crypto.module_info();
-    format!(
-        "{} profile, {}, CMVP certificate {}",
-        m.profile,
-        m.module,
-        m.certificate.unwrap_or("none")
-    )
+/// The crypto crates and their crate versions, as `seal.crypto_crates` names them.
+fn crates_line(crypto: &dyn CryptoBackend) -> String {
+    let names: Vec<String> = crypto
+        .crates()
+        .iter()
+        .map(|c| format!("{} {}", c.name, c.version))
+        .collect();
+    format!("{} (crate versions)", names.join(", "))
 }
 
 // ---------------------------------------------------------------------------------------------
 // keygen
 
-fn keygen(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<i32, Failure> {
+fn keygen(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Result<i32, Failure> {
     let a = Args::parse(
         args,
         &["--out"],
@@ -218,10 +220,16 @@ fn keygen(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<i32,
             format!("cannot create {}: {e}", dir.display()),
         )
     })?;
-    let (pkcs8, public) = crypto
-        .generate_ed25519()
-        .map_err(|e| fail(exit_code::USAGE, e.to_string()))?;
-    let key_pem = Zeroizing::new(pem_encode("PRIVATE KEY", &pkcs8));
+    // The only randomness in the tool: a 32-byte Ed25519 seed from the operating system's CSPRNG.
+    let mut seed = Zeroizing::new([0u8; 32]);
+    getrandom::fill(&mut seed[..]).map_err(|e| {
+        fail(
+            exit_code::USAGE,
+            format!("the operating system's random number generator failed: {e}"),
+        )
+    })?;
+    let public = FileKey::from_seed(&seed, "sfr.key").public_key();
+    let key_pem = Zeroizing::new(pem_encode("PRIVATE KEY", &ed25519_pkcs8_v1_der(&seed)));
     let mut opts = OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -287,7 +295,7 @@ fn table(ing: &Ingested, eval: &Evaluation, crypto: &dyn CryptoBackend, dry_run:
         ("sha256", sfr_core::hex(&id.sha256)),
         ("blake3", sfr_core::hex(&id.blake3)),
         ("firmware", firmware),
-        ("crypto", module_line(crypto)),
+        ("crypto", crates_line(crypto)),
     ] {
         out.push_str(&format!("{k:<10}{v}\n"));
     }
@@ -316,7 +324,7 @@ fn table(ing: &Ingested, eval: &Evaluation, crypto: &dyn CryptoBackend, dry_run:
     out
 }
 
-fn seal_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<i32, Failure> {
+fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Result<i32, Failure> {
     let a = Args::parse(
         args,
         &[
@@ -541,7 +549,11 @@ fn seal_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<i3
 // ---------------------------------------------------------------------------------------------
 // verify
 
-fn verify_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<i32, Failure> {
+fn verify_cmd(
+    args: &[String],
+    crypto: &RustCrypto,
+    stdout: &mut dyn Write,
+) -> Result<i32, Failure> {
     let a = Args::parse(
         args,
         &["--pubkey", "--ulog", "--trust-anchor", "--crl"],
@@ -590,7 +602,7 @@ fn verify_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<
                         .field("deep", Value::Bool(v.deep))
                         .field("key_custody", Value::str(v.custody.as_str()))
                         .field("key_fingerprint", Value::str(v.fingerprint.clone()))
-                        .field("crypto_module", Value::str(v.crypto_module.clone()))
+                        .field("crypto_crates", Value::str(v.crypto_crates.clone()))
                         .field("sealed_utc", Value::str(v.time_utc.clone()))
                         .field("status", Value::str(v.status.clone()))
                         .field("event_count", Value::count(v.events as u64))
@@ -603,11 +615,11 @@ fn verify_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<
                     t.push('\n');
                 }
                 t.push_str(&format!(
-                    "VERIFIED{}\nrecord    {record_path}\ncustody   {}\nkey       {}\ncrypto    {}\nsealed    {}\nstatus    {}\nevents    {}\n",
+                    "VERIFIED{}\nrecord    {record_path}\ncustody   {}\nkey       {}\ncrypto    {} (crate versions)\nsealed    {}\nstatus    {}\nevents    {}\n",
                     if v.deep { " (record and log)" } else { " (record)" },
                     v.custody.as_str(),
                     v.fingerprint,
-                    v.crypto_module,
+                    v.crypto_crates,
                     v.time_utc,
                     v.status,
                     v.events
@@ -666,19 +678,19 @@ fn verify_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<
 
 // ---------------------------------------------------------------------------------------------
 
-fn version(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<i32, Failure> {
+fn version(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Result<i32, Failure> {
     let a = Args::parse(args, &[], &["--json"])?;
     let tool = this_tool();
-    let m = crypto.module_info();
     let text = if a.flag("--json") {
         json::pretty(
             &Obj::new()
                 .field("name", Value::str(tool.name))
                 .field("version", Value::str(tool.version))
                 .field("build_commit", Value::str(tool.build_commit))
-                .field("crypto_profile", Value::str(m.profile))
-                .field("crypto_module", Value::str(m.module.clone()))
-                .field("cmvp_certificate", Value::opt_str(m.certificate))
+                .field(
+                    "crypto_crates",
+                    sfr_core::seal::crates_json(crypto.crates()),
+                )
                 .build(),
         )
     } else {
@@ -687,7 +699,7 @@ fn version(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<i32
             tool.name,
             tool.version,
             tool.build_commit,
-            module_line(crypto)
+            crates_line(crypto)
         )
     };
     write_out(stdout, &text)?;
@@ -702,8 +714,7 @@ fn run(args: &[String], stdout: &mut dyn Write) -> Result<i32, Failure> {
         write_out(stdout, &format!("{USAGE}\n"))?;
         return Ok(exit_code::OK);
     }
-    // SPEC B1.10 Crypto: check the module's approved mode before any other work.
-    let crypto = Fips::new().map_err(|e| fail(exit_code::USAGE, e.to_string()))?;
+    let crypto = RustCrypto;
     match cmd.as_str() {
         "keygen" => keygen(rest, &crypto, stdout),
         "seal" => seal_cmd(rest, &crypto, stdout),

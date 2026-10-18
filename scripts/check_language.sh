@@ -33,20 +33,21 @@ scan_em_dash() {
 }
 
 # Compliance phrasing that SPEC B1.12 forbids anywhere in docs or output text (case-insensitive).
-# SPEC.md and CLAUDEME.md are exempt: they state the rule and must quote the phrases.
-# A claim pairs a regime (FIPS, IL4, IL5, 800-171, CMMC, FedRAMP, DoDD) with a status word
-# (compliant, certified, accredited, authorized), in either order, within one clause. The
-# approved sentence names environments, not a status, and passes: "uses FIPS 140-3 validated
-# cryptography to support integration into IL4/IL5 and NIST SP 800-171 environments".
+# SPEC.md and CLAUDEME.md are exempt: they state the rule and must quote the phrases. So is
+# docs/DIAGNOSTIC.md, the internal research record, which quotes certificates and security
+# policies. A claim pairs a regime (FIPS, IL4, IL5, 800-171, CMMC, FedRAMP, DoDD) with a status
+# word (compliant, certified, accredited, authorized, validated), in either order, within one
+# clause. No FIPS, validated, or compliant claim is permitted anywhere (founder ruling, Change
+# Order 01), so no sentence is exempt.
 REGIME='(FIPS|IL ?[45]|800-171|CMMC|FedRAMP|DoDD)'
-STATUS='(compliant|compliance|certified|accredited|authori[sz]ed)'
+STATUS='(compliant|compliance|certified|accredited|authori[sz]ed|validated)'
 COMPLIANCE_RE="${REGIME}[^.;:]{0,40}\\b${STATUS}\\b|\\b${STATUS}[^.;:]{0,25}${REGIME}"
 
 # Prints forbidden compliance phrasing under a work tree; returns 1 if any.
 scan_compliance() {
   local dir="$1" hits
   hits="$(cd "$dir" && candidate_files . \
-    | grep -zE '\.(md|rs|html|js|txt)$' | grep -zvE '^(docs/SPEC\.md|CLAUDEME\.md)$' \
+    | grep -zE '\.(md|rs|html|js|txt)$' | grep -zvE '^(docs/SPEC\.md|docs/DIAGNOSTIC\.md|CLAUDEME\.md)$' \
     | xargs -0 -r grep -n -i -E -- "$COMPLIANCE_RE" 2>/dev/null || true)"
   if [ -n "$hits" ]; then printf '%s\n' "$hits"; return 1; fi
   return 0
@@ -97,7 +98,7 @@ if [ "${1:-}" = "--self-test" ]; then
   mkdir -p "$tmp/docs"
   printf 'This tool is FIPS-compliant.\nThe binary is IL4/IL5 compliant.\nIt is compliant with NIST SP 800-171.\nsfr is FedRAMP authorized.\n' > "$tmp/docs/README.md"
   printf 'Never say FIPS compliant.\n' > "$tmp/docs/SPEC.md"
-  printf 'sfr uses FIPS 140-3 validated cryptography to support integration into IL4/IL5 and NIST SP 800-171 environments.\n' > "$tmp/docs/APPROVED.md"
+  printf 'sfr uses FIPS 140-3 validated cryptography to support integration into IL4/IL5 and NIST SP 800-171 environments.\nIts signatures are FIPS-validated.\n' > "$tmp/docs/FORMERLY_APPROVED.md"
   printf 'pub const BANNER: &str = "IL5 certified flight recorder";\n' > "$tmp/cli.rs"
   out="$(scan_compliance "$tmp" || true)"
   for n in 1 2 3 4; do
@@ -105,7 +106,9 @@ if [ "${1:-}" = "--self-test" ]; then
   done
   printf '%s\n' "$out" | grep -q '^cli.rs:1:' || { echo "FAIL: self-test: compliance claim in Rust output text missed"; exit 1; }
   printf '%s\n' "$out" | grep -q 'docs/SPEC.md' && { echo "FAIL: self-test: SPEC.md should be exempt"; exit 1; }
-  printf '%s\n' "$out" | grep -q 'APPROVED.md' && { echo "FAIL: self-test: the approved sentence was flagged"; exit 1; }
+  for n in 1 2; do
+    printf '%s\n' "$out" | grep -q "^docs/FORMERLY_APPROVED.md:$n:" || { echo "FAIL: self-test: validated claim on line $n missed"; exit 1; }
+  done
 
   echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing)"
   exit 0

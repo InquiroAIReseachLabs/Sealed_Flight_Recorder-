@@ -94,7 +94,7 @@ pub struct LogIdentity {
     pub file_name: String,
     /// Size in bytes.
     pub size: u64,
-    /// SHA-256 of the raw bytes, from the FIPS module in the CLI.
+    /// SHA-256 of the raw bytes.
     pub sha256: [u8; 32],
     /// BLAKE3 of the raw bytes (supplementary).
     pub blake3: [u8; 32],

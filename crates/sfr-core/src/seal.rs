@@ -6,7 +6,7 @@
 //! payload is ASCII `SFR-RECORD-V1`, 0x00, `schema_version` as 4-byte big-endian, and the
 //! Merkle root; the signature is Ed25519 over it.
 
-use crate::crypto::{CryptoBackend, ModuleInfo, Signer};
+use crate::crypto::{CrateVersion, CryptoBackend, Signer};
 use crate::evaluate::{Evaluation, Status};
 use crate::events::event_json;
 use crate::ingest::Ingested;
@@ -161,13 +161,19 @@ pub fn signed_payload(schema_version: u32, root: &[u8; 32]) -> Vec<u8> {
     p
 }
 
-/// `seal.crypto_module`.
-pub fn module_json(m: &ModuleInfo) -> Value {
-    Obj::new()
-        .field("profile", Value::str(m.profile))
-        .field("module", Value::str(m.module.clone()))
-        .field("certificate", Value::opt_str(m.certificate))
-        .build()
+/// `seal.crypto_crates`: the crates that computed the record, each named by its crate version.
+pub fn crates_json(crates: &[CrateVersion]) -> Value {
+    Value::Array(
+        crates
+            .iter()
+            .map(|c| {
+                Obj::new()
+                    .field("name", Value::str(c.name))
+                    .field("version", Value::str(c.version))
+                    .build()
+            })
+            .collect(),
+    )
 }
 
 /// Everything sealed besides the log analysis.
@@ -231,7 +237,7 @@ pub fn seal(
                 "token_cmvp_certificate",
                 Value::opt_str(params.token_cmvp_certificate.clone()),
             )
-            .field("crypto_module", module_json(&crypto.module_info()))
+            .field("crypto_crates", crates_json(crypto.crates()))
             .field("signer_certificate", Value::Null)
             .field("certificate_chain", Value::Null)
             .build(),

@@ -8,7 +8,7 @@
     clippy::indexing_slicing
 )]
 
-use sfr_core::crypto::fips::Fips;
+use sfr_core::crypto::rustcrypto::RustCrypto;
 use sfr_core::keys::parse_public_key_pem;
 use sfr_core::verify::{VerifyError, verify};
 use std::path::{Path, PathBuf};
@@ -264,7 +264,7 @@ fn a_thousand_seeded_byte_flips_in_a_record_all_fail_verification() {
     );
     let bytes = std::fs::read(&record).unwrap();
     let pk = pubkey(&public);
-    let crypto = Fips::new().unwrap();
+    let crypto = RustCrypto;
     assert!(verify(&bytes, None, &crypto, &pk, false).is_ok());
     let mut rng = Rng(0x5eed_0001);
     for i in 0..1000 {
@@ -295,7 +295,7 @@ fn a_thousand_seeded_byte_flips_in_a_log_all_fail_verification() {
     let rec = std::fs::read(&record).unwrap();
     let ulg = std::fs::read(root().join(log)).unwrap();
     let pk = pubkey(&public);
-    let crypto = Fips::new().unwrap();
+    let crypto = RustCrypto;
     assert!(verify(&rec, Some(&mut &ulg[..]), &crypto, &pk, false).is_ok());
     let mut rng = Rng(0x5eed_0002);
     for i in 0..1000 {

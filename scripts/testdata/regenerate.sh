@@ -5,6 +5,7 @@
 #   scripts/testdata/regenerate.sh oracle      # testdata/expected/oracle/*    (needs pyulog, numpy)
 #   scripts/testdata/regenerate.sh expected    # testdata/expected/*.json      (needs a built sfr)
 #   scripts/testdata/regenerate.sh compare     # sfr expected versus oracle    (Python only)
+#   scripts/testdata/regenerate.sh list        # one "name log-path" line per golden log
 #
 # The expected files are sfr's own `seal --dry-run --json` output. They count as reviewed
 # only while `compare` reports 0 differences against the oracle, which is written from
@@ -28,6 +29,8 @@ logs() {
 }
 
 case "${1:-}" in
+  list)
+    logs ;;
   baselines)
     mkdir -p testdata/baselines
     logs | while read -r name log; do

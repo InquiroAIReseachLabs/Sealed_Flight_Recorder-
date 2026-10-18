@@ -1,9 +1,9 @@
-//! Cryptographic backends (SPEC B1.2, B1.10 Crypto).
+//! Cryptography (SPEC B1.2, B1.10 Crypto).
 //!
-//! Code selects a backend by type, never by default. The `sfr` CLI uses [`fips::Fips`] (the
-//! AWS-LC FIPS module through aws-lc-rs); the browser sandbox uses [`portable::Portable`] (not
-//! validated). Both may be compiled together under workspace feature unification; nothing in
-//! this crate picks one implicitly.
+//! Every build, on every target, computes SHA-256 with `sha2`, Ed25519 with `ed25519-dalek`, and
+//! BLAKE3 with `blake3` ([`rustcrypto::RustCrypto`]), so a record is byte-identical wherever it
+//! is sealed. Code selects the backend by type; the trait exists so tests and fuzz targets can
+//! substitute their own.
 
 use std::fmt;
 
@@ -15,27 +15,40 @@ pub trait Sha256Stream {
     fn finish(self: Box<Self>) -> [u8; 32];
 }
 
-/// What a record names as its cryptographic module (SPEC B1.10 Crypto: the build profile, the
-/// module version string, and the CMVP certificate number or none).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModuleInfo {
-    /// `development`, `validated`, or `portable`.
-    pub profile: &'static str,
-    /// The module's own version string.
-    pub module: String,
-    /// CMVP certificate number; only a validated-profile build may name one.
-    pub certificate: Option<&'static str>,
+/// A crate that computes part of a record, named by its crate version (`seal.crypto_crates`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrateVersion {
+    /// The crate's name on crates.io.
+    pub name: &'static str,
+    /// The crate version pinned in `Cargo.lock`.
+    pub version: &'static str,
 }
 
-/// What the engine needs from a cryptographic module.
+/// The crates behind [`rustcrypto::RustCrypto`], sorted by name. A unit test holds these to
+/// `Cargo.lock`.
+pub const RUSTCRYPTO_CRATES: [CrateVersion; 3] = [
+    CrateVersion {
+        name: "blake3",
+        version: "1.8.7",
+    },
+    CrateVersion {
+        name: "ed25519-dalek",
+        version: "3.0.0",
+    },
+    CrateVersion {
+        name: "sha2",
+        version: "0.11.1",
+    },
+];
+
+/// What the engine needs from its cryptography.
 pub trait CryptoBackend {
-    /// One line naming the module, for messages and `sfr --version`.
-    fn module_id(&self) -> &'static str;
-    /// The record's `seal.crypto_module`.
-    fn module_info(&self) -> ModuleInfo;
-    /// Starts an incremental SHA-256 (FIPS 180-4).
+    /// The crates that compute the record's digests and signature, sorted by name (the
+    /// record's `seal.crypto_crates`).
+    fn crates(&self) -> &'static [CrateVersion];
+    /// Starts an incremental SHA-256 (FIPS 180-4 defines the function).
     fn sha256_stream(&self) -> Box<dyn Sha256Stream>;
-    /// Verifies an Ed25519 signature (FIPS 186-5 EdDSA).
+    /// Verifies an Ed25519 signature (RFC 8032).
     fn ed25519_verify(&self, public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool;
     /// SHA-256 of one buffer.
     fn sha256(&self, data: &[u8]) -> [u8; 32] {
@@ -107,179 +120,16 @@ pub trait Signer {
     fn sign(&self, message: &[u8]) -> Result<[u8; 64], SignError>;
 }
 
-/// The AWS-LC FIPS module through aws-lc-rs (`crypto-fips` feature).
-#[cfg(feature = "crypto-fips")]
-pub mod fips {
-    use super::{CryptoBackend, Custody, ModuleInfo, Sha256Stream, SignError, Signer};
-    use aws_lc_rs::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
-    use zeroize::Zeroizing;
-
-    /// Handle to the module after its FIPS-mode check. The module's power-on self-tests run
-    /// in a constructor before `main` and abort the process on failure, so a running `sfr`
-    /// has passed them. The FIPS-mode check reports that the module was built with FIPS mode on.
-    #[derive(Debug)]
-    pub struct Fips {
-        _private: (),
-    }
-
-    /// The module reported that it is not in approved mode (SPEC B1.4: exit 4).
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct NotApprovedMode(pub String);
-
-    impl std::fmt::Display for NotApprovedMode {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(
-                f,
-                "the AWS-LC FIPS module is not in approved mode: {}",
-                self.0
-            )
-        }
-    }
-
-    impl Fips {
-        /// Checks FIPS mode before any other work (SPEC B1.10 Crypto). A failed power-on
-        /// self-test aborts the process inside the module, so this only returns on success or
-        /// on a module that runs but is not in approved mode.
-        pub fn new() -> Result<Self, NotApprovedMode> {
-            aws_lc_rs::try_fips_mode().map_err(|e| NotApprovedMode(e.to_string()))?;
-            Ok(Fips { _private: () })
-        }
-
-        /// Generates an Ed25519 key pair from the module's DRBG. Returns the PKCS#8 v1 DER
-        /// private key (the form `openssl pkey` reads; zeroized on drop) and the raw public key.
-        pub fn generate_ed25519(&self) -> Result<(Zeroizing<Vec<u8>>, [u8; 32]), SignError> {
-            let rng = aws_lc_rs::rand::SystemRandom::new();
-            let doc = Ed25519KeyPair::generate_pkcs8v1(&rng)
-                .map_err(|_| SignError("the FIPS module could not generate a key".into()))?;
-            let der = Zeroizing::new(doc.as_ref().to_vec());
-            let pair = Ed25519KeyPair::from_pkcs8_maybe_unchecked(&der)
-                .map_err(|e| SignError(format!("generated key rejected: {e}")))?;
-            let public = raw_public(&pair)?;
-            Ok((der, public))
-        }
-    }
-
-    fn raw_public(pair: &Ed25519KeyPair) -> Result<[u8; 32], SignError> {
-        pair.public_key()
-            .as_ref()
-            .try_into()
-            .map_err(|_| SignError("Ed25519 public key is not 32 bytes".into()))
-    }
-
-    /// The module version string from the linked module's headers, without the trailing NUL.
-    fn version_string() -> String {
-        let raw: &[u8] = aws_lc_fips_sys::AWSLC_VERSION_STRING;
-        let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
-        String::from_utf8_lossy(raw.get(..end).unwrap_or(raw)).into_owned()
-    }
-
-    struct Stream(aws_lc_rs::digest::Context);
-
-    impl Sha256Stream for Stream {
-        fn update(&mut self, data: &[u8]) {
-            self.0.update(data);
-        }
-        fn finish(self: Box<Self>) -> [u8; 32] {
-            let digest = self.0.finish();
-            let mut out = [0u8; 32];
-            out.copy_from_slice(digest.as_ref());
-            out
-        }
-    }
-
-    impl CryptoBackend for Fips {
-        fn module_id(&self) -> &'static str {
-            "aws-lc-rs fips (AWS-LC FIPS module, development profile)"
-        }
-        fn module_info(&self) -> ModuleInfo {
-            // The validated profile (SPEC B1.10) is selected by the release build in Chunk 5;
-            // every other build is the development profile and names no certificate.
-            ModuleInfo {
-                profile: "development",
-                module: version_string(),
-                certificate: None,
-            }
-        }
-        fn sha256_stream(&self) -> Box<dyn Sha256Stream> {
-            Box::new(Stream(aws_lc_rs::digest::Context::new(
-                &aws_lc_rs::digest::SHA256,
-            )))
-        }
-        fn sha256_concat(&self, parts: &[&[u8]]) -> [u8; 32] {
-            // One-shot digests are measurably faster than a context per small Merkle input.
-            let digest = if let [one] = parts {
-                aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, one)
-            } else {
-                let mut buf = Vec::with_capacity(parts.iter().map(|p| p.len()).sum());
-                for p in parts {
-                    buf.extend_from_slice(p);
-                }
-                aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &buf)
-            };
-            let mut out = [0u8; 32];
-            out.copy_from_slice(digest.as_ref());
-            out
-        }
-        fn ed25519_verify(
-            &self,
-            public_key: &[u8; 32],
-            message: &[u8],
-            signature: &[u8; 64],
-        ) -> bool {
-            UnparsedPublicKey::new(&ED25519, public_key)
-                .verify(message, signature)
-                .is_ok()
-        }
-    }
-
-    /// An evaluation key file (custody `file-evaluation`).
-    #[derive(Debug)]
-    pub struct FileKey {
-        pair: Ed25519KeyPair,
-        label: String,
-    }
-
-    impl FileKey {
-        /// Loads a PKCS#8 (v1 or v2) Ed25519 private key.
-        pub fn from_pkcs8_der(der: &[u8], label: &str) -> Result<FileKey, SignError> {
-            let pair = Ed25519KeyPair::from_pkcs8_maybe_unchecked(der)
-                .map_err(|e| SignError(format!("not an Ed25519 PKCS#8 private key: {e}")))?;
-            Ok(FileKey {
-                pair,
-                label: label.to_string(),
-            })
-        }
-    }
-
-    impl Signer for FileKey {
-        fn public_key(&self) -> [u8; 32] {
-            raw_public(&self.pair).unwrap_or([0; 32])
-        }
-        fn custody(&self) -> Custody {
-            Custody::FileEvaluation
-        }
-        fn label(&self) -> String {
-            self.label.clone()
-        }
-        fn sign(&self, message: &[u8]) -> Result<[u8; 64], SignError> {
-            self.pair
-                .sign(message)
-                .as_ref()
-                .try_into()
-                .map_err(|_| SignError("Ed25519 signature is not 64 bytes".into()))
-        }
-    }
-}
-
-/// Portable pure-Rust backend for the wasm32 sandbox (`crypto-portable` feature). Not validated.
-#[cfg(feature = "crypto-portable")]
-pub mod portable {
-    use super::{CryptoBackend, Custody, ModuleInfo, Sha256Stream, SignError, Signer};
+/// `sha2`, `ed25519-dalek`, and `blake3`: the one backend of every build.
+pub mod rustcrypto {
+    use super::{CrateVersion, CryptoBackend, Custody, RUSTCRYPTO_CRATES, Sha256Stream};
+    use super::{SignError, Signer};
+    use crate::keys::ed25519_seed_from_pkcs8_der;
     use sha2::Digest;
 
-    /// The not-validated portable backend.
-    #[derive(Debug, Default)]
-    pub struct Portable;
+    /// The backend.
+    #[derive(Debug, Default, Clone, Copy)]
+    pub struct RustCrypto;
 
     struct Stream(sha2::Sha256);
 
@@ -292,19 +142,19 @@ pub mod portable {
         }
     }
 
-    impl CryptoBackend for Portable {
-        fn module_id(&self) -> &'static str {
-            "portable (sha2, ed25519-dalek; not validated)"
-        }
-        fn module_info(&self) -> ModuleInfo {
-            ModuleInfo {
-                profile: "portable",
-                module: "sha2 and ed25519-dalek (not validated)".into(),
-                certificate: None,
-            }
+    impl CryptoBackend for RustCrypto {
+        fn crates(&self) -> &'static [CrateVersion] {
+            &RUSTCRYPTO_CRATES
         }
         fn sha256_stream(&self) -> Box<dyn Sha256Stream> {
             Box::new(Stream(sha2::Sha256::new()))
+        }
+        fn sha256_concat(&self, parts: &[&[u8]]) -> [u8; 32] {
+            let mut h = sha2::Sha256::new();
+            for p in parts {
+                h.update(p);
+            }
+            h.finalize().into()
         }
         fn ed25519_verify(
             &self,
@@ -320,23 +170,45 @@ pub mod portable {
         }
     }
 
-    /// An in-memory evaluation key (the sandbox's ephemeral key).
-    pub struct SeedKey {
+    /// An evaluation key file or the sandbox's in-memory key (custody `file-evaluation`).
+    pub struct FileKey {
         key: ed25519_dalek::SigningKey,
         label: String,
     }
 
-    impl SeedKey {
-        /// A key from a 32-byte seed.
-        pub fn from_seed(seed: &[u8; 32], label: &str) -> SeedKey {
-            SeedKey {
+    impl std::fmt::Debug for FileKey {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("FileKey")
+                .field("label", &self.label)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl FileKey {
+        /// A key from its 32-byte seed (RFC 8032 private key).
+        pub fn from_seed(seed: &[u8; 32], label: &str) -> FileKey {
+            FileKey {
                 key: ed25519_dalek::SigningKey::from_bytes(seed),
                 label: label.to_string(),
             }
         }
+
+        /// Loads an Ed25519 PKCS#8 private key (v1, or v2 with the public key; RFC 8410).
+        pub fn from_pkcs8_der(der: &[u8], label: &str) -> Result<FileKey, SignError> {
+            let (seed, public) = ed25519_seed_from_pkcs8_der(der).ok_or_else(|| {
+                SignError("not an Ed25519 PKCS#8 private key (RFC 8410, v1 or v2)".into())
+            })?;
+            let key = FileKey::from_seed(&seed, label);
+            if public.is_some_and(|p| p != key.public_key()) {
+                return Err(SignError(
+                    "the PKCS#8 key's public key does not match its private key".into(),
+                ));
+            }
+            Ok(key)
+        }
     }
 
-    impl Signer for SeedKey {
+    impl Signer for FileKey {
         fn public_key(&self) -> [u8; 32] {
             self.key.verifying_key().to_bytes()
         }
@@ -356,7 +228,7 @@ pub mod portable {
 /// Test-only backend so `cargo test -p sfr-core` needs no feature.
 #[cfg(test)]
 pub(crate) mod test_backend {
-    use super::{CryptoBackend, Custody, ModuleInfo, Sha256Stream, SignError, Signer};
+    use super::{CrateVersion, CryptoBackend, Custody, Sha256Stream, SignError, Signer};
     use sha2::Digest;
 
     pub(crate) struct TestBackend;
@@ -372,15 +244,11 @@ pub(crate) mod test_backend {
     }
 
     impl CryptoBackend for TestBackend {
-        fn module_id(&self) -> &'static str {
-            "test"
-        }
-        fn module_info(&self) -> ModuleInfo {
-            ModuleInfo {
-                profile: "test",
-                module: "test".into(),
-                certificate: None,
-            }
+        fn crates(&self) -> &'static [CrateVersion] {
+            &[CrateVersion {
+                name: "test",
+                version: "0",
+            }]
         }
         fn sha256_stream(&self) -> Box<dyn Sha256Stream> {
             Box::new(Stream(sha2::Sha256::new()))
@@ -422,5 +290,113 @@ pub(crate) mod test_backend {
             use ed25519_dalek::Signer as _;
             Ok(self.0.sign(message).to_bytes())
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use super::rustcrypto::{FileKey, RustCrypto};
+    use super::*;
+    use crate::hex;
+    use crate::keys::hex_decode;
+
+    #[test]
+    fn sha256_matches_the_fips_180_4_example() {
+        assert_eq!(
+            hex(&RustCrypto.sha256(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            RustCrypto.sha256_concat(&[b"a", b"", b"bc"]),
+            RustCrypto.sha256(b"abc")
+        );
+        let mut s = RustCrypto.sha256_stream();
+        s.update(b"ab");
+        s.update(b"c");
+        assert_eq!(s.finish(), RustCrypto.sha256(b"abc"));
+    }
+
+    #[test]
+    fn ed25519_matches_rfc8032_section_7_1() {
+        // TEST 1, TEST 2, TEST 3: secret key, public key, message, signature.
+        let vectors: [(&str, &str, &str, &str); 3] = [
+            (
+                "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+                "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+                "",
+                "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+            ),
+            (
+                "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+                "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+                "72",
+                "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+            ),
+            (
+                "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+                "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+                "af82",
+                "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a",
+            ),
+        ];
+        for (secret, public, message, signature) in vectors {
+            let key = FileKey::from_seed(&hex_decode::<32>(secret).expect("hex"), "rfc8032");
+            let message: Vec<u8> = (0..message.len() / 2)
+                .map(|i| u8::from_str_radix(&message[2 * i..2 * i + 2], 16).expect("hex"))
+                .collect();
+            let signature = hex_decode::<64>(signature).expect("hex");
+            assert_eq!(hex(&key.public_key()), public);
+            assert_eq!(key.sign(&message).expect("signs"), signature);
+            assert!(RustCrypto.ed25519_verify(&key.public_key(), &message, &signature));
+            let mut bad = signature;
+            bad[0] ^= 1;
+            assert!(!RustCrypto.ed25519_verify(&key.public_key(), &message, &bad));
+        }
+    }
+
+    #[test]
+    fn a_pkcs8_key_file_loads_and_a_mismatched_public_key_is_refused() {
+        // RFC 8410 section 10.3 example private key; its public key is the section 10.1 example.
+        let seed =
+            hex_decode::<32>("d4ee72dbf913584ad5b6d8f1f769f8ad3afe7c28cbf1d4fbe097a88f44755842")
+                .expect("hex");
+        let v1 = crate::keys::ed25519_pkcs8_v1_der(&seed);
+        let key = FileKey::from_pkcs8_der(&v1, "sfr.key").expect("v1 loads");
+        assert_eq!(
+            hex(&key.public_key()),
+            "19bf44096984cdfe8541bac167dc3b96c85086aa30b6b6cb0c5c38ad703166e1"
+        );
+        assert_eq!(key.label(), "sfr.key");
+        assert_eq!(key.custody(), Custody::FileEvaluation);
+        let mut v2 = vec![
+            0x30, 0x51, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20,
+        ];
+        v2.extend_from_slice(&seed);
+        v2.extend_from_slice(&[0x81, 0x21, 0x00]);
+        v2.extend_from_slice(&key.public_key());
+        assert!(FileKey::from_pkcs8_der(&v2, "v2").is_ok());
+        let last = v2.len() - 1;
+        v2[last] ^= 1;
+        let err = FileKey::from_pkcs8_der(&v2, "v2").expect_err("mismatch refused");
+        assert!(err.0.contains("does not match"), "{err}");
+        assert!(FileKey::from_pkcs8_der(b"junk", "x").is_err());
+    }
+
+    #[test]
+    fn the_named_crate_versions_are_the_ones_in_cargo_lock() {
+        let lock =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
+                .expect("workspace Cargo.lock");
+        for c in RUSTCRYPTO_CRATES {
+            let entry = format!("name = \"{}\"\nversion = \"{}\"\n", c.name, c.version);
+            assert!(lock.contains(&entry), "Cargo.lock has no {entry}");
+        }
+        let names: Vec<&str> = RUSTCRYPTO_CRATES.iter().map(|c| c.name).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted, "seal.crypto_crates is sorted by name");
+        assert_eq!(RustCrypto.crates(), &RUSTCRYPTO_CRATES[..]);
     }
 }

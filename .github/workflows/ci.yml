@@ -36,26 +36,8 @@ jobs:
             [ -f "$f" ] || continue
             grep -q '^#!\[forbid(unsafe_code)\]' "$f" || { echo "missing #![forbid(unsafe_code)]: $f"; exit 1; }
           done
-      - name: FIPS module build tools (aws-lc-fips-sys needs CMake, Go, Perl, a C compiler)
-        run: |
-          set -euo pipefail
-          cmake --version | head -1
-          go version
-          perl -e 'print "perl $^V\n"'
-          cc --version | head -1
-      - name: cargo tree -p sfr has no sha2, ed25519-dalek, or aws-lc-sys (SPEC B1.10 Crypto)
-        run: |
-          set -euo pipefail
-          tree="$(cargo tree -p sfr --locked --prefix none)"
-          if grep -E '^(sha2|ed25519-dalek) ' <<<"$tree"; then
-            echo "sfr's dependency graph contains a SHA-256 or Ed25519 crate outside the FIPS module"
-            exit 1
-          fi
-          if grep -E '^aws-lc-sys ' <<<"$tree"; then
-            echo "sfr's dependency graph contains the non-FIPS AWS-LC (aws-lc-sys)"
-            exit 1
-          fi
-          grep -m1 -E '^aws-lc-fips-sys v' <<<"$tree"
+      - name: One crypto stack on every target, sha2, ed25519-dalek, blake3 (SPEC B1.10 Crypto)
+        run: scripts/check_crypto_graph.sh
       - name: rustfmt --check
         run: cargo fmt --all --check
       - name: clippy, warnings as errors
@@ -77,6 +59,43 @@ jobs:
             echo
             scripts/regen_readme_numbers.sh --print verify-perf.log "$GITHUB_RUN_ID" "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  armv7:
+    name: armv7 static build, tests under QEMU, records identical to x86_64 (SPEC B1.10)
+    runs-on: ubuntu-latest
+    env:
+      # Rust's own linker and the target's bundled musl startup files: no cross C toolchain.
+      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER: rust-lld
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain (rust-toolchain.toml) and QEMU user-mode emulation
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-user-static
+          # Run 32-bit ARM executables through QEMU, so the tests can start the armv7 sfr.
+          if [ ! -e /proc/sys/fs/binfmt_misc/qemu-arm ]; then
+            sudo sh -c 'cat /usr/lib/binfmt.d/qemu-arm.conf > /proc/sys/fs/binfmt_misc/register'
+          fi
+          qemu-arm-static --version | head -1
+      - name: Static armv7 build; file reports a statically linked 32-bit ARM executable
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p sfr --target armv7-unknown-linux-musleabihf
+          out="$(file target/armv7-unknown-linux-musleabihf/release/sfr)"
+          echo "$out"
+          grep -q 'ELF 32-bit LSB executable, ARM' <<<"$out"
+          grep -q 'statically linked' <<<"$out"
+      - name: Full test suite on armv7 under QEMU (correctness only; no armv7 timing is gated)
+        run: cargo test --workspace --locked --target armv7-unknown-linux-musleabihf
+      - name: Every golden log seals to the same bytes on x86_64 and armv7
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p sfr
+          scripts/check_same_records.sh target/release/sfr target/armv7-unknown-linux-musleabihf/release/sfr \
+            | tee same-records.log
+          { echo "### Records sealed on x86_64 and armv7"; echo; tail -1 same-records.log; } >> "$GITHUB_STEP_SUMMARY"
 
   golden-oracle:
     name: golden files agree with the independent pyulog oracle
