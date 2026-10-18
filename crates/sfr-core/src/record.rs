@@ -1,5 +1,5 @@
-//! Record sections as JSON values (SPEC B1.7). Chunk 2 builds the sections that `seal
-//! --dry-run` prints; the signed record, its Merkle leaves and the signature arrive in Chunk 3.
+//! Record sections as JSON values (SPEC B1.7): the sections `seal --dry-run` prints and that
+//! `seal.rs` hashes as Merkle leaves and signs.
 
 use crate::evaluate::Evaluation;
 use crate::events::event_json;

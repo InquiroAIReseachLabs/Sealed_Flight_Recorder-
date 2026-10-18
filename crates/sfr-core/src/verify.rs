@@ -68,6 +68,20 @@ pub enum VerifyError {
     Io(String),
 }
 
+/// Refuses a record longer than [`MAX_RECORD_BYTES`]. `seal` applies the same check before it
+/// writes, so it never writes a record that `verify` would refuse.
+pub fn check_record_size(len: usize) -> Result<(), String> {
+    if len > MAX_RECORD_BYTES {
+        Err(crate::limit_exceeded(
+            "the record",
+            MAX_RECORD_BYTES,
+            "bytes",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn fail(first: impl Into<String>) -> Mismatch {
     Mismatch {
         first: first.into(),
@@ -117,13 +131,7 @@ fn standalone(
     public_key: &[u8; 32],
     require_hardware_key: bool,
 ) -> Result<Parsed, Mismatch> {
-    if bytes.len() > MAX_RECORD_BYTES {
-        return Err(fail(crate::limit_exceeded(
-            "the record",
-            MAX_RECORD_BYTES,
-            "bytes",
-        )));
-    }
+    check_record_size(bytes.len()).map_err(fail)?;
     let spans = match scan_canonical(bytes) {
         Ok(spans) => spans,
         Err(scan_error) => {
@@ -576,6 +584,15 @@ mod tests {
     use crate::crypto::Signer;
     use crate::crypto::test_backend::{TestBackend, TestKey};
     use crate::seal::{SealParams, seal};
+
+    #[test]
+    fn the_record_size_limit_is_exact_and_named() {
+        assert_eq!(check_record_size(MAX_RECORD_BYTES), Ok(()));
+        assert_eq!(
+            check_record_size(MAX_RECORD_BYTES + 1),
+            Err("the record exceeds the input limit of 536870912 bytes (SPEC B1.4)".to_string())
+        );
+    }
 
     #[test]
     fn a_sealed_record_verifies_standalone_and_against_its_log() {

@@ -658,6 +658,22 @@ fn oversize_text_inputs_are_refused_and_name_the_limit() {
         "{}",
         stderr(&out)
     );
+    // Exactly 16 MiB is accepted: the default rules padded with a comment.
+    let mut at = std::fs::read(root().join(RULES)).unwrap();
+    at.extend_from_slice(b"#");
+    at.resize(16 * 1024 * 1024 - 1, b'x');
+    at.push(b'\n');
+    let at_path = dir.join("at_limit.toml");
+    std::fs::write(&at_path, &at).unwrap();
+    let out = dry_run(
+        "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+        at_path.to_str().unwrap(),
+        "testdata/baselines/v1.17.0_mc_flight_1.params",
+        false,
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+
+    // Key files: the public key for verify, the private key for seal; both exit 4.
     let out = sfr(&[
         "verify",
         "--pubkey",
@@ -670,5 +686,53 @@ fn oversize_text_inputs_are_refused_and_name_the_limit() {
         "{}",
         stderr(&out)
     );
+    let out = sfr(&[
+        "seal",
+        "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+        "--rules",
+        RULES,
+        "--baseline",
+        "testdata/baselines/v1.17.0_mc_flight_1.params",
+        "--key",
+        big.to_str().unwrap(),
+        "--evaluation-only",
+        "--out",
+        dir.join("out").to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(4), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("key file") && stderr(&out).contains("16777216 bytes"),
+        "{}",
+        stderr(&out)
+    );
+
+    // A record over 512 MiB (a sparse file) fails verification and names the limit,
+    // in text and in --json.
+    let record = dir.join("big.sfr");
+    let f = std::fs::File::create(&record).unwrap();
+    f.set_len(512 * 1024 * 1024 + 2).unwrap();
+    drop(f);
+    let pubkey = root().join("fuzz/seeds/sfr_verify_key.pub");
+    for json in [false, true] {
+        let mut args = vec![
+            "verify",
+            record.to_str().unwrap(),
+            "--pubkey",
+            pubkey.to_str().unwrap(),
+        ];
+        if json {
+            args.push("--json");
+        }
+        let out = sfr(&args);
+        assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+        let all = format!("{}{}", stdout(&out), stderr(&out));
+        assert!(
+            all.contains("the record exceeds the input limit of 536870912 bytes (SPEC B1.4)"),
+            "{all}"
+        );
+        if json {
+            assert!(stdout(&out).trim_start().starts_with('{'), "{all}");
+        }
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }

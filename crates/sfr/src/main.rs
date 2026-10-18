@@ -17,7 +17,7 @@ use sfr_core::params::{Baseline, parse_baseline};
 use sfr_core::record::dry_run_json;
 use sfr_core::rules::{Rules, parse_rules};
 use sfr_core::seal::{SealParams, format_utc, parse_seal_time, seal, this_tool};
-use sfr_core::verify::{MAX_RECORD_BYTES, VerifyError, verify};
+use sfr_core::verify::{MAX_RECORD_BYTES, VerifyError, check_record_size, verify};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -108,14 +108,20 @@ impl Args {
     }
 }
 
-/// Reads at most `max` bytes; a longer file fails with exit code `code` and names the limit.
-fn read_bytes(path: &str, what: &str, max: u64, code: i32) -> Result<Vec<u8>, Failure> {
+/// Reads at most `cap` bytes, without judging the length.
+fn read_capped(path: &str, what: &str, cap: u64) -> Result<Vec<u8>, Failure> {
     let file = File::open(path)
         .map_err(|e| fail(exit_code::USAGE, format!("cannot read {what} {path}: {e}")))?;
     let mut buf = Vec::new();
-    file.take(max + 1)
+    file.take(cap)
         .read_to_end(&mut buf)
         .map_err(|e| fail(exit_code::USAGE, format!("cannot read {what} {path}: {e}")))?;
+    Ok(buf)
+}
+
+/// Reads at most `max` bytes; a longer file fails with exit code `code` and names the limit.
+fn read_bytes(path: &str, what: &str, max: u64, code: i32) -> Result<Vec<u8>, Failure> {
+    let buf = read_capped(path, what, max + 1)?;
     if buf.len() as u64 > max {
         return Err(fail(
             code,
@@ -470,6 +476,13 @@ fn seal_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<i3
     };
     let sealed = seal(&ing, &eval, &rules, &baseline, &params, crypto, &key)
         .map_err(|e| fail(exit_code::USAGE, e.to_string()))?;
+    // A record verify would refuse is never written (SPEC B1.4 input limits).
+    check_record_size(sealed.bytes.len()).map_err(|e| {
+        fail(
+            exit_code::MALFORMED_INPUT,
+            format!("log {log}: the record it gives is refused: {e}"),
+        )
+    })?;
     std::fs::create_dir_all(&out_dir).map_err(|e| {
         fail(
             exit_code::USAGE,
@@ -547,13 +560,8 @@ fn verify_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<
     let public = parse_public_key_pem(&read_text(pub_path, "public key", exit_code::USAGE)?)
         .map_err(|e| fail(exit_code::USAGE, format!("public key {pub_path}: {e}")))?;
     // One byte over the limit is read so that `verify` reports the oversize record as a
-    // verification failure (exit 1) naming the limit.
-    let record = read_bytes(
-        &record_path,
-        "record",
-        MAX_RECORD_BYTES as u64 + 1,
-        exit_code::RULE_FAIL,
-    )?;
+    // verification failure (exit 1) naming the limit, the same way for every oversize record.
+    let record = read_capped(&record_path, "record", MAX_RECORD_BYTES as u64 + 1)?;
     let mut log_file = match a.value("--ulog") {
         Some(p) => Some(
             File::open(p)

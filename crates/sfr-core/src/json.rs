@@ -259,10 +259,10 @@ impl Parser<'_> {
     }
 
     fn value(&mut self, depth: usize) -> Result<Value, ParseError> {
-        if depth > MAX_DEPTH {
+        self.ws();
+        if matches!(self.peek(), Some(b'[' | b'{')) && depth >= MAX_DEPTH {
             return self.err(crate::limit_exceeded("JSON nesting", MAX_DEPTH, "levels"));
         }
-        self.ws();
         match self.peek() {
             Some(b'n') => self.expect(b"null").map(|()| Value::Null),
             Some(b't') => self.expect(b"true").map(|()| Value::Bool(true)),
@@ -517,7 +517,7 @@ impl Scanner<'_> {
     }
 
     fn value(&mut self, depth: usize) -> Result<(), ParseError> {
-        if depth > MAX_DEPTH {
+        if matches!(self.peek(), Some(b'[' | b'{')) && depth >= MAX_DEPTH {
             return self.err(crate::limit_exceeded("JSON nesting", MAX_DEPTH, "levels"));
         }
         match self.peek() {
@@ -843,6 +843,31 @@ mod tests {
         for (b, at) in bad {
             let e = parse(b.as_bytes()).expect_err(b);
             assert_eq!(e.offset, *at, "{b}: {e}");
+        }
+        // At most 64 nested arrays and objects, whatever the innermost value is.
+        for inner in ["", "1"] {
+            let at = format!("{}{inner}{}", "[".repeat(MAX_DEPTH), "]".repeat(MAX_DEPTH));
+            parse(at.as_bytes()).expect("64 containers");
+            let over = format!(
+                "{}{inner}{}",
+                "[".repeat(MAX_DEPTH + 1),
+                "]".repeat(MAX_DEPTH + 1)
+            );
+            let e = parse(over.as_bytes()).expect_err("65 containers");
+            assert!(e.to_string().contains("64 levels"), "{e}");
+            let at = format!(
+                "{}{}",
+                "{\"a\":[".repeat(MAX_DEPTH / 2),
+                "]}".repeat(MAX_DEPTH / 2)
+            );
+            scan_canonical(at.as_bytes()).expect("64 containers");
+            let over = format!(
+                "{}{inner}{}",
+                "{\"a\":[".repeat(MAX_DEPTH / 2).to_string() + "[",
+                "]".to_string() + &"]}".repeat(MAX_DEPTH / 2)
+            );
+            let e = scan_canonical(over.as_bytes()).expect_err("65 containers");
+            assert!(e.to_string().contains("64 levels"), "{e}");
         }
         let deep = "[".repeat(MAX_DEPTH + 2);
         let e = parse(deep.as_bytes()).expect_err("too deep");

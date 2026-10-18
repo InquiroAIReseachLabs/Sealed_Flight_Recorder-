@@ -1141,6 +1141,37 @@ mod tests {
     }
 
     #[test]
+    fn a_timeline_of_exactly_the_event_cap_is_accepted() {
+        let records = |n: u64| -> Vec<crate::ingest::LogRecord> {
+            (0..n)
+                .map(|i| crate::ingest::LogRecord {
+                    level: 4,
+                    time: i,
+                    text: b"w".to_vec(),
+                    index: i,
+                })
+                .collect()
+        };
+        let at = FlightLog {
+            log_records: records(MAX_EVENTS as u64),
+            ..FlightLog::default()
+        };
+        assert_eq!(
+            build(&at, &Config::default()).map(|e| e.len()),
+            Ok(MAX_EVENTS)
+        );
+        let over = FlightLog {
+            log_records: records(MAX_EVENTS as u64 + 1),
+            ..FlightLog::default()
+        };
+        assert_eq!(build(&over, &Config::default()), Err(too_many_events()));
+        assert_eq!(
+            too_many_events(),
+            "the number of events exceeds the input limit of 100000 events (SPEC B1.4)"
+        );
+    }
+
+    #[test]
     fn a_timeline_over_the_event_cap_is_refused() {
         // A failsafe that toggles on 8,000 rows while 256 flags are newly active names 256
         // flags per edge: about 2 million events, over the cap.

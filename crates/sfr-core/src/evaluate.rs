@@ -280,21 +280,30 @@ fn fail_missing(
     )
 }
 
-/// Most detail lines one result lists. Real logs need a handful; the cap keeps a crafted log
-/// from making one result enormous. The events still list every case.
+/// Most detail lines R4, R5, R6, X2, and X3 list. Real logs need a handful; the cap keeps a
+/// crafted log from making one result enormous. R3 is not capped: SPEC B1.6 has it list every
+/// differing parameter, at most the two parameter limits together.
 pub const MAX_DETAIL_LINES: usize = 1000;
 
 /// Detail lines with a running total, capped at [`MAX_DETAIL_LINES`].
 struct Lines {
     lines: Vec<String>,
     total: usize,
+    /// Says where the lines past the cap can still be found.
+    rest: &'static str,
 }
 
 impl Lines {
+    /// Lines whose every case is also an event.
     fn new() -> Self {
+        Self::with_rest("the events list every one")
+    }
+
+    fn with_rest(rest: &'static str) -> Self {
         Lines {
             lines: Vec::new(),
             total: 0,
+            rest,
         }
     }
 
@@ -309,10 +318,8 @@ impl Lines {
     fn finish(mut self) -> Vec<String> {
         let shown = self.lines.len();
         if self.total > shown {
-            self.lines.push(format!(
-                "and {} more; the events list every one",
-                self.total - shown
-            ));
+            self.lines
+                .push(format!("and {} more; {}", self.total - shown, self.rest));
         }
         self.lines
     }
@@ -696,7 +703,8 @@ fn x3(f: &FlightLog, armed: &[ArmedInterval]) -> RuleResult {
             .unwrap_or(0)
     };
     let mut checked = 0usize;
-    let mut detail = Lines::new();
+    // Estimator samples are not events; the found text counts every one.
+    let mut detail = Lines::with_rest("the count above includes every sample");
     for e in &f.estimator {
         if !in_armed(armed, e.id.ts) || e.id.instance != primary_at(e.id.ts) {
             continue;
