@@ -2,12 +2,19 @@
 # Local equivalent: scripts/validate.sh
 name: CI
 
+# One run per pushed commit. A pull request shows the run of its head commit; a
+# pull_request trigger as well would run every push to a PR branch twice, and its run would
+# test a merge commit, not the commit a gate report cites.
 on:
   push:
     branches: ["**"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+
+# A newer push to a branch cancels the run still checking an older commit of that branch;
+# every commit on main keeps its run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -87,8 +94,10 @@ jobs:
           echo "$out"
           grep -q 'ELF 32-bit LSB executable, ARM' <<<"$out"
           grep -q 'statically linked' <<<"$out"
+      # Profile qemu-test (Cargo.toml): optimized, with overflow checks and debug assertions on;
+      # an unoptimized build under emulation was the slowest step of CI.
       - name: Full test suite on armv7 under QEMU (correctness only; no armv7 timing is gated)
-        run: cargo test --workspace --locked --target armv7-unknown-linux-musleabihf
+        run: cargo test --workspace --locked --profile qemu-test --target armv7-unknown-linux-musleabihf
       - name: Every golden log seals to the same bytes on x86_64 and armv7
         run: |
           set -euo pipefail
