@@ -28,6 +28,10 @@ allow = [
   "CC0-1.0",
   "Unicode-3.0",
   "Unicode-DFS-2016",
+  # The AWS-LC FIPS module (aws-lc-fips-sys) is "ISC AND (Apache-2.0 OR ISC) AND OpenSSL".
+  # The OpenSSL (SSLeay) license is permissive; its advertising clause applies to product
+  # documentation that mentions the cryptographic features (SPEC B1.10, Supply chain).
+  "OpenSSL",
 ]
 # Inquiro crates carry no license field yet: the source license follows evaluation (founder decision).
 # Workspace members are never checked by cargo-deny's license pass.

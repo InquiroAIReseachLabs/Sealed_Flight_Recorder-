@@ -1,5 +1,6 @@
 # Sealed Flight Record workspace (SPEC B1.2).
-# One engine (sfr-core), two thin wrappers (sfr CLI, sfr-wasm browser build).
+# One engine (sfr-core), two thin wrappers (sfr CLI, sfr-wasm browser build), and the PKCS#11
+# signing helper, which runs as its own process (SPEC B1.2).
 # fuzz/ becomes a separate cargo-fuzz package in Chunk 2; it is excluded from the workspace on purpose.
 [workspace]
 resolver = "3"
@@ -7,6 +8,7 @@ members = [
   "crates/sfr-core",
   "crates/sfr",
   "crates/sfr-wasm",
+  "crates/sfr-pkcs11-helper",
 ]
 exclude = ["fuzz"]
 
@@ -16,6 +18,27 @@ edition = "2024"
 rust-version = "1.97"
 publish = false
 description = "Sealed Flight Record: a signed, self-verifying record of a PX4 flight's configuration, readiness rule results, and events."
+
+# Dependency pins decided in docs/DIAGNOSTIC.md (items 7, 8, 11). Declared here so later chunks
+# cannot drift; a crate enters Cargo.lock only when a member uses it.
+[workspace.dependencies]
+# FIPS module boundary, development profile (SPEC B1.10 Crypto). Exact pins: the module version
+# is part of what a record names. aws-lc-fips-sys is pinned directly to hold the module version.
+# Do not move to aws-lc-rs 1.18 (AWS-LC FIPS 4.x): no CMVP certificate covers it (item 11.3).
+aws-lc-rs = { version = "=1.17.4", default-features = false, features = ["fips", "alloc"] }
+aws-lc-fips-sys = { version = "=0.13.17" }
+# Offline certificate path validation through the same module (SPEC B1.3 verify --trust-anchor).
+# 0.103.14 and later require aws-lc-rs 1.18.
+rustls-webpki = { version = "=0.103.13", default-features = false, features = ["std", "aws-lc-rs-fips"] }
+rustls-pki-types = { version = "=1.15.1", default-features = false, features = ["std"] }
+# Supplementary, non-approved digest of the raw log bytes; never anchors trust (founder ruling).
+blake3 = { version = "=1.8.7", default-features = false, features = ["std"] }
+# crypto-portable backend: the wasm32 sandbox only, not validated (SPEC B1.2).
+sha2 = { version = "=0.11.1", default-features = false }
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }
+zeroize = { version = "1", default-features = false }
+# sfr-pkcs11-helper only: a separate, dynamically linked process (SPEC B1.2).
+cryptoki = { version = "=0.12.1" }
 
 # Workspace-wide lints. Each crate also carries #![forbid(unsafe_code)] at its root
 # so the gate is visible in the source file itself (SPEC B1.10, "No unsafe").

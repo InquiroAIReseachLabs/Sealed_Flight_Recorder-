@@ -1,0 +1,17 @@
+[package]
+name = "sfr-pkcs11-helper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Signs one Sealed Flight Record payload with an Ed25519 key held in a PKCS#11 v3.0 token or HSM. A separate process, so the static sfr binary never loads vendor code."
+
+[[bin]]
+name = "sfr-pkcs11-helper"
+path = "src/main.rs"
+
+# cryptoki =0.12.1 arrives with the signing code in Chunk 3 (docs/DIAGNOSTIC.md item 11).
+[dependencies]
+
+[lints]
+workspace = true

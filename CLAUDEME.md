@@ -67,7 +67,11 @@ Your code fits ONE place. Know where before you type. `verify` walks the same pi
 const LOG_DIGEST:  &str = "SHA-256 + BLAKE3 over the raw log bytes";  // dual hash, always both, never one
 const MERKLE:      &str = "SHA-256, leaf = H(0x00 || JCS(leaf)), node = H(0x01 || left || right), RFC 6962 odd nodes";
 const SIGNATURE:   &str = "Ed25519 over b\"SFR-RECORD-V1\" || 0x00 || schema_version (u32 BE) || merkle_root";
-const CRATES:      [&str; 3] = ["sha2", "blake3", "ed25519-dalek"];  // audited only; no custom primitives
+// Module boundary (SPEC B1.10 Crypto): in `sfr`, SHA-256 and Ed25519 come ONLY from the AWS-LC FIPS
+// module through aws-lc-rs (`fips` feature), pinned in Cargo.lock. BLAKE3 is supplementary, never trust.
+const CLI_CRATES:     [&str; 2] = ["aws-lc-rs (fips)", "blake3"];
+const SANDBOX_CRATES: [&str; 3] = ["sha2", "ed25519-dalek", "blake3"];  // wasm32 only; records say "not validated"
+// Keys: pkcs11-token (sfr-pkcs11-helper, separate process), tpm-sealed (tpm2-tools), file-evaluation (demo only).
 ```
 
 ---
@@ -148,6 +152,9 @@ A failing flight is still sealed. The failure is the evidence. No flag turns FAI
 | randomness or `HashMap` iteration order anywhere in sealing, verifying, or report output | `BTreeMap`, sorted, deterministic; the only randomness in the tool is the OS CSPRNG in `sfr keygen` (and the sandbox's ephemeral evaluation key) |
 | hashing a JSON value before canonicalizing it | JCS (RFC 8785) first, then hash |
 | one hash over the log bytes | SHA-256 and BLAKE3, both, always |
+| `sha2`, `ed25519-dalek`, or any non-module SHA-256 or Ed25519 in `sfr` | the `crypto-fips` backend; `cargo tree -p sfr` must not contain them |
+| loading a PKCS#11 module, or any shared library, inside `sfr` | `sfr-pkcs11-helper` in its own process; `sfr` verifies what it returns |
+| a seal with a key file and no `--evaluation-only` | refuse with exit 4; file keys are for evaluation only |
 | a Merkle hash without the 0x00 or 0x01 prefix | the domain-separated form in SPEC B1.7 |
 | a verifier that guesses an unknown `schema_version` | reject it, name the version |
 | a flag, option, or environment variable that turns FAIL into PASS | none; the failure is the evidence |
@@ -155,7 +162,7 @@ A failing flight is still sealed. The failure is the evidence. No flag turns FAI
 | a number in a doc that no script in this repo produced | write it between README markers from `scripts/regen_readme_numbers.sh` |
 | PX4 topic or field names from memory | `docs/DIAGNOSTIC.md`, confirmed against the golden logs |
 | a target company, aircraft, customer name, or internal codename | nothing; keep them in the local, git-ignored `.forbidden-terms` and run `scripts/check_language.sh` |
-| a compliance claim | a description of what the tool does and does not prove |
+| a compliance claim, including "FIPS compliant" or an IL or NIST SP 800-171 status | a description of what the tool does and does not prove; "uses a FIPS 140-3 validated cryptographic module" only with module name, version, and CMVP certificate number |
 | an em-dash in any doc, page, or script text | a period, comma, or colon |
 | `println!` left in for debugging | remove it; CLI output is the results table or `--json` only |
 | a third-party action in CI pinned to a tag, a branch, or an annotated tag object | pin to the full commit SHA (`git ls-remote` shows it on the `^{}` line for annotated tags) with the version in a comment |

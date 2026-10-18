@@ -32,6 +32,20 @@ scan_em_dash() {
   return 0
 }
 
+# Compliance phrasing that SPEC B1.12 forbids anywhere in docs or output text (case-insensitive).
+# SPEC.md and CLAUDEME.md are exempt: they state the rule and must quote the phrases.
+COMPLIANCE_RE='FIPS[- ]compliant|FIPS[- ]certified|IL[45] compliant|800-171 compliant|DoDD 3000\.09 compliant'
+
+# Prints forbidden compliance phrasing under a work tree; returns 1 if any.
+scan_compliance() {
+  local dir="$1" hits
+  hits="$(cd "$dir" && candidate_files . \
+    | grep -zE '\.(md|rs|html|js|txt)$' | grep -zvE '^(docs/SPEC\.md|CLAUDEME\.md)$' \
+    | xargs -0 -r grep -n -i -E -- "$COMPLIANCE_RE" 2>/dev/null || true)"
+  if [ -n "$hits" ]; then printf '%s\n' "$hits"; return 1; fi
+  return 0
+}
+
 # Prints forbidden-term hits under a work tree; returns 1 if any. Blank lines and lines
 # starting with # in the terms file are ignored (an empty pattern would match everything).
 scan_terms() {
@@ -73,7 +87,15 @@ if [ "${1:-}" = "--self-test" ]; then
   printf '%s\n' "$out" | grep -q '^leak.md:1:' || { echo "FAIL: self-test: forbidden term missed"; exit 1; }
   [ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ] || { echo "FAIL: self-test: unexpected term hits: $out"; exit 1; }
 
-  echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms)"
+  # Compliance phrasing: caught in a doc, allowed in SPEC.md where the rule quotes it.
+  mkdir -p "$tmp/docs"
+  printf 'This tool is FIPS-compliant.\n' > "$tmp/docs/README.md"
+  printf 'Never say FIPS compliant.\n' > "$tmp/docs/SPEC.md"
+  out="$(scan_compliance "$tmp" || true)"
+  printf '%s\n' "$out" | grep -q '^docs/README.md:1:' || { echo "FAIL: self-test: compliance claim missed"; exit 1; }
+  printf '%s\n' "$out" | grep -q 'docs/SPEC.md' && { echo "FAIL: self-test: SPEC.md should be exempt"; exit 1; }
+
+  echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing)"
   exit 0
 fi
 
@@ -86,6 +108,14 @@ if hits="$(scan_em_dash "$root")"; then
   echo "PASS: no em-dash in docs, site, scripts, or Rust sources"
 else
   echo "FAIL: em-dash found (SPEC B1.12):"
+  printf '%s\n' "$hits"
+  status=1
+fi
+
+if hits="$(scan_compliance "$root")"; then
+  echo "PASS: no compliance claims (SPEC B1.12)"
+else
+  echo "FAIL: compliance claim found (SPEC B1.12):"
   printf '%s\n' "$hits"
   status=1
 fi
