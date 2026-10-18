@@ -1,0 +1,41 @@
+# Sealed Flight Record workspace (SPEC B1.2).
+# One engine (sfr-core), two thin wrappers (sfr CLI, sfr-wasm browser build).
+# fuzz/ is a separate cargo-fuzz package and is excluded from the workspace on purpose.
+[workspace]
+resolver = "3"
+members = [
+  "crates/sfr-core",
+  "crates/sfr",
+  "crates/sfr-wasm",
+]
+exclude = ["fuzz"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+description = "Sealed Flight Record: a signed, self-verifying record of a PX4 flight's configuration, readiness rule results, and events."
+
+# Workspace-wide lints. Each crate also carries #![forbid(unsafe_code)] at its root
+# so the gate is visible in the source file itself (SPEC B1.10, "No unsafe").
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+[profile.release]
+# Static, small, reproducible release binaries (SPEC B1.10, "Static binaries").
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

@@ -1,0 +1,76 @@
+# Sealed Flight Record CI (SPEC B1.10). Every job is a binary gate.
+# Local equivalent: scripts/validate.sh
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
+
+jobs:
+  code-quality:
+    name: rustfmt, clippy, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          rustup show active-toolchain
+          cargo --version --verbose
+      - name: forbid(unsafe_code) in every crate root
+        run: |
+          set -euo pipefail
+          for f in crates/*/src/lib.rs crates/*/src/main.rs; do
+            [ -f "$f" ] || continue
+            grep -q '^#!\[forbid(unsafe_code)\]' "$f" || { echo "missing #![forbid(unsafe_code)]: $f"; exit 1; }
+          done
+      - name: rustfmt --check
+        run: cargo fmt --all --check
+      - name: clippy, warnings as errors
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: cargo test --locked
+        run: cargo test --workspace --locked
+
+  no-network:
+    name: deny list (networking and async runtimes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Deny-list self-test
+        run: scripts/check_deny_list.sh --self-test
+      - name: Deny-list check against the full dependency graph
+        run: scripts/check_deny_list.sh
+
+  supply-chain:
+    name: cargo-deny (licenses, advisories, bans, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: EmbarkStudios/cargo-deny-action@c3bbe7e4e3f7baeee1a3dd9aec0a3b2aded580fb # v2.1.1
+        with:
+          command: check licenses advisories bans sources
+          arguments: --all-features --locked
+
+  language:
+    name: language rules (SPEC B1.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Language self-test
+        run: scripts/check_language.sh --self-test
+      - name: No em-dash in docs, site, or scripts
+        run: scripts/check_language.sh

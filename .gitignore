@@ -1,0 +1,20 @@
+# Build output
+/target/
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/
+/site/pkg/
+
+# Private keys never enter the repository (SPEC B1.9).
+*.key
+/keys/
+
+# Local-only list of forbidden terms for scripts/check_language.sh (SPEC B1.12).
+# Kept out of the repository on purpose: the names it holds must not appear anywhere in it.
+.forbidden-terms
+
+# Editor and OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store

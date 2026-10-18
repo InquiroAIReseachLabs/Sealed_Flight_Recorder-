@@ -1,0 +1,11 @@
+# Pinned toolchain (SPEC B1.2). Every build runs with --locked.
+# Bump deliberately, in its own commit, with CI green on both musl targets and wasm32.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
+targets = [
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "wasm32-unknown-unknown",
+]
+profile = "minimal"

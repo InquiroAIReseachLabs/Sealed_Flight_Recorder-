@@ -1,0 +1,15 @@
+[package]
+name = "sfr-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Sealed Flight Record engine: ingest, events, rules, record, Merkle, signing, verify. No I/O beyond provided byte streams, no networking."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[lints]
+workspace = true
