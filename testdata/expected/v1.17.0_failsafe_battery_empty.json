@@ -2181,7 +2181,7 @@
       "detail": [
         "failsafe while armed at boot_us 23120000: battery_warning"
       ],
-      "expected": "vehicle_status.failsafe false whenever armed, and no quadchute (fixed wing straight to multicopter) while armed",
+      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight",
       "found": "true while armed 1 time(s)",
       "id": "R4",
       "name": "no failsafe in flight",

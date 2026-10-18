@@ -674,3 +674,26 @@ fn oversize_text_inputs_are_refused_and_name_the_limit() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn the_subscription_amplification_log_is_handled() {
+    // 3,891 subscriptions of one format (scripts/testdata/make_amplification_seed.py). It once
+    // made sfr hold about 1.6 GB; now the subscriptions share one layout. R1 fails because the
+    // log has no vehicle_status and no failsafe_flags data record.
+    let dir = scratch();
+    let baseline = dir.join("fw.params");
+    std::fs::write(&baseline, "# Firmware: 1.17.0\n").unwrap();
+    let out = dry_run(
+        "fuzz/seeds/ulog_ingest/subscription_amplification.ulg",
+        RULES,
+        baseline.to_str().unwrap(),
+        true,
+    );
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("missing: vehicle_status, failsafe_flags"),
+        "{}",
+        stdout(&out)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -13,6 +13,7 @@ use crate::ulog::{
 };
 use std::collections::BTreeMap;
 use std::io::{self, BufReader, Read};
+use std::rc::Rc;
 
 /// Why a log could not be ingested.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -511,7 +512,7 @@ fn failsafe_schema(layout: &Layout) -> Vec<FlagDef> {
 #[derive(Debug, Clone)]
 enum Decoder {
     VehicleStatus(Box<VsDecoder>),
-    Failsafe(Vec<FlagDef>),
+    Failsafe(Rc<Vec<FlagDef>>),
     Command {
         command: Option<FlatField>,
         src_sys: Option<FlatField>,
@@ -557,6 +558,13 @@ struct Sub {
     decoder: Decoder,
 }
 
+/// One `failsafe_flags` instance while reading: its first subscription's layout and schema.
+struct FsInstance {
+    layout: Rc<Layout>,
+    flags: Rc<Vec<FlagDef>>,
+    rows: Vec<FailsafeRow>,
+}
+
 #[derive(Default)]
 struct Collector {
     header: Option<Header>,
@@ -568,8 +576,13 @@ struct Collector {
     dropout_index: u64,
     subs: BTreeMap<u16, Sub>,
     row_index: BTreeMap<(String, u8), u64>,
-    vs: BTreeMap<u8, (Vec<String>, Vec<VehicleStatusRow>)>,
-    fs: BTreeMap<u8, (Vec<String>, FailsafeFlags)>,
+    // Per instance: the shared layout of its first subscription (its field names are copied
+    // out only for the instance the rules read) and its rows.
+    vs: BTreeMap<u8, (Rc<Layout>, Vec<VehicleStatusRow>)>,
+    fs: BTreeMap<u8, FsInstance>,
+    // The flag schema of the last failsafe_flags layout seen, so subscriptions sharing a
+    // layout share one schema.
+    fs_schema: Option<(Rc<Layout>, Rc<Vec<FlagDef>>)>,
     flight: FlightLog,
     limit: Option<String>,
 }
@@ -624,16 +637,13 @@ impl Visitor for Collector {
         }
     }
 
-    fn subscription(&mut self, msg_id: u16, multi_id: u8, topic: &str, layout: &Layout) {
-        let l = layout;
+    fn subscription(&mut self, msg_id: u16, multi_id: u8, topic: &str, layout: &Rc<Layout>) {
+        let l: &Layout = layout;
         let decoder = match topic {
             "vehicle_status" => {
-                self.vs.entry(multi_id).or_insert_with(|| {
-                    (
-                        l.fields.iter().map(|f| f.name.clone()).collect(),
-                        Vec::new(),
-                    )
-                });
+                self.vs
+                    .entry(multi_id)
+                    .or_insert_with(|| (Rc::clone(layout), Vec::new()));
                 Decoder::VehicleStatus(Box::new(VsDecoder {
                     arming_state: field(l, "arming_state"),
                     nav_state: field(l, "nav_state"),
@@ -647,28 +657,32 @@ impl Visitor for Collector {
                     latest_disarming_reason: field(l, "latest_disarming_reason"),
                 }))
             }
-            "failsafe_flags" if failsafe_schema(l).len() > MAX_FAILSAFE_FLAGS => {
-                self.limit.get_or_insert_with(|| {
-                    crate::limit_exceeded(
-                        "the number of failsafe_flags flag fields",
-                        MAX_FAILSAFE_FLAGS,
-                        "fields",
-                    )
-                });
-                Decoder::Count
-            }
             "failsafe_flags" => {
-                let flags = failsafe_schema(l);
-                self.fs.entry(multi_id).or_insert_with(|| {
-                    (
-                        l.fields.iter().map(|f| f.name.clone()).collect(),
-                        FailsafeFlags {
-                            flags: flags.clone(),
-                            rows: Vec::new(),
-                        },
-                    )
-                });
-                Decoder::Failsafe(flags)
+                let flags = match &self.fs_schema {
+                    Some((cached, flags)) if Rc::ptr_eq(cached, layout) => Rc::clone(flags),
+                    _ => {
+                        let flags = Rc::new(failsafe_schema(l));
+                        self.fs_schema = Some((Rc::clone(layout), Rc::clone(&flags)));
+                        flags
+                    }
+                };
+                if flags.len() > MAX_FAILSAFE_FLAGS {
+                    self.limit.get_or_insert_with(|| {
+                        crate::limit_exceeded(
+                            "the number of failsafe_flags flag fields",
+                            MAX_FAILSAFE_FLAGS,
+                            "fields",
+                        )
+                    });
+                    Decoder::Count
+                } else {
+                    self.fs.entry(multi_id).or_insert_with(|| FsInstance {
+                        layout: Rc::clone(layout),
+                        flags: Rc::clone(&flags),
+                        rows: Vec::new(),
+                    });
+                    Decoder::Failsafe(flags)
+                }
             }
             "vehicle_command" => Decoder::Command {
                 command: small_uint(l, "command"),
@@ -770,8 +784,8 @@ impl Visitor for Collector {
                             .map_or(0, |v| v as u32)
                     })
                     .collect();
-                if let Some((_, fs)) = self.fs.get_mut(&sub.multi_id) {
-                    fs.rows.push(FailsafeRow {
+                if let Some(inst) = self.fs.get_mut(&sub.multi_id) {
+                    inst.rows.push(FailsafeRow {
                         id,
                         active,
                         mode_req,
@@ -932,19 +946,23 @@ impl Collector {
             .find(|(_, (_, r))| !r.is_empty())
             .or(vs.iter().next())
             .map(|(k, _)| *k);
-        if let Some((fields, rows)) = vs_pick.and_then(|k| vs.remove(&k)) {
-            flight.vehicle_status_fields = fields;
+        let names = |l: &Layout| l.fields.iter().map(|f| f.name.clone()).collect();
+        if let Some((layout, rows)) = vs_pick.and_then(|k| vs.remove(&k)) {
+            flight.vehicle_status_fields = names(&layout);
             flight.vehicle_status = rows;
         }
         let mut fs = std::mem::take(&mut self.fs);
         let fs_pick = fs
             .iter()
-            .find(|(_, (_, f))| !f.rows.is_empty())
+            .find(|(_, inst)| !inst.rows.is_empty())
             .or(fs.iter().next())
             .map(|(k, _)| *k);
-        if let Some((fields, flags)) = fs_pick.and_then(|k| fs.remove(&k)) {
-            flight.failsafe_flags_fields = fields;
-            flight.failsafe_flags = flags;
+        if let Some(inst) = fs_pick.and_then(|k| fs.remove(&k)) {
+            flight.failsafe_flags_fields = names(&inst.layout);
+            flight.failsafe_flags = FailsafeFlags {
+                flags: inst.flags.as_ref().clone(),
+                rows: inst.rows,
+            };
         }
         let release = self.ver_sw_release;
         let firmware = Firmware {
@@ -1110,35 +1128,65 @@ mod tests {
     }
 
     #[test]
+    fn failsafe_subscriptions_share_one_schema() {
+        // The 78 KB subscription-amplification log (scripts/testdata/make_amplification_seed.py).
+        let log = include_bytes!("../../../fuzz/seeds/ulog_ingest/subscription_amplification.ulg");
+        let mut c = Collector::default();
+        crate::ulog::read(&log[..], &mut c).expect("readable");
+        let schemas: Vec<&Rc<Vec<FlagDef>>> = c
+            .subs
+            .values()
+            .filter_map(|s| match &s.decoder {
+                Decoder::Failsafe(f) => Some(f),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(schemas.len(), 3891);
+        assert!(
+            schemas.iter().all(|f| Rc::ptr_eq(f, schemas[0])),
+            "one shared schema"
+        );
+        assert_eq!(schemas[0].len(), 256);
+        assert_eq!(c.fs.len(), 256, "one entry per multi id");
+        // R1 reports the missing core topic; nothing else is refused.
+        let ing = Px4Ingestor
+            .ingest("a.ulg", &mut &log[..], &TestBackend)
+            .expect("ingests");
+        assert!(ing.flight.vehicle_status.is_empty());
+    }
+
+    #[test]
     fn exactly_the_parameter_and_flag_limits_are_accepted() {
         use crate::ulog::tests::Builder;
         let mut log = Builder::new(0).flags(&[]);
         for i in 0..crate::params::MAX_PARAMS {
             log = log.param_f(&format!("P{i}"), 1.0);
         }
-        // With no data record the log is truncated; the parameter limit is checked first.
-        let err = Px4Ingestor
+        let log = log
+            .format("t:uint64_t timestamp;")
+            .sub(0, 0, "t")
+            .data(0, &1u64.to_le_bytes());
+        let ing = Px4Ingestor
             .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
-            .unwrap_err();
-        assert!(
-            matches!(err, IngestError::Malformed(ref m) if m.to_string().contains("ends before any data record")),
-            "{err}"
-        );
+            .expect("65,536 parameters are accepted");
+        assert_eq!(ing.config.params.len(), crate::params::MAX_PARAMS);
+
         let mut format = String::from("failsafe_flags:uint64_t timestamp;");
         for i in 0..MAX_FAILSAFE_FLAGS {
             format.push_str(&format!("bool f{i};"));
         }
+        let mut row = 1u64.to_le_bytes().to_vec();
+        row.resize(8 + MAX_FAILSAFE_FLAGS, 0);
         let log = Builder::new(0)
             .flags(&[])
             .format(&format)
-            .sub(0, 0, "failsafe_flags");
-        let err = Px4Ingestor
+            .sub(0, 0, "failsafe_flags")
+            .data(0, &row);
+        let ing = Px4Ingestor
             .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
-            .unwrap_err();
-        assert!(
-            matches!(err, IngestError::Malformed(ref m) if m.to_string().contains("ends before any data record")),
-            "{err}"
-        );
+            .expect("256 flags are accepted");
+        assert_eq!(ing.flight.failsafe_flags.flags.len(), MAX_FAILSAFE_FLAGS);
+        assert_eq!(ing.flight.failsafe_flags.rows.len(), 1);
     }
 
     #[test]

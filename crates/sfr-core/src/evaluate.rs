@@ -326,7 +326,7 @@ impl Lines {
 }
 
 fn r4(f: &FlightLog) -> RuleResult {
-    let expected = "vehicle_status.failsafe false whenever armed, and no quadchute (fixed wing straight to multicopter) while armed";
+    let expected = "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight";
     let missing = missing_fields(f, &["arming_state", "failsafe"]);
     if !missing.is_empty() {
         return fail_missing("R4", "no failsafe in flight", expected, missing);

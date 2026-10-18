@@ -31,7 +31,10 @@ done
 head -c 65516 testdata/pyulog/sample.ulg > $d/pyulog_sample_first_65516.ulg
 head -c 16 testdata/sitl/v1.17.0/mc_flight_1.ulg > $d/header_only_16_bytes.ulg
 : > $d/empty.ulg
+python3 -I scripts/testdata/make_amplification_seed.py $d/subscription_amplification.ulg
 ```
+
+`subscription_amplification.ulg` (78,227 bytes) subscribes one `failsafe_flags` format with 256 long-named flags 3,891 times. Before each format was flattened once and shared by its subscriptions, it made the target run out of memory under `-rss_limit_mb=2048`; it is also the input of the regression tests named in `docs/LIMITS.md`.
 
 Two seeds exercise appended data (the 'B' record's flag bits and offsets), which the SITL logs do not use: `sitl_v1.17.0_mc_flight_1_shrunk_appended.ulg` is the shrunk log with the appended-data bit set and its first offset at a record boundary in the data section, and `appended_offset_past_end.ulg` (59 bytes) announces an offset one byte past the end of the file, which must be reported as truncated (it once made the reader loop forever). Both were written by setting those bytes in the files above; the byte layout is the 'B' record in the ULog specification.
 

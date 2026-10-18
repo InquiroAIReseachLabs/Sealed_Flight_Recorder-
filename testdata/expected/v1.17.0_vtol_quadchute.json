@@ -2655,7 +2655,7 @@
         "failsafe while armed at boot_us 39028000: vtol_fixed_wing_system_failure",
         "quadchute while armed at boot_us 39028000: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure true"
       ],
-      "expected": "vehicle_status.failsafe false whenever armed, and no quadchute (fixed wing straight to multicopter) while armed",
+      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight",
       "found": "true while armed 1 time(s), quadchute 1 time(s)",
       "id": "R4",
       "name": "no failsafe in flight",
