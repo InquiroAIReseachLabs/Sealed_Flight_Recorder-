@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod report_facts;
+
 const RULES: &str = "examples/rules.default.toml";
 const SEAL_TIME: &str = "2026-10-18T15:00:00Z";
 
@@ -278,10 +280,11 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
         );
         let parsed = sfr_core::json::parse(&std::fs::read(&record).unwrap()).unwrap();
         assert_eq!(
-            String::from_utf8(md).unwrap(),
+            String::from_utf8(md.clone()).unwrap(),
             sfr_core::report::render(&parsed).unwrap(),
             "{log}: the report is not the record's rendering"
         );
+        report_facts::check(&parsed, &String::from_utf8(md).unwrap());
         let o = sfr(&["verify", &record, "--pubkey", &public, "--ulog", log]);
         assert_eq!(o.status.code(), Some(0), "{log}: {}", text(&o));
         let t = text(&o);
@@ -291,6 +294,53 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
         );
         let o = sfr(&["verify", &record, "--pubkey", &public]);
         assert_eq!(o.status.code(), Some(0), "{log}: {}", text(&o));
+    }
+}
+
+/// A baseline whose VT_B_TRANS_DUR differs from the flown value: R3 fails, and the report shows
+/// the difference in the parameter differences table and marks it DIFF under transition tuning.
+#[test]
+fn a_report_shows_r3_differences_and_the_facts_check_catches_any_stray_line() {
+    let dir = scratch();
+    let (key, _) = keygen(&dir.join("k"));
+    let log = "testdata/sitl/v1.17.0/vtol_transition.ulg";
+    let original =
+        std::fs::read_to_string(root().join("testdata/baselines/v1.17.0_vtol_transition.params"))
+            .unwrap();
+    let changed = original.replace("\tVT_B_TRANS_DUR\t10.0\t", "\tVT_B_TRANS_DUR\t12.0\t");
+    assert_ne!(changed, original, "the baseline holds VT_B_TRANS_DUR 10.0");
+    let baseline = dir.join("changed.params");
+    std::fs::write(&baseline, changed).unwrap();
+    let (record, code) = seal(log, baseline.to_str().unwrap(), &key, &dir.join("out"));
+    assert_eq!(code, 1, "R3 fails, the record is still written, exit 1");
+    let parsed = sfr_core::json::parse(&std::fs::read(&record).unwrap()).unwrap();
+    let md = std::fs::read_to_string(format!("{record}.md")).unwrap();
+    report_facts::check(&parsed, &md);
+    for want in [
+        "### R3 FAIL",
+        "| Parameter | Baseline | Flown |",
+        "| VT\\_B\\_TRANS\\_DUR | f32:12 | f32:10 |",
+        "| VT\\_B\\_TRANS\\_DUR | f32:12 | f32:10 | DIFF |",
+    ] {
+        assert!(md.lines().any(|l| l == want), "line {want:?} in\n{md}");
+    }
+    // The check is not vacuous: one added line, one changed value, or one dropped line fails it.
+    let lines: Vec<&str> = md.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with("- SHA-256: "))
+        .unwrap();
+    let mut added = lines.clone();
+    added.insert(at + 1, "- Pilot: not in the record");
+    let mut altered = lines.clone();
+    let wrong = lines[at].replacen('`', "`0", 1);
+    altered[at] = &wrong;
+    let mut dropped = lines.clone();
+    dropped.remove(at);
+    for (what, bad) in [("added", added), ("altered", altered), ("dropped", dropped)] {
+        let bad = format!("{}\n", bad.join("\n"));
+        let caught = std::panic::catch_unwind(|| report_facts::check(&parsed, &bad)).is_err();
+        assert!(caught, "the facts check misses a line {what}");
     }
 }
 
