@@ -267,6 +267,21 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
             std::fs::read(&again).unwrap(),
             "{log}: two seals with the same key and --seal-time differ"
         );
+        // The report beside each record (SPEC B1.8): written by seal, byte-identical across the
+        // two seals, and exactly what the record renders to.
+        let (report, report_again) = (format!("{record}.md"), format!("{again}.md"));
+        let md = std::fs::read(&report).unwrap_or_else(|e| panic!("{report}: {e}"));
+        assert_eq!(
+            md,
+            std::fs::read(&report_again).unwrap(),
+            "{log}: two seals give different reports"
+        );
+        let parsed = sfr_core::json::parse(&std::fs::read(&record).unwrap()).unwrap();
+        assert_eq!(
+            String::from_utf8(md).unwrap(),
+            sfr_core::report::render(&parsed).unwrap(),
+            "{log}: the report is not the record's rendering"
+        );
         let o = sfr(&["verify", &record, "--pubkey", &public, "--ulog", log]);
         assert_eq!(o.status.code(), Some(0), "{log}: {}", text(&o));
         let t = text(&o);

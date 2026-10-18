@@ -14,6 +14,7 @@ pub mod keys;
 pub mod merkle;
 pub mod params;
 pub mod record;
+pub mod report;
 pub mod rules;
 pub mod seal;
 pub mod ulog;

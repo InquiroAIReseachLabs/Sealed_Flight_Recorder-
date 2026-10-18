@@ -295,7 +295,10 @@ fn transition_tuning(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Stri
     for name in &rules.watched {
         let b = baseline.params.get(name);
         let l = ing.config.params.get(name);
+        // As R3 and the report (sfr_core::report::watched_mark): R3 compares a parameter only
+        // when the baseline has it, or with compare = "all" when the log has it.
         let mark = match (b, l) {
+            (None, None) => "not compared",
             (None, _) if rules.compare == sfr_core::rules::Compare::Baseline => "not compared",
             (Some(b), Some(l)) if b.same_as(l) => "MATCH",
             _ => "DIFF",
@@ -451,14 +454,17 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         |s| s.to_string_lossy().into_owned(),
     );
     let out_path = out_dir.join(format!("{stem}.sfr"));
-    if !dry_run && out_path.exists() {
-        return Err(fail(
-            exit_code::USAGE,
-            format!(
-                "{} exists; seal never overwrites a record",
-                out_path.display()
-            ),
-        ));
+    let report_path = out_dir.join(format!("{stem}.{}", sfr_core::report::REPORT_EXTENSION));
+    for path in [&out_path, &report_path] {
+        if !dry_run && path.exists() {
+            return Err(fail(
+                exit_code::USAGE,
+                format!(
+                    "{} exists; seal never overwrites a record or its report",
+                    path.display()
+                ),
+            ));
+        }
     }
 
     let rules_text = read_text(rules_path, "rules file", exit_code::MALFORMED_INPUT)?;
@@ -545,22 +551,33 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             format!("cannot create {}: {e}", out_dir.display()),
         )
     })?;
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&out_path)
-        .and_then(|mut f| f.write_all(&sealed.bytes).and_then(|()| f.sync_all()))
-        .map_err(|e| {
-            fail(
-                exit_code::USAGE,
-                format!("cannot write {}: {e}", out_path.display()),
-            )
-        })?;
+    // The report comes from the record alone (SPEC B1.8): the bytes just sealed, parsed back.
+    let report = json::parse(&sealed.bytes)
+        .map_err(|e| e.to_string())
+        .and_then(|v| sfr_core::report::render(&v).map_err(|e| e.to_string()))
+        .map_err(|e| fail(exit_code::USAGE, format!("cannot write the report: {e}")))?;
+    for (path, bytes) in [
+        (&out_path, &sealed.bytes[..]),
+        (&report_path, report.as_bytes()),
+    ] {
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
+            .map_err(|e| {
+                fail(
+                    exit_code::USAGE,
+                    format!("cannot write {}: {e}", path.display()),
+                )
+            })?;
+    }
     let custody = key.custody();
     let text = if a.flag("--json") {
         json::pretty(
             &Obj::new()
                 .field("record", Value::str(out_path.display().to_string()))
+                .field("report", Value::str(report_path.display().to_string()))
                 .field("key_custody", Value::str(custody.as_str()))
                 .field("key_fingerprint", Value::str(sealed.fingerprint.clone()))
                 .field("merkle_root", Value::str(sfr_core::hex(&sealed.root)))
@@ -577,9 +594,11 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         }
         t.push_str(&table(&ing, &eval, crypto, false, &rules, &baseline));
         t.push_str(&format!(
-            "\n{:<10}{}\n{:<10}{}\n{:<10}{} ({})\n{:<10}{}\n",
+            "\n{:<10}{}\n{:<10}{}\n{:<10}{}\n{:<10}{} ({})\n{:<10}{}\n",
             "record",
             out_path.display(),
+            "report",
+            report_path.display(),
             "merkle",
             sfr_core::hex(&sealed.root),
             "key",
