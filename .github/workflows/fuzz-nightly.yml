@@ -11,9 +11,9 @@ permissions:
 
 jobs:
   ulog-ingest:
-    name: fuzz ulog_ingest and sfr_verify for 10 minutes each
+    name: fuzz ulog_ingest, sfr_verify and rules_parse for 10 minutes each
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Install the pinned nightly and cargo-fuzz
@@ -26,7 +26,7 @@ jobs:
           set -euo pipefail
           echo "| Target | libFuzzer summary |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
-          for t in ulog_ingest sfr_verify; do
+          for t in ulog_ingest sfr_verify rules_parse; do
             mkdir -p fuzz/corpus/$t
             cp fuzz/seeds/$t/* fuzz/corpus/$t/
             cargo +nightly-2026-10-18 fuzz run $t fuzz/corpus/$t -- \

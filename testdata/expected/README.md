@@ -21,8 +21,10 @@ output to match byte for byte, with the exit code listed there.
 SPEC B1.5, B1.6 and B1.7 written on pyulog, with its own ULog record reader for the sealed topic
 digests of `docs/RECORD_FORMAT.md`. It reads the same rules file `<rules>` as the seal above. It
 shares no code with `sfr` and was written without reading `crates/`. Its scope is logs pyulog
-reads to the end: pyulog drops the data after a format record that redefines a topic in the data
-section, which `sfr` reads, and the oracle says so on stderr; no golden log has one.
+reads as `sfr` does. pyulog ignores a format record in the data section and reads later
+subscriptions with the earlier format, where `sfr` uses the new one; the oracle says so on stderr
+when a log has such a record, and also when pyulog reports file corruption. No golden log has
+either.
 `scripts/testdata/compare_oracle.py` compares, for each log:
 
 - the configuration (every parameter and its typed value) and `config.watched_parameters` (the

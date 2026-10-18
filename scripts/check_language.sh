@@ -58,7 +58,7 @@ scan_compliance() {
 # Weapon and strike terminology (case-insensitive, whole words), banned in every text file of the
 # repository: code, tests, examples, docs, and test data. Generic words that PX4 uses for other
 # meanings ("target", "payload", "release") are not on the list.
-WEAPON_RE='\b(weapon(s|ry|i[sz]e[sd]?|i[sz]ation)?|munitions?|warheads?|ordnance|missiles?|bomb(s|ing|er|ers)?|kill ?chains?|lethal(ity)?|air ?strikes?|strikes?|combat|battlefields?)\b'
+WEAPON_RE='\b(weapon(s|ry|i[sz]e[sd]?|i[sz]ation)?|(am)?munitions?|warheads?|ordnance|missiles?|bomb(s|ed|ing|er|ers)?|kill[ -]?chains?|lethal(ity)?|air ?strikes?|strik(e|es|ing)|struck|combat(ants?)?|battlefields?|explosives?|grenades?|artillery|kamikazes?)\b'
 
 # Prints weapon or strike terminology under a work tree; returns 1 if any.
 scan_weapon() {
@@ -127,16 +127,23 @@ if [ "${1:-}" = "--self-test" ]; then
     printf '%s\n' "$out" | grep -q "^docs/FORMERLY_APPROVED.md:$n:" || { echo "FAIL: self-test: validated claim on line $n missed"; exit 1; }
   done
 
-  # Weapon and strike terms: caught in a doc, a test, and a rules example; words that only
-  # contain a term ("strikethrough", "combative") and PX4's generic words are not.
+  # Weapon and strike terms: caught in a doc, a test, and a rules example, inflected and
+  # hyphenated forms too; words that only contain a term ("strikethrough", "combative") and
+  # PX4's generic words are not.
   printf 'A loitering munition test.\n' > "$tmp/docs/USES.md"
   printf '// simulate a strike\n' > "$tmp/flight_test.rs"
   printf '# combat profile\n' > "$tmp/rules.example.toml"
+  for w in ammunition bombed Striking kill-chain combatant explosives grenade artillery; do
+    printf 'the %s case\n' "$w" > "$tmp/term_$w.md"
+  done
   printf 'strikethrough text, a combative tone, target_system, payload release\n' > "$tmp/fine.md"
   out="$(scan_weapon "$tmp" || true)"
   printf '%s\n' "$out" | grep -q '^docs/USES.md:1:' || { echo "FAIL: self-test: munition missed"; exit 1; }
   printf '%s\n' "$out" | grep -q '^flight_test.rs:1:' || { echo "FAIL: self-test: strike missed"; exit 1; }
   printf '%s\n' "$out" | grep -q '^rules.example.toml:1:' || { echo "FAIL: self-test: combat missed"; exit 1; }
+  for w in ammunition bombed Striking kill-chain combatant explosives grenade artillery; do
+    printf '%s\n' "$out" | grep -q "^term_$w.md:1:" || { echo "FAIL: self-test: $w missed"; exit 1; }
+  done
   printf '%s\n' "$out" | grep -q '^fine.md' && { echo "FAIL: self-test: false positive on fine.md"; exit 1; }
 
   echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing; weapon and strike terms)"
