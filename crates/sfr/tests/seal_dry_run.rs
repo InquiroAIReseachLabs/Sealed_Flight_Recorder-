@@ -75,6 +75,16 @@ const GOLDEN: &[(&str, &str, i32)] = &[
         1,
     ),
     (
+        "v1.17.0_gz_quadtailsitter_transition",
+        "testdata/sitl/v1.17.0/gz_quadtailsitter_transition.ulg",
+        0,
+    ),
+    (
+        "v1.17.0_gz_x500_vision_hover",
+        "testdata/sitl/v1.17.0/gz_x500_vision_hover.ulg",
+        0,
+    ),
+    (
         "v1.17.0_mc_flight_1",
         "testdata/sitl/v1.17.0/mc_flight_1.ulg",
         0,
@@ -83,6 +93,11 @@ const GOLDEN: &[(&str, &str, i32)] = &[
         "v1.17.0_mc_flight_2",
         "testdata/sitl/v1.17.0/mc_flight_2.ulg",
         0,
+    ),
+    (
+        "v1.17.0_payload_two_sources",
+        "testdata/sitl/v1.17.0/payload_two_sources.ulg",
+        1,
     ),
     (
         "v1.17.0_vtol_transition",
@@ -483,6 +498,48 @@ fn vtol_log_has_start_and_end_and_passes_r6() {
     );
 }
 
+/// Change Order 01 gate: the tailsitter golden log (Gazebo `gz_quadtailsitter`, `VT_TYPE` 0).
+#[test]
+fn tailsitter_log_has_start_and_end_passes_r6_and_shows_transition_tuning() {
+    let log = "testdata/sitl/v1.17.0/gz_quadtailsitter_transition.ulg";
+    let baseline = "testdata/baselines/v1.17.0_gz_quadtailsitter_transition.params";
+    let out = dry_run(log, RULES, baseline, true);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let s = stdout(&out);
+    assert!(
+        s.contains(
+            "\"vtol_type\": {\n        \"name\": \"tailsitter\",\n        \"value\": 0\n      }"
+        ),
+        "{s}"
+    );
+    for (kind, n) in [
+        ("VTOL_TRANSITION_START", 2),
+        ("VTOL_TRANSITION_END", 2),
+        ("VTOL_TRANSITION_ABORT", 0),
+        ("QUADCHUTE", 0),
+    ] {
+        assert_eq!(
+            s.matches(&format!("\"kind\": \"{kind}\"")).count(),
+            n,
+            "{kind}"
+        );
+    }
+    assert!(
+        s.contains("\"VTOL type tailsitter (VT_TYPE 0)\""),
+        "R6 detail: {s}"
+    );
+    let table = stdout(&dry_run(log, RULES, baseline, false));
+    for line in [
+        "R6    PASS    VTOL transitions completed    2 START, 2 END, 0 problem(s)",
+        "transition tuning (VTOL type tailsitter)",
+        "  VT_B_TRANS_DUR    f32:5           f32:5           MATCH",
+        "  VT_F_TRANS_DUR    f32:1.5         f32:1.5         MATCH",
+    ] {
+        assert!(table.contains(line), "missing {line:?} in {table}");
+    }
+    assert!(!table.contains("DIFF"), "{table}");
+}
+
 #[test]
 fn multicopter_log_gives_r6_not_applicable() {
     for (name, log) in [
@@ -815,20 +872,78 @@ fn rules_plus(extra: &str) -> PathBuf {
 
 #[test]
 fn a_sealed_topic_missing_from_the_log_fails_r1_and_names_it() {
-    let rules = rules_plus("[sealed_topics]\ntopics = [\"custom_detection\"]\n");
-    let out = dry_run(
-        "testdata/sitl/v1.17.0/mc_flight_1.ulg",
-        rules.to_str().unwrap(),
-        "testdata/baselines/v1.17.0_mc_flight_1.params",
-        false,
-    );
-    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
-    assert!(
-        stdout(&out)
-            .contains("R1    FAIL    required topics present       missing: custom_detection"),
-        "{}",
-        stdout(&out)
-    );
+    for topic in ["custom_detection", "vehicle_visual_odometry"] {
+        let rules = rules_plus(&format!("[sealed_topics]\ntopics = [\"{topic}\"]\n"));
+        let out = dry_run(
+            "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+            rules.to_str().unwrap(),
+            "testdata/baselines/v1.17.0_mc_flight_1.params",
+            false,
+        );
+        assert_eq!(out.status.code(), Some(2), "{topic}: {}", stderr(&out));
+        assert!(
+            stdout(&out).contains(&format!(
+                "R1    FAIL    required topics present       missing: {topic}"
+            )),
+            "{}",
+            stdout(&out)
+        );
+    }
+}
+
+/// Change Order 01 gate: the Gazebo vision flight seals `vehicle_visual_odometry`, a real PX4
+/// topic, and the synthetic fixture seals `custom_detection`, a topic PX4 does not define.
+#[test]
+fn sealed_topics_give_one_digest_per_instance_on_real_and_custom_topics() {
+    for (name, log, entries) in [
+        (
+            "v1.17.0_gz_x500_vision_hover",
+            "testdata/sitl/v1.17.0/gz_x500_vision_hover.ulg",
+            &[("vehicle_visual_odometry", 0, 1687)][..],
+        ),
+        (
+            "synthetic_custom_detection",
+            "testdata/synthetic/custom_detection.ulg",
+            &[
+                ("custom_detection", 0, 5),
+                ("custom_detection", 1, 2),
+                ("custom_detection", 2, 0),
+            ][..],
+        ),
+    ] {
+        let out = dry_run(
+            log,
+            &rules_for(name),
+            &format!("testdata/baselines/{name}.params"),
+            true,
+        );
+        assert_eq!(out.status.code(), Some(0), "{name}: {}", stderr(&out));
+        // The pretty JSON lists each entry's fields in key order; collect (topic, multi_id,
+        // message_count) from the sealed_topics array.
+        let s = stdout(&out);
+        let start = s.find("\n  \"sealed_topics\": [").expect("sealed_topics");
+        let end = start + s[start..].find("\n  ]").expect("end of sealed_topics");
+        let field = |line: &str, key: &str| {
+            line.trim()
+                .strip_prefix(&format!("\"{key}\": "))
+                .map(|v| v.trim_end_matches(',').trim_matches('"').to_string())
+        };
+        let (mut got, mut count, mut multi) = (Vec::new(), String::new(), String::new());
+        for line in s[start..end].lines() {
+            if let Some(v) = field(line, "message_count") {
+                count = v;
+            } else if let Some(v) = field(line, "multi_id") {
+                multi = v;
+            } else if let Some(v) = field(line, "topic") {
+                got.push(format!("{v} {multi} {count}"));
+            }
+        }
+        let want: Vec<String> = entries
+            .iter()
+            .map(|(t, m, c)| format!("{t} {m} {c}"))
+            .collect();
+        assert_eq!(got, want, "{name}");
+    }
 }
 
 #[test]
@@ -898,42 +1013,127 @@ fn r7_names_each_command_from_an_unlisted_source() {
     );
 }
 
+/// Change Order 01 gate: a changed `VT_B_TRANS_DUR` in the baseline fails R3 with both values
+/// and shows DIFF in the transition tuning section, on the standard VTOL and the tailsitter.
 #[test]
 fn a_changed_watched_parameter_fails_r3_and_shows_diff_in_transition_tuning() {
-    let dir = scratch();
-    let baseline = dir.join("vtol.params");
-    let text =
-        std::fs::read_to_string(root().join("testdata/baselines/v1.17.0_vtol_transition.params"))
-            .unwrap()
-            .replace("\tVT_B_TRANS_DUR\t10.0\t9", "\tVT_B_TRANS_DUR\t8.0\t9");
-    assert!(
-        text.contains("\tVT_B_TRANS_DUR\t8.0\t9"),
-        "the baseline line was edited"
+    // (golden name, flown value as the baseline writes it, VTOL type, an unchanged row)
+    for (name, flown, vtol, unchanged) in [
+        (
+            "v1.17.0_vtol_transition",
+            "10.0",
+            "standard",
+            "  VT_F_TRANS_DUR    f32:5           f32:5           MATCH",
+        ),
+        (
+            "v1.17.0_gz_quadtailsitter_transition",
+            "5.0",
+            "tailsitter",
+            "  VT_F_TRANS_DUR    f32:1.5         f32:1.5         MATCH",
+        ),
+    ] {
+        let dir = scratch();
+        let baseline = dir.join("vtol.params");
+        let from = format!("\tVT_B_TRANS_DUR\t{flown}\t9");
+        let text =
+            std::fs::read_to_string(root().join(format!("testdata/baselines/{name}.params")))
+                .unwrap()
+                .replace(&from, "\tVT_B_TRANS_DUR\t8.0\t9");
+        assert!(
+            text.contains("\tVT_B_TRANS_DUR\t8.0\t9"),
+            "{name}: the baseline line was edited"
+        );
+        std::fs::write(&baseline, text).unwrap();
+        let out = dry_run(
+            &format!(
+                "testdata/sitl/v1.17.0/{}.ulg",
+                name.trim_start_matches("v1.17.0_")
+            ),
+            RULES,
+            baseline.to_str().unwrap(),
+            false,
+        );
+        assert_eq!(out.status.code(), Some(1), "{name}: {}", stderr(&out));
+        let t = stdout(&out);
+        let flown = flown.trim_end_matches(".0");
+        for line in [
+            "R3    FAIL    parameters match baseline     1 differ".to_string(),
+            format!("- VT_B_TRANS_DUR: baseline f32:8, flown f32:{flown}"),
+            format!("transition tuning (VTOL type {vtol})"),
+            format!(
+                "  VT_B_TRANS_DUR    f32:8           {:<16}DIFF",
+                format!("f32:{flown}")
+            ),
+            unchanged.to_string(),
+        ] {
+            assert!(t.contains(&line), "{name}: missing {line:?} in {t}");
+        }
+    }
+}
+
+/// Change Order 01 gate: the payload SITL flight (commands from a ground station, 255/190, and
+/// a second source, 42/191, to the vehicle, system 6). Its golden rules list the ground station
+/// and the vehicle but not the second source.
+#[test]
+fn payload_log_has_payload_events_and_r7_names_the_second_source() {
+    let log = "testdata/sitl/v1.17.0/payload_two_sources.ulg";
+    let baseline = "testdata/baselines/v1.17.0_payload_two_sources.params";
+    let golden = "testdata/rules/v1.17.0_payload_two_sources.toml";
+
+    // PAYLOAD events: actuator, gripper twice, image capture and winch from the flight, plus
+    // PX4's own boot-time DO_GRIPPER (docs/DIAGNOSTIC.md item 12.3).
+    let json = stdout(&dry_run(log, golden, baseline, true));
+    assert_eq!(
+        json.matches("\"category\": \"PAYLOAD\"").count(),
+        6,
+        "{json}"
     );
-    std::fs::write(&baseline, text).unwrap();
-    let out = dry_run(
-        "testdata/sitl/v1.17.0/vtol_transition.ulg",
-        RULES,
-        baseline.to_str().unwrap(),
-        false,
+    assert_eq!(
+        json.matches("\"category\": \"GENERAL\"").count(),
+        6,
+        "{json}"
     );
+
+    let out = dry_run(log, golden, baseline, false);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     let t = stdout(&out);
+    for line in [
+        "R7    FAIL    authorized command sources    5 of 12 command(s) from unauthorized sources",
+        "- event seq 8: command 211 (PAYLOAD) from system 42 component 191 at boot_us 34728000",
+        "- event seq 9: command 2000 (PAYLOAD) from system 42 component 191 at boot_us 37712000",
+        "- event seq 11: command 42600 (PAYLOAD) from system 42 component 191 at boot_us 40712000",
+        "- event seq 12: command 211 (PAYLOAD) from system 42 component 191 at boot_us 43732000",
+    ] {
+        assert!(t.contains(line), "missing {line:?} in {t}");
+    }
+    assert!(!t.contains("from system 255 component 190"), "{t}");
+    assert!(!t.contains("from system 6 component 1 "), "{t}");
+
+    // No [authorized_sources]: R7 is N/A.
+    let t = stdout(&dry_run(log, RULES, baseline, false));
     assert!(
-        t.contains("R3    FAIL    parameters match baseline     1 differ"),
+        t.contains("R7    N/A     authorized command sources"),
         "{t}"
     );
+
+    // Listing the second source too leaves only the boot-time DO_GRIPPER; scoped to GENERAL,
+    // the ground station and the vehicle cover every command.
+    let run = |extra: &str| {
+        let rules = rules_plus(extra);
+        stdout(&dry_run(log, rules.to_str().unwrap(), baseline, false))
+    };
+    let t = run(
+        "[authorized_sources]\nsources = [{ system = 255, component = 190 }, { system = 6, component = 1 }, { system = 42, component = 191 }]\n",
+    );
     assert!(
-        t.contains("- VT_B_TRANS_DUR: baseline f32:8, flown f32:10"),
+        t.contains("R7    FAIL    authorized command sources    1 of 12 command(s) from unauthorized sources"),
         "{t}"
     );
-    assert!(t.contains("transition tuning (VTOL type standard)"), "{t}");
-    assert!(
-        t.contains("  VT_B_TRANS_DUR    f32:8           f32:10          DIFF"),
-        "{t}"
+    let t = run(
+        "[authorized_sources]\ncategory = \"GENERAL\"\nsources = [{ system = 255, component = 190 }, { system = 6, component = 1 }]\n",
     );
     assert!(
-        t.contains("  VT_F_TRANS_DUR    f32:5           f32:5           MATCH"),
+        t.contains("R7    PASS    authorized command sources    6 command(s) checked, all from authorized sources"),
         "{t}"
     );
 }

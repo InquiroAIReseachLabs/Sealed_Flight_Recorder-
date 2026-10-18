@@ -28,10 +28,13 @@ Arbitrary bytes go to `sfr_core::verify::verify` without a log: the canonical-fo
 d=fuzz/seeds/ulog_ingest
 mkdir -p $d
 for n in v1.17.0/mc_flight_1 v1.17.0/failsafe_gps_loss v1.17.0/failsafe_battery_empty \
-         v1.17.0/vtol_transition_abort v1.17.0/vtol_quadchute v1.14.4/mc_flight; do
+         v1.17.0/vtol_transition_abort v1.17.0/vtol_quadchute v1.14.4/mc_flight \
+         v1.17.0/gz_quadtailsitter_transition v1.17.0/payload_two_sources; do
   python3 -I scripts/testdata/shrink_ulog.py testdata/sitl/$n.ulg \
     $d/sitl_$(echo $n | tr / _)_shrunk.ulg --every 50 --no-multi-info
 done
+python3 -I scripts/testdata/shrink_ulog.py testdata/sitl/v1.17.0/gz_x500_vision_hover.ulg \
+  $d/sitl_v1.17.0_gz_x500_vision_hover_shrunk.ulg --every 50 --no-multi-info --keep vehicle_visual_odometry
 head -c 65516 testdata/pyulog/sample.ulg > $d/pyulog_sample_first_65516.ulg
 head -c 16 testdata/sitl/v1.17.0/mc_flight_1.ulg > $d/header_only_16_bytes.ulg
 : > $d/empty.ulg
@@ -42,7 +45,7 @@ python3 -I scripts/testdata/make_amplification_seed.py $d/subscription_amplifica
 
 Two seeds exercise appended data (the 'B' record's flag bits and offsets), which the SITL logs do not use: `sitl_v1.17.0_mc_flight_1_shrunk_appended.ulg` is the shrunk log with the appended-data bit set and its first offset at a record boundary in the data section, and `appended_offset_past_end.ulg` (59 bytes) announces an offset one byte past the end of the file, which must be reported as truncated (it once made the reader loop forever). Both were written by setting those bytes in the files above; the byte layout is the 'B' record in the ULog specification.
 
-`scripts/testdata/shrink_ulog.py` keeps every record except most data rows: all rows of `vehicle_status`, `failsafe_flags`, `vehicle_command` and `vehicle_command_ack`, every 50th row of the topics the optional rules read, and none of the rest; `--no-multi-info` also drops the 'M' blobs. The shrunk logs still arm, disarm, fail safe, and transition, so R1 to R6 and X1 to X5 all run on them. `pyulog_sample` is cut at a record boundary (byte 65,516), so it parses to the end; it comes from a BSD-3-Clause file whose license and notice are in `testdata/pyulog/`.
+`scripts/testdata/shrink_ulog.py` keeps every record except most data rows: all rows of `vehicle_status`, `failsafe_flags`, `vehicle_command` and `vehicle_command_ack`, every 50th row of the topics the optional rules read and of each topic named with `--keep`, and none of the rest; `--no-multi-info` also drops the 'M' blobs. The shrunk logs still arm, disarm, fail safe, and transition, so R1 to R6 and X1 to X5 all run on them. The Change Order 01 seeds add a tailsitter's transitions, commands from two MAVLink sources (R7 and command categories), and every 50th `vehicle_visual_odometry` row, a topic the fuzz rules seal; the vision seed is also the log of the `vehicle_visual_odometry` byte-flip tests in `crates/sfr/tests/seal_verify.rs`. `pyulog_sample` is cut at a record boundary (byte 65,516), so it parses to the end; it comes from a BSD-3-Clause file whose license and notice are in `testdata/pyulog/`.
 
 ## Runs
 
