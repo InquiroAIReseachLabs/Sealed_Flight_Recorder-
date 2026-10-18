@@ -1,0 +1,50 @@
+# cargo-deny configuration (SPEC B1.10, "Supply chain").
+# Licenses: permissive only. No GPL, no AGPL, no unknown. Advisories: any vulnerability
+# or yanked crate fails. Sources: crates.io only. The networking deny list is a separate,
+# self-tested check: deny-list.txt and scripts/check_deny_list.sh.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "0BSD",
+  "CC0-1.0",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  # The AWS-LC FIPS module (aws-lc-fips-sys) is "ISC AND (Apache-2.0 OR ISC) AND OpenSSL".
+  # The OpenSSL (SSLeay) license is permissive; its advertising clause applies to product
+  # documentation that mentions the cryptographic features (SPEC B1.10, Supply chain).
+  "OpenSSL",
+]
+# Inquiro crates carry no license field yet: the source license follows evaluation (founder decision).
+# Workspace members are never checked by cargo-deny's license pass.
+private = { ignore = true }
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace crates depend on each other by path; they are private (publish = false).
+allow-wildcard-paths = true
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

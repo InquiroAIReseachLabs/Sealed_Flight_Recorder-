@@ -1,0 +1,24 @@
+# sfr rules file: core rules R1 to R6 only.
+# Format reference: docs/SPEC.md B1.6. Unknown keys are rejected.
+format = "sfr-rules/1"
+
+[required_topics]
+# R1 also checks the vehicle_status and failsafe_flags fields that R4 to R6 read.
+topics = ["vehicle_status", "failsafe_flags"]
+
+[parameters]
+# "all": a parameter present only in the baseline or only in the log is a difference.
+# "baseline": compare only the parameters the baseline lists.
+compare = "all"
+
+# R3 skips parameters matching these patterns. "*" matches any run of characters.
+# Default list from docs/DIAGNOSTIC.md item 5 (two-flight experiment plus PX4 source).
+ignore = [
+  "COM_FLIGHT_UUID",   # per-flight identifier
+  "LND_FLIGHT_T_HI",   # flight-time accumulator
+  "LND_FLIGHT_T_LO",   # flight-time accumulator
+  "EKF2_MAG_DECL",     # learned from position each flight
+  "CAL_BARO*_OFF",     # rewritten by GNSS baro auto-calibration (v1.17)
+  "ASPD_SCALE_*",      # airspeed scale learned in flight
+  "COM_MODE*_HASH",    # external mode registration hashes (v1.15 and later)
+]

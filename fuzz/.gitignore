@@ -1,0 +1,7 @@
+# Build output and libFuzzer working data stay local.
+target/
+corpus/
+artifacts/
+coverage/
+# The seed corpus is committed on purpose.
+!seeds/

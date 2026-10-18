@@ -1,0 +1,44 @@
+# sfr rules file: core rules R1 to R6 plus the optional example rules X1 to X5.
+#
+# Every threshold below is a placeholder that shows the syntax. It is not a recommendation
+# for any aircraft. Each one is set by your flight-test lead.
+format = "sfr-rules/1"
+
+[required_topics]
+topics = ["vehicle_status", "failsafe_flags"]
+
+[parameters]
+compare = "all"
+ignore = [
+  "COM_FLIGHT_UUID",
+  "LND_FLIGHT_T_HI",
+  "LND_FLIGHT_T_LO",
+  "EKF2_MAG_DECL",
+  "CAL_BARO*_OFF",
+  "ASPD_SCALE_*",
+  "COM_MODE*_HASH",
+]
+
+# X1: lowest battery_status.remaining (fraction 0 to 1) while armed.
+# Threshold set by your flight-test lead.
+[extended.min_battery]
+min_remaining = 0.25
+
+# X2: vehicle_gps_position at each ARM.
+# fix_type: 2 is a 2D fix, 3 a 3D fix. Thresholds set by your flight-test lead.
+[extended.gps_fix_at_arm]
+min_fix_type = 3
+min_satellites = 8
+
+# X3: any nonzero estimator_status.filter_fault_flags on the primary estimator while armed.
+[extended.estimator_faults]
+
+# X4: vehicle_imu_status for the accelerometer named in sensor_selection, while armed.
+# Thresholds set by your flight-test lead.
+[extended.vibration]
+max_accel_vibration_metric = 3.0
+max_accel_clipping = 0
+
+# X5: total time of logging dropouts ('O' records). Threshold set by your flight-test lead.
+[extended.dropouts]
+max_total_ms = 0

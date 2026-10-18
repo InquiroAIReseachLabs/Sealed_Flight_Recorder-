@@ -1,0 +1,17 @@
+[package]
+name = "sfr-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Browser build of sfr-core for the hosted sandbox. Thin wrapper."
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sfr-core = { path = "../sfr-core" }
+
+[lints]
+workspace = true

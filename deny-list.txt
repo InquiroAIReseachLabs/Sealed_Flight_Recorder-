@@ -1,0 +1,90 @@
+# Crates that must never appear in the resolved dependency graph (SPEC B1.10, "No network").
+# One crate name per line. Lines starting with # are comments.
+# Checked by scripts/check_deny_list.sh against `cargo metadata --all-features` for every
+# platform and every feature at once.
+# Add, never remove, unless docs/SPEC.md changes.
+
+# Async runtimes and executors
+tokio
+tokio-util
+tokio-stream
+async-std
+smol
+async-io
+async-executor
+async-global-executor
+futures-executor
+glommio
+monoio
+may
+pollster
+mio
+polling
+
+# HTTP, RPC, websockets (servers, clients, and browser fetch wrappers for the wasm build)
+hyper
+hyper-util
+hyper-rustls
+hyper-tls
+reqwest
+ureq
+isahc
+surf
+attohttpc
+minreq
+curl
+curl-sys
+h2
+h3
+http
+http-body
+axum
+actix
+actix-rt
+actix-web
+warp
+tide
+rocket
+tower
+tower-http
+tonic
+grpcio
+tungstenite
+tokio-tungstenite
+async-tungstenite
+websocket
+ws
+tiny_http
+gloo-net
+reqwasm
+ehttp
+
+# TLS and certificates
+rustls
+native-tls
+openssl
+openssl-sys
+webpki-roots
+rustls-native-certs
+
+# DNS, sockets, QUIC, peer to peer, message brokers
+hickory-dns
+hickory-resolver
+trust-dns-resolver
+socket2
+net2
+quinn
+s2n-quic
+libp2p
+zmq
+nats
+lapin
+redis
+rumqttc
+paho-mqtt
+smoltcp
+
+# MAVLink transports open TCP and UDP sockets by default. MAVLink .tlog ingest is a v2
+# item (SPEC B1.11); if it arrives, it parses files only and this entry is revisited.
+mavlink
+mavlink-core

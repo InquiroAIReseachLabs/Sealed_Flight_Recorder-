@@ -1,0 +1,18 @@
+[package]
+name = "sfr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Sealed Flight Record command line: seal, verify, keygen. Thin wrapper over sfr-core."
+
+[[bin]]
+name = "sfr"
+path = "src/main.rs"
+
+[dependencies]
+sfr-core = { path = "../sfr-core", features = ["crypto-fips"] }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true

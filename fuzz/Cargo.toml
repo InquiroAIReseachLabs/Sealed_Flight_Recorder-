@@ -1,0 +1,35 @@
+# cargo-fuzz package for sfr-core (SPEC B1.10, "Fuzzing"). It is not a workspace member: the
+# root Cargo.toml excludes fuzz/, and the empty [workspace] below keeps it standalone.
+# Build and run with a nightly toolchain: see README.md.
+[package]
+name = "sfr-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+sfr-core = { path = "../crates/sfr-core" }
+# SHA-256 for the fuzz-only crypto backend, so the fuzz build does not need the FIPS module.
+sha2 = "=0.11.1"
+# Ed25519 for the fuzz-only backend of the `.sfr` reader target.
+ed25519-dalek = "=3.0.0"
+
+[[bin]]
+name = "ulog_ingest"
+path = "fuzz_targets/ulog_ingest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sfr_verify"
+path = "fuzz_targets/sfr_verify.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
