@@ -13,6 +13,17 @@
 //! # Optional rules, each enabled by the presence of its table.
 //! [extended.min_battery]
 //! min_remaining = 0.25
+//!
+//! # Optional sections (Change Order 01).
+//! [watched_parameters]
+//! names = ["VT_F_TRANS_DUR"]   # shown apart; R3 compares them like any other parameter
+//! [sealed_topics]
+//! topics = ["vehicle_visual_odometry"]   # required, and digested into the record
+//! [payload_commands]
+//! ids = [187, 211]             # COMMAND events with these ids are PAYLOAD, others GENERAL
+//! [authorized_sources]         # R7; absent means R7 is N/A
+//! category = "PAYLOAD"         # optional: check only this category
+//! sources = [{ system = 1, component = 1 }]
 //! ```
 
 use crate::params::Pattern;
@@ -31,8 +42,14 @@ pub const MAX_LIST_ENTRIES: usize = 256;
 /// arrays, inline tables, and dotted keys. Recorded here so the error can name it.
 pub const TOML_MAX_DEPTH: usize = 80;
 
+/// Most entries in `[sealed_topics]`; more is a usage error (SPEC B1.4, exit 4).
+pub const MAX_SEALED_TOPICS: usize = 64;
+
 /// Topics R1 always requires, because the core rules read them.
 pub const CORE_TOPICS: [&str; 2] = ["vehicle_status", "failsafe_flags"];
+
+/// The topic R7 reads; R1 requires it when the rules file has `[authorized_sources]`.
+pub const R7_TOPIC: &str = "vehicle_command";
 
 /// Which parameters R3 compares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +116,43 @@ pub struct Extended {
     pub dropouts: Option<Dropouts>,
 }
 
+/// A COMMAND event's category (SPEC B1.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Category {
+    /// Every command not in `[payload_commands]`.
+    General,
+    /// A command id listed in `[payload_commands]`.
+    Payload,
+}
+
+impl Category {
+    /// Record spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Category::General => "GENERAL",
+            Category::Payload => "PAYLOAD",
+        }
+    }
+}
+
+/// A command source R7 accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Source {
+    /// `vehicle_command.source_system` (8 bits).
+    pub system: u8,
+    /// `vehicle_command.source_component`: 16 bits in PX4 v1.17 (docs/DIAGNOSTIC.md item 12).
+    pub component: u16,
+}
+
+/// `[authorized_sources]`: R7's configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizedSources {
+    /// Only commands of this category are checked; `None` checks every command.
+    pub category: Option<Category>,
+    /// The accepted sources, sorted.
+    pub sources: Vec<Source>,
+}
+
 /// A parsed rules file.
 #[derive(Debug, Clone)]
 pub struct Rules {
@@ -112,18 +166,42 @@ pub struct Rules {
     pub ignore: Vec<Pattern>,
     /// Optional rules.
     pub extended: Extended,
+    /// `[watched_parameters]`, sorted.
+    pub watched: Vec<String>,
+    /// `[sealed_topics]`, sorted.
+    pub sealed_topics: Vec<String>,
+    /// `[payload_commands]`.
+    pub payload_commands: std::collections::BTreeSet<u32>,
+    /// `[authorized_sources]` (R7).
+    pub authorized_sources: Option<AuthorizedSources>,
 }
 
 impl Rules {
-    /// The topics R1 checks: the file's list, then the core topics it lacks.
+    /// The topics R1 checks: the file's list, then the core topics, the sealed topics, and
+    /// (with `[authorized_sources]`) the topic R7 reads, each one the list lacks.
     pub fn r1_topics(&self) -> Vec<String> {
         let mut out = self.required_topics.clone();
-        for t in CORE_TOPICS {
+        let r7 = self.authorized_sources.as_ref().map(|_| R7_TOPIC);
+        for t in CORE_TOPICS
+            .iter()
+            .copied()
+            .chain(self.sealed_topics.iter().map(String::as_str))
+            .chain(r7)
+        {
             if !out.iter().any(|x| x == t) {
                 out.push(t.to_string());
             }
         }
         out
+    }
+
+    /// A command id's category.
+    pub fn category(&self, command: u32) -> Category {
+        if self.payload_commands.contains(&command) {
+            Category::Payload
+        } else {
+            Category::General
+        }
     }
 
     /// Whether R3 ignores `name`.
@@ -139,6 +217,8 @@ pub struct RulesError {
     pub line: usize,
     /// What is wrong.
     pub reason: String,
+    /// A usage error (SPEC B1.4 exit 4) rather than an unusable file (exit 3).
+    pub usage: bool,
 }
 
 impl fmt::Display for RulesError {
@@ -168,6 +248,7 @@ impl Ctx<'_> {
         RulesError {
             line: self.line(offset),
             reason: reason.into(),
+            usage: false,
         }
     }
 }
@@ -313,19 +394,33 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
         } else {
             format!("not valid TOML: {msg}")
         };
-        RulesError { line, reason }
+        RulesError {
+            line,
+            reason,
+            usage: false,
+        }
     })?;
     let root = doc.get_ref();
     check_keys(
         &ctx,
         root,
         "",
-        &["format", "required_topics", "parameters", "extended"],
+        &[
+            "format",
+            "required_topics",
+            "parameters",
+            "extended",
+            "watched_parameters",
+            "sealed_topics",
+            "payload_commands",
+            "authorized_sources",
+        ],
     )?;
 
     let format = get(root, "format").ok_or_else(|| RulesError {
         line: 1,
         reason: format!("missing `format = \"{RULES_FORMAT}\"`"),
+        usage: false,
     })?;
     let f = as_str(&ctx, format, "format")?;
     if f != RULES_FORMAT {
@@ -357,6 +452,7 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
     let rt = get(root, "required_topics").ok_or_else(|| RulesError {
         line: body.lines().count() + 1,
         reason: "missing `[required_topics]`".into(),
+        usage: false,
     })?;
     let rt_table = as_table(&ctx, rt, "required_topics")?;
     check_keys(&ctx, rt_table, "required_topics", &["topics"])?;
@@ -530,22 +626,227 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
         }
     }
 
+    let watched = parse_watched(&ctx, root, &ignore)?;
+    let sealed_topics = parse_sealed_topics(&ctx, root)?;
+    let payload_commands = parse_payload_commands(&ctx, root)?;
+    let authorized_sources = parse_authorized_sources(&ctx, root)?;
+
     Ok(Rules {
         text: text.to_string(),
         required_topics,
         compare,
         ignore,
         extended,
+        watched,
+        sealed_topics,
+        payload_commands,
+        authorized_sources,
     })
+}
+
+/// A parameter name: 1 to 64 letters, digits, or `_` (SPEC B1.4).
+fn valid_param_name(n: &str) -> bool {
+    !n.is_empty() && n.len() <= 64 && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+/// The one-key table `[name] key = [...]` as `(value, offset)` strings, or `None` when absent.
+fn single_list<'t, 'i>(
+    ctx: &Ctx<'_>,
+    root: &'t Table<'i>,
+    name: &str,
+    key: &str,
+) -> Result<Option<&'t Spanned<DeValue<'i>>>, RulesError> {
+    let Some(v) = get(root, name) else {
+        return Ok(None);
+    };
+    let t = as_table(ctx, v, name)?;
+    check_keys(ctx, t, name, &[key])?;
+    require(ctx, t, v.span().start, name, key).map(Some)
+}
+
+fn parse_watched(
+    ctx: &Ctx<'_>,
+    root: &Table<'_>,
+    ignore: &[Pattern],
+) -> Result<Vec<String>, RulesError> {
+    let Some(list) = single_list(ctx, root, "watched_parameters", "names")? else {
+        return Ok(Vec::new());
+    };
+    let mut out = std::collections::BTreeSet::new();
+    for (name, at) in as_str_list(ctx, list, "watched_parameters.names")? {
+        if !valid_param_name(&name) {
+            return Err(ctx.err(
+                at,
+                format!(
+                    "`{name}` is not a parameter name (1 to 64 letters, digits, `_`; SPEC B1.4)"
+                ),
+            ));
+        }
+        if let Some(p) = ignore.iter().find(|p| p.matches(&name)) {
+            return Err(ctx.err(
+                at,
+                format!(
+                    "watched parameter `{name}` is also ignored by `{}`; R3 compares every watched parameter",
+                    p.as_str()
+                ),
+            ));
+        }
+        if !out.insert(name.clone()) {
+            return Err(ctx.err(at, format!("parameter `{name}` listed twice")));
+        }
+        if out.len() > MAX_LIST_ENTRIES {
+            return Err(ctx.err(
+                at,
+                crate::limit_exceeded("`watched_parameters`", MAX_LIST_ENTRIES, "entries"),
+            ));
+        }
+    }
+    Ok(out.into_iter().collect())
+}
+
+fn parse_sealed_topics(ctx: &Ctx<'_>, root: &Table<'_>) -> Result<Vec<String>, RulesError> {
+    let Some(list) = single_list(ctx, root, "sealed_topics", "topics")? else {
+        return Ok(Vec::new());
+    };
+    let mut out = std::collections::BTreeSet::new();
+    for (t, at) in as_str_list(ctx, list, "sealed_topics.topics")? {
+        if !valid_topic(&t) {
+            return Err(ctx.err(
+                at,
+                format!(
+                    "`{t}` is not a topic name (1 to 64 lowercase letters, digits, `_`; SPEC B1.4)"
+                ),
+            ));
+        }
+        if !out.insert(t.clone()) {
+            return Err(ctx.err(at, format!("sealed topic `{t}` listed twice")));
+        }
+        if out.len() > MAX_SEALED_TOPICS {
+            let mut e = ctx.err(
+                at,
+                crate::limit_exceeded("`sealed_topics`", MAX_SEALED_TOPICS, "topics"),
+            );
+            e.usage = true;
+            return Err(e);
+        }
+    }
+    Ok(out.into_iter().collect())
+}
+
+fn parse_payload_commands(
+    ctx: &Ctx<'_>,
+    root: &Table<'_>,
+) -> Result<std::collections::BTreeSet<u32>, RulesError> {
+    let mut out = std::collections::BTreeSet::new();
+    let Some(list) = single_list(ctx, root, "payload_commands", "ids")? else {
+        return Ok(out);
+    };
+    let DeValue::Array(items) = list.get_ref() else {
+        return Err(ctx.err(
+            list.span().start,
+            "`payload_commands.ids` must be an array of integers",
+        ));
+    };
+    for item in items {
+        let id = as_uint(ctx, item, "payload_commands.ids", u64::from(u32::MAX))? as u32;
+        if !out.insert(id) {
+            return Err(ctx.err(item.span().start, format!("command id {id} listed twice")));
+        }
+        if out.len() > MAX_LIST_ENTRIES {
+            return Err(ctx.err(
+                item.span().start,
+                crate::limit_exceeded("`payload_commands`", MAX_LIST_ENTRIES, "entries"),
+            ));
+        }
+    }
+    Ok(out)
+}
+
+fn parse_authorized_sources(
+    ctx: &Ctx<'_>,
+    root: &Table<'_>,
+) -> Result<Option<AuthorizedSources>, RulesError> {
+    let Some(v) = get(root, "authorized_sources") else {
+        return Ok(None);
+    };
+    let t = as_table(ctx, v, "authorized_sources")?;
+    check_keys(ctx, t, "authorized_sources", &["category", "sources"])?;
+    let category = match get(t, "category") {
+        None => None,
+        Some(c) => Some(match as_str(ctx, c, "authorized_sources.category")? {
+            "PAYLOAD" => Category::Payload,
+            "GENERAL" => Category::General,
+            other => {
+                return Err(ctx.err(
+                    c.span().start,
+                    format!("`authorized_sources.category` is `{other}`, expected `PAYLOAD` or `GENERAL`"),
+                ));
+            }
+        }),
+    };
+    let list = require(ctx, t, v.span().start, "authorized_sources", "sources")?;
+    let DeValue::Array(items) = list.get_ref() else {
+        return Err(ctx.err(
+            list.span().start,
+            "`authorized_sources.sources` must be an array of { system, component } tables",
+        ));
+    };
+    if items.is_empty() {
+        return Err(ctx.err(
+            list.span().start,
+            "`authorized_sources.sources` is empty; list at least one { system, component }",
+        ));
+    }
+    let mut sources = std::collections::BTreeSet::new();
+    for item in items {
+        let s = as_table(ctx, item, "authorized_sources.sources")?;
+        check_keys(
+            ctx,
+            s,
+            "authorized_sources.sources",
+            &["system", "component"],
+        )?;
+        let at = item.span().start;
+        let system = require(ctx, s, at, "authorized_sources.sources", "system")?;
+        let component = require(ctx, s, at, "authorized_sources.sources", "component")?;
+        let src = Source {
+            system: as_uint(ctx, system, "system", 255)? as u8,
+            component: as_uint(ctx, component, "component", u64::from(u16::MAX))? as u16,
+        };
+        if !sources.insert(src) {
+            return Err(ctx.err(
+                at,
+                format!(
+                    "source system {} component {} listed twice",
+                    src.system, src.component
+                ),
+            ));
+        }
+        if sources.len() > MAX_LIST_ENTRIES {
+            return Err(ctx.err(
+                at,
+                crate::limit_exceeded("`authorized_sources.sources`", MAX_LIST_ENTRIES, "entries"),
+            ));
+        }
+    }
+    Ok(Some(AuthorizedSources {
+        category,
+        sources: sources.into_iter().collect(),
+    }))
 }
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const MIN: &str =
         "format = \"sfr-rules/1\"\n[required_topics]\ntopics = [\"vehicle_status\"]\n";
+
+    /// The smallest valid rules file, for tests elsewhere in the crate.
+    pub(crate) fn minimal() -> Rules {
+        parse_rules(MIN).expect("minimal rules parse")
+    }
 
     #[test]
     fn pattern_length_and_toml_depth_limits_are_named() {
@@ -741,6 +1042,122 @@ mod tests {
             let e = parse_rules(text).expect_err(text);
             assert_eq!(e.line, *line, "{text:?}: {e}");
             assert!(e.reason.contains(needle), "{text:?}: {e}");
+        }
+    }
+
+    #[test]
+    fn change_order_01_sections_parse_and_sort() {
+        let text = format!(
+            "{MIN}[watched_parameters]\nnames = [\"VT_F_TRANS_DUR\", \"VT_B_TRANS_DUR\"]\n\
+             [sealed_topics]\ntopics = [\"vehicle_visual_odometry\", \"custom_detection\"]\n\
+             [payload_commands]\nids = [211, 187]\n\
+             [authorized_sources]\ncategory = \"PAYLOAD\"\nsources = [{{ system = 255, component = 190 }}, {{ system = 1, component = 1 }}]\n"
+        );
+        let r = parse_rules(&text).expect("valid");
+        assert_eq!(r.watched, ["VT_B_TRANS_DUR", "VT_F_TRANS_DUR"]);
+        assert_eq!(
+            r.sealed_topics,
+            ["custom_detection", "vehicle_visual_odometry"]
+        );
+        assert_eq!(r.category(211), Category::Payload);
+        assert_eq!(r.category(176), Category::General);
+        let auth = r.authorized_sources.as_ref().expect("R7 configured");
+        assert_eq!(auth.category, Some(Category::Payload));
+        assert_eq!(
+            auth.sources,
+            [
+                Source {
+                    system: 1,
+                    component: 1
+                },
+                Source {
+                    system: 255,
+                    component: 190
+                }
+            ]
+        );
+        assert_eq!(
+            r.r1_topics(),
+            [
+                "vehicle_status",
+                "failsafe_flags",
+                "custom_detection",
+                "vehicle_visual_odometry",
+                "vehicle_command"
+            ]
+        );
+        let none = minimal();
+        assert!(none.watched.is_empty() && none.sealed_topics.is_empty());
+        assert!(none.payload_commands.is_empty() && none.authorized_sources.is_none());
+        assert_eq!(none.category(211), Category::General);
+    }
+
+    #[test]
+    fn change_order_01_sections_reject_bad_input() {
+        let bad = |extra: &str| parse_rules(&format!("{MIN}{extra}")).expect_err(extra);
+        // More than 64 sealed topics is a usage error (exit 4); 64 is accepted.
+        let topics = |n: usize| {
+            let list: Vec<String> = (0..n).map(|i| format!("\"t{i}\"")).collect();
+            format!("[sealed_topics]\ntopics = [{}]\n", list.join(", "))
+        };
+        parse_rules(&format!("{MIN}{}", topics(64))).expect("64 sealed topics");
+        let e = bad(&topics(65));
+        assert!(e.usage, "{e}");
+        assert!(e.reason.contains("input limit of 64 topics"), "{e}");
+        // Every other problem is an unusable file (exit 3).
+        for (extra, needle) in [
+            (
+                "[sealed_topics]\ntopics = [\"Bad\"]\n",
+                "is not a topic name",
+            ),
+            ("[sealed_topics]\ntopics = [\"a\", \"a\"]\n", "listed twice"),
+            (
+                "[watched_parameters]\nnames = [\"A-B\"]\n",
+                "is not a parameter name",
+            ),
+            (
+                "[watched_parameters]\nnames = [\"X\", \"X\"]\n",
+                "listed twice",
+            ),
+            (
+                "[parameters]\nignore = [\"VT_*\"]\n[watched_parameters]\nnames = [\"VT_TYPE\"]\n",
+                "also ignored by `VT_*`",
+            ),
+            (
+                "[payload_commands]\nids = [\"211\"]\n",
+                "must be an integer",
+            ),
+            ("[payload_commands]\nids = [211, 211]\n", "listed twice"),
+            (
+                "[payload_commands]\nids = [4294967296]\n",
+                "from 0 to 4294967295",
+            ),
+            ("[authorized_sources]\nsources = []\n", "is empty"),
+            (
+                "[authorized_sources]\ncategory = \"ALL\"\nsources = [{ system = 1, component = 1 }]\n",
+                "expected `PAYLOAD` or `GENERAL`",
+            ),
+            (
+                "[authorized_sources]\nsources = [{ system = 256, component = 1 }]\n",
+                "from 0 to 255",
+            ),
+            (
+                "[authorized_sources]\nsources = [{ system = 1 }]\n",
+                "needs `component`",
+            ),
+            (
+                "[authorized_sources]\nsources = [{ system = 1, component = 1, x = 2 }]\n",
+                "unknown key",
+            ),
+            (
+                "[authorized_sources]\nsources = [{ system = 1, component = 1 }, { system = 1, component = 1 }]\n",
+                "listed twice",
+            ),
+            ("[sealed_topics]\ntopic = [\"a\"]\n", "unknown key"),
+        ] {
+            let e = bad(extra);
+            assert!(!e.usage, "{extra}: {e}");
+            assert!(e.reason.contains(needle), "{extra}: {e}");
         }
     }
 }

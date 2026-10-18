@@ -5,7 +5,7 @@
 // A panicking test is a failing test, so tests may use expect and unwrap.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::print_stdout)]
 
-use sfr_core::crypto::fips::Fips;
+use sfr_core::crypto::rustcrypto::RustCrypto;
 use sfr_core::keys::parse_public_key_pem;
 use sfr_core::verify::verify;
 use std::path::Path;
@@ -85,7 +85,7 @@ fn standalone_verify_of_10000_events_is_under_10_ms() {
     let record = std::fs::read(dir.join("perf.sfr")).unwrap();
     let pk =
         parse_public_key_pem(&std::fs::read_to_string(dir.join("k/sfr.pub")).unwrap()).unwrap();
-    let crypto = Fips::new().unwrap();
+    let crypto = RustCrypto;
     // SPEC B1.10: the gate is in-process verification, the median of RUNS runs.
     const RUNS: usize = 101;
     let mut times: Vec<Duration> = Vec::new();
@@ -97,8 +97,8 @@ fn standalone_verify_of_10000_events_is_under_10_ms() {
     }
     times.sort();
     let median = times[times.len() / 2];
-    // Reported beside it, not gated: the whole `sfr verify` command, which adds process start,
-    // the FIPS module's power-on self-tests, and reading the record and the public key.
+    // Reported beside it, not gated: the whole `sfr verify` command, which adds process start
+    // and reading the record and the public key.
     let mut cli: Vec<Duration> = Vec::new();
     for _ in 0..RUNS {
         let t0 = Instant::now();

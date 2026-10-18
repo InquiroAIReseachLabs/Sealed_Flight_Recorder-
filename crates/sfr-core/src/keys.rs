@@ -7,11 +7,25 @@
 
 use crate::crypto::CryptoBackend;
 use crate::hex;
+use zeroize::Zeroizing;
 
 /// DER prefix of an Ed25519 SubjectPublicKeyInfo (RFC 8410 section 4), before the 32 key bytes.
 const SPKI_PREFIX: [u8; 12] = [
     0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
 ];
+
+/// DER prefix of an Ed25519 PKCS#8 v1 private key (RFC 8410 section 7), before the 32-byte seed.
+const PKCS8_V1_PREFIX: [u8; 16] = [
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+];
+
+/// The same for PKCS#8 v2 (RFC 5958 OneAsymmetricKey) with the public key and no attributes.
+const PKCS8_V2_PREFIX: [u8; 16] = [
+    0x30, 0x51, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+];
+
+/// v2, between the seed and the public key: `publicKey [1] IMPLICIT BIT STRING`, 0 unused bits.
+const PKCS8_V2_PUBLIC_KEY: [u8; 3] = [0x81, 0x21, 0x00];
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -111,6 +125,32 @@ pub fn ed25519_from_spki_der(der: &[u8]) -> Option<[u8; 32]> {
     rest.try_into().ok()
 }
 
+/// The PKCS#8 v1 DER of an Ed25519 private key (`sfr.key`, the form `openssl genpkey` writes).
+pub fn ed25519_pkcs8_v1_der(seed: &[u8; 32]) -> Zeroizing<Vec<u8>> {
+    let mut der = Zeroizing::new(Vec::with_capacity(PKCS8_V1_PREFIX.len() + 32));
+    der.extend_from_slice(&PKCS8_V1_PREFIX);
+    der.extend_from_slice(seed);
+    der
+}
+
+/// An Ed25519 seed (zeroized on drop) and, from a PKCS#8 v2 key, the public key it carries.
+pub type SeedAndPublicKey = (Zeroizing<[u8; 32]>, Option<[u8; 32]>);
+
+/// The seed, and the public key if the key is v2, from an Ed25519 PKCS#8 DER. Accepts v1 and
+/// v2 without attributes; anything else is `None`.
+pub fn ed25519_seed_from_pkcs8_der(der: &[u8]) -> Option<SeedAndPublicKey> {
+    if let Some(seed) = der.strip_prefix(&PKCS8_V1_PREFIX[..]) {
+        return Some((Zeroizing::new(seed.try_into().ok()?), None));
+    }
+    let rest = der.strip_prefix(&PKCS8_V2_PREFIX[..])?;
+    let (seed, rest) = rest.split_at_checked(32)?;
+    let public = rest.strip_prefix(&PKCS8_V2_PUBLIC_KEY[..])?;
+    Some((
+        Zeroizing::new(seed.try_into().ok()?),
+        Some(public.try_into().ok()?),
+    ))
+}
+
 /// `sfr.pub` text.
 pub fn public_key_pem(public_key: &[u8; 32]) -> String {
     pem_encode("PUBLIC KEY", &ed25519_spki_der(public_key))
@@ -191,5 +231,40 @@ mod tests {
             None,
             "uppercase is not the record's hex"
         );
+    }
+
+    #[test]
+    fn pkcs8_private_keys_round_trip_and_match_rfc8410() {
+        // RFC 8410 section 10.3 example private key (v1).
+        let pem = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\n-----END PRIVATE KEY-----\n";
+        let der = pem_decode(pem, "PRIVATE KEY").expect("valid PEM");
+        let (seed, public) = ed25519_seed_from_pkcs8_der(&der).expect("v1 parses");
+        assert_eq!(
+            hex(&seed[..]),
+            "d4ee72dbf913584ad5b6d8f1f769f8ad3afe7c28cbf1d4fbe097a88f44755842"
+        );
+        assert_eq!(public, None);
+        assert_eq!(&ed25519_pkcs8_v1_der(&seed)[..], &der[..]);
+        assert_eq!(pem_encode("PRIVATE KEY", &der), pem);
+        // v2 with the public key, as aws-lc-rs wrote it.
+        let mut v2 = PKCS8_V2_PREFIX.to_vec();
+        v2.extend_from_slice(&seed[..]);
+        v2.extend_from_slice(&PKCS8_V2_PUBLIC_KEY);
+        v2.extend_from_slice(&[7; 32]);
+        let (seed2, public2) = ed25519_seed_from_pkcs8_der(&v2).expect("v2 parses");
+        assert_eq!(seed2, seed);
+        assert_eq!(public2, Some([7; 32]));
+        // Truncated, extended, other algorithms, and v2 with attributes are refused.
+        assert!(ed25519_seed_from_pkcs8_der(der.get(..47).expect("short")).is_none());
+        assert!(ed25519_seed_from_pkcs8_der(&[&der[..], &[0][..]].concat()).is_none());
+        assert!(ed25519_seed_from_pkcs8_der(v2.get(..82).expect("short")).is_none());
+        let mut x448 = der.clone();
+        if let Some(b) = x448.get_mut(11) {
+            *b = 0x71;
+        }
+        assert!(ed25519_seed_from_pkcs8_der(&x448).is_none());
+        // RFC 8410 section 10.3 v2 example, which carries an attribute.
+        let with_attr = "MHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhCoB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=";
+        assert!(ed25519_seed_from_pkcs8_der(&base64_decode(with_attr).expect("b64")).is_none());
     }
 }

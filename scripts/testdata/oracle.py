@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Independent oracle for Sealed Flight Record event extraction and core rules.
 
-Written only from docs/SPEC.md B1.5/B1.6 and docs/DIAGNOSTIC.md items 4, 5, 6.
-Usage: python3 -I oracle.py <log.ulg> [--required vehicle_status,failsafe_flags]
+Written only from docs/SPEC.md B1.5/B1.6/B1.7, docs/RECORD_FORMAT.md (sealed topic digests)
+and docs/DIAGNOSTIC.md items 4, 5, 6.
+Usage: python3 -I oracle.py <log.ulg> <rules.toml> [--required vehicle_status,failsafe_flags]
        [--ptime literal|max] [--param-index all|data] [--debug]
+
+The rules file gives the required topics (R1, together with every sealed topic), the payload
+command ids (COMMAND category), [authorized_sources] (R7), the watched parameter names, and the
+sealed topics. --required, when given, replaces the rules file's [required_topics] list.
 
 Prints one JSON object (sorted keys, compact separators) to stdout.
 Diagnostics (with --debug) go to stderr.
@@ -11,8 +16,11 @@ Diagnostics (with --debug) go to stderr.
 
 import argparse
 import bisect
+import hashlib
 import json
+import struct
 import sys
+import tomllib
 
 import numpy as np
 from pyulog import ULog
@@ -183,6 +191,8 @@ MODE_REQ = {
 VS_REQUIRED_FIELDS = ['timestamp', 'arming_state', 'nav_state', 'failsafe', 'is_vtol',
                       'in_transition_mode', 'in_transition_to_fw', 'vehicle_type']
 FF_REQUIRED_FIELDS = ['timestamp']
+# The vehicle_command fields R7 reads; R1 requires them when R7 is enabled (SPEC B1.6).
+VC_R7_FIELDS = ['command', 'source_system', 'source_component']
 
 
 def warn(debug, *a):
@@ -225,11 +235,224 @@ def is_monotonic(xs):
 
 
 # --------------------------------------------------------------------------
+# Rules file (SPEC B1.6), read with tomllib
+# --------------------------------------------------------------------------
+
+
+def load_rules(path):
+    with open(path, 'rb') as f:
+        doc = tomllib.load(f)
+    # SPEC B1.6: an entry listed twice in one list is a rules file error.
+    lists = [
+        ('required_topics.topics', doc.get('required_topics', {}).get('topics', [])),
+        ('parameters.ignore', doc.get('parameters', {}).get('ignore', [])),
+        ('watched_parameters.names', doc.get('watched_parameters', {}).get('names', [])),
+        ('sealed_topics.topics', doc.get('sealed_topics', {}).get('topics', [])),
+        ('payload_commands.ids', doc.get('payload_commands', {}).get('ids', [])),
+        ('authorized_sources.sources',
+         [(s['system'], s['component'])
+          for s in doc.get('authorized_sources', {}).get('sources', [])]),
+    ]
+    for name, items in lists:
+        if len(set(items)) != len(items):
+            raise SystemExit('oracle.py: %s lists an entry twice (SPEC B1.6)' % name)
+    sources = None
+    category = None
+    if 'authorized_sources' in doc:
+        sec = doc['authorized_sources']
+        sources = {(int(s['system']), int(s['component'])) for s in sec.get('sources', [])}
+        category = sec.get('category')
+    return {
+        'required_topics': list(doc.get('required_topics', {}).get('topics', [])),
+        'watched': list(doc.get('watched_parameters', {}).get('names', [])),
+        'sealed': list(doc.get('sealed_topics', {}).get('topics', [])),
+        'payload_ids': {int(i) for i in doc.get('payload_commands', {}).get('ids', [])},
+        'r7_enabled': 'authorized_sources' in doc,
+        'r7_sources': sources,
+        'r7_category': category,
+    }
+
+
+# --------------------------------------------------------------------------
+# vtol_type (SPEC B1.5, log identity)
+# --------------------------------------------------------------------------
+
+VT_TYPE_NAMES = {0: 'tailsitter', 1: 'tiltrotor', 2: 'standard'}
+
+
+def vtol_type_of(is_vtol, init_params, init_types):
+    """Null when not VTOL; else VT_TYPE at log start as {value, name}."""
+    if not is_vtol:
+        return None
+    if init_types.get('VT_TYPE') != 'int32_t' or 'VT_TYPE' not in init_params:
+        return {'value': None, 'name': 'unknown'}
+    n = int(init_params['VT_TYPE'])
+    return {'value': n, 'name': VT_TYPE_NAMES.get(n, 'unknown(%d)' % n)}
+
+
+# --------------------------------------------------------------------------
+# Sealed topic digests (SPEC B1.5, docs/RECORD_FORMAT.md), from the raw ULog
+# bytes with an own record reader. pyulog is not used here: it does not
+# expose the raw payload bytes.
+# --------------------------------------------------------------------------
+
+ULOG_MAGIC = b'ULog\x01\x12\x35'
+ULOG_HEADER_LEN = 16
+BASIC_SIZES = {'int8_t': 1, 'uint8_t': 1, 'bool': 1, 'char': 1,
+               'int16_t': 2, 'uint16_t': 2,
+               'int32_t': 4, 'uint32_t': 4, 'float': 4,
+               'int64_t': 8, 'uint64_t': 8, 'double': 8}
+MAX_NESTING = 8   # SPEC B1.4: 8 levels of nested types below a subscribed format
+
+
+def parse_format(text):
+    """'<name>:<type> <field>;...' -> (name, [(base type, array length or None, field name)])."""
+    name, _, body = text.partition(':')
+    fields = []
+    for part in body.split(';'):
+        part = part.strip()
+        if not part:
+            continue
+        ftype, fname = part.split()
+        count = None
+        if ftype.endswith(']') and '[' in ftype:
+            ftype, _, n = ftype[:-1].partition('[')
+            count = int(n)
+        fields.append((ftype, count, fname))
+    return name, fields
+
+
+def type_size(tname, formats, depth=0):
+    """Byte size of a basic type or of a nested format (formats: name -> parsed fields)."""
+    if tname in BASIC_SIZES:
+        return BASIC_SIZES[tname]
+    if tname not in formats or depth > MAX_NESTING:
+        raise ValueError('unknown or too deeply nested type %r' % tname)
+    return sum(type_size(t, formats, depth + 1) * (c if c is not None else 1)
+               for t, c, _ in formats[tname])
+
+
+def timestamp_offset(topic, formats):
+    """Offset of the topic's own top-level uint64 'timestamp' field in its flattened layout."""
+    if topic not in formats:
+        return None
+    off = 0
+    for t, c, fname in formats[topic]:
+        if fname == 'timestamp':
+            return off if (t == 'uint64_t' and c is None) else None
+        off += type_size(t, formats) * (c if c is not None else 1)
+    return None
+
+
+def sealed_topic_digests(path, topics, debug):
+    """docs/RECORD_FORMAT.md 'Sealed topic digests', procedure steps 1 to 4."""
+    topics = set(topics)
+    if not topics:
+        return []
+    with open(path, 'rb') as f:
+        buf = f.read()
+    if buf[:7] != ULOG_MAGIC or len(buf) < ULOG_HEADER_LEN:
+        raise ValueError('%s: not a ULog file' % path)
+    n = len(buf)
+    mv = memoryview(buf)
+    pos = ULOG_HEADER_LEN
+    formats = {}          # name -> parsed fields, latest 'F' (for layouts, nested types included)
+    fmt_sha = {}          # sealed name -> SHA-256 of its latest 'F' payload
+    entries = {}          # (name, multi_id) -> entry state
+    by_msg_id = {}        # msg_id -> entry state (or absent)
+    appended = []         # ULog appended-data offsets still ahead
+    first = True
+    in_data = False       # past the first 'A' (the data section)
+    while pos + 3 <= n:
+        size, typ = struct.unpack_from('<HB', buf, pos)
+        end = pos + 3 + size
+        if end > n:
+            warn(debug, 'sealed topics: truncated record at offset %d' % pos)
+            break
+        if in_data and appended and end > appended[0]:
+            # ULog appended data: a record that crosses the offset is dropped; reading resumes there.
+            pos = appended.pop(0)
+            continue
+        payload = mv[pos + 3:end]
+        if first and typ == ord('B') and size >= 40:
+            incompat0 = payload[8]
+            offs = struct.unpack_from('<3Q', payload, 16)
+            if incompat0 & 1:
+                appended = [o for o in offs if o != 0]
+        first = False
+        if typ == ord('F'):
+            raw = bytes(payload)
+            name, fields = parse_format(raw.decode('utf-8'))
+            formats[name] = fields
+            if name in topics:
+                fmt_sha[name] = hashlib.sha256(raw).hexdigest()
+        elif typ == ord('A'):
+            in_data = True
+            multi_id = payload[0]
+            msg_id, = struct.unpack_from('<H', payload, 1)
+            mname = bytes(payload[3:]).decode('utf-8')
+            if mname in topics:
+                key = (mname, multi_id)
+                e = entries.get(key)
+                if e is None:
+                    try:
+                        ts_off = timestamp_offset(mname, formats)
+                    except ValueError:
+                        ts_off = None
+                    e = {'topic': mname, 'multi_id': multi_id, 'format_sha256': fmt_sha.get(mname),
+                         'count': 0, 'first': None, 'last': None, 'h': hashlib.sha256(),
+                         'ts_off': ts_off}
+                    entries[key] = e
+                by_msg_id[msg_id] = e
+            else:
+                by_msg_id.pop(msg_id, None)
+        elif typ == ord('D'):
+            msg_id, = struct.unpack_from('<H', payload, 0)
+            e = by_msg_id.get(msg_id)
+            if e is not None:
+                p = payload[2:]
+                if e['ts_off'] is None:
+                    e['ts_off'] = timestamp_offset(e['topic'], formats)
+                t = None
+                if e['ts_off'] is not None and e['ts_off'] + 8 <= len(p):
+                    t, = struct.unpack_from('<Q', p, e['ts_off'])
+                else:
+                    warn(debug, 'sealed topics: no timestamp in %s record at offset %d' % (e['topic'], pos))
+                e['count'] += 1
+                if e['count'] == 1:
+                    e['first'] = t
+                e['last'] = t
+                e['h'].update(struct.pack('<Q', len(p)))
+                e['h'].update(p)
+        pos = end
+    out = []
+    for e in entries.values():
+        out.append({
+            'topic': e['topic'],
+            'multi_id': e['multi_id'],
+            'format_sha256': e['format_sha256'],
+            'message_count': e['count'],
+            'first_timestamp_us': None if e['first'] is None else str(e['first']),
+            'last_timestamp_us': None if e['last'] is None else str(e['last']),
+            'data_sha256': e['h'].hexdigest(),
+        })
+    out.sort(key=lambda x: (x['topic'].encode('utf-8'), x['multi_id']))
+    return out
+
+
+# --------------------------------------------------------------------------
 # Main extraction
 # --------------------------------------------------------------------------
 
 
-def run(path, required, ptime, param_index, debug):
+def run(path, rules, required, ptime, param_index, debug):
+    # R1 (SPEC B1.6): the rules file lists the required topics, every sealed topic is required
+    # too, and with [authorized_sources] so is vehicle_command. --required, when given,
+    # replaces the rules file's list.
+    if required is None:
+        required = list(rules['required_topics'])
+    extra = list(rules['sealed']) + (['vehicle_command'] if rules['r7_enabled'] else [])
+    required = list(required) + [t for t in extra if t not in required]
     u = TracingULog(path)
     info = u.msg_info_dict
     warn(debug, "file_corruption", u.file_corruption, "data records", u._sfr_data_count)
@@ -273,6 +496,11 @@ def run(path, required, ptime, param_index, debug):
         for f in FF_REQUIRED_FIELDS:
             if not ff.has(f):
                 missing.add('failsafe_flags.' + f)
+    # With [authorized_sources], the vehicle_command fields R7 reads (SPEC B1.6 R1).
+    if rules['r7_enabled'] and vc_insts:
+        for f in VC_R7_FIELDS:
+            if f not in vc_insts[0].data:
+                missing.add('vehicle_command.' + f)
 
     events = []   # (sort key tuple, generation counter, event dict)
     gen = [0]
@@ -482,8 +710,11 @@ def run(path, required, ptime, param_index, debug):
             used.add(chosen)
             r = acks[chosen]['result']
             result = RESULT_NAMES.get(r, "RESULT_%d" % r)
+        # SPEC B1.5: PAYLOAD when the command id is in [payload_commands], otherwise GENERAL.
+        category = 'PAYLOAD' if c['command'] in rules['payload_ids'] else 'GENERAL'
         emit({'kind': 'COMMAND', 'boot_us': str(c['ts']), 'topic': 'vehicle_command',
               'instance': c['inst'], 'index': c['idx'], 'command': c['command'],
+              'category': category,
               'source_system': c['ss'], 'source_component': c['sc'], 'result': result})
 
     # ---- PARAM_CHANGED_IN_FLIGHT
@@ -606,20 +837,65 @@ def run(path, required, ptime, param_index, debug):
         else:
             results['R6'] = 'FAIL' if (vtol_abort or vtol_open is not None) else 'PASS'
 
+    # R7 (SPEC B1.6), authorized command sources, over the whole log (every COMMAND event).
+    # N/A without [authorized_sources]. With `category`, only COMMAND events of that category
+    # are checked. FAIL names each event whose (source system, source component) is not listed.
+    # A rule whose input data is missing is FAIL (B1.6): no vehicle_command data record, or
+    # vehicle_command without command, source_system or source_component.
+    r7_unauthorized = []
+    if not rules['r7_enabled']:
+        results['R7'] = 'N/A'
+    else:
+        vc_fields_ok = bool(vc_insts) and all(
+            all(f in d.data for f in ('timestamp', 'command', 'source_system', 'source_component'))
+            for d in vc_insts)
+        for seq, e in enumerate(ev_list):
+            if e['kind'] != 'COMMAND':
+                continue
+            if rules['r7_category'] is not None and e['category'] != rules['r7_category']:
+                continue
+            if (int(e['source_system']), int(e['source_component'])) not in rules['r7_sources']:
+                r7_unauthorized.append(seq)
+        results['R7'] = 'FAIL' if (r7_unauthorized or not vc_fields_ok) else 'PASS'
+        warn(debug, "R7 vehicle_command input present:", vc_fields_ok,
+             "unauthorized seqs:", r7_unauthorized)
+
+    # Sealed topic digests (SPEC B1.5, docs/RECORD_FORMAT.md), from the raw file bytes.
+    sealed = sealed_topic_digests(path, rules['sealed'], debug)
+    if debug:
+        # Cross-check the own record reader against pyulog: count and first and last timestamp.
+        by_key = {(d.name, d.multi_id): d for d in u.data_list}
+        for s in sealed:
+            d = by_key.get((s['topic'], s['multi_id']))
+            pts = d.data['timestamp'].tolist() if d is not None else []
+            mine = (s['message_count'], s['first_timestamp_us'], s['last_timestamp_us'])
+            theirs = (len(pts), str(pts[0]) if pts else None, str(pts[-1]) if pts else None)
+            if mine != theirs:
+                warn(debug, "sealed %s/%d: reader %s pyulog %s" % (s['topic'], s['multi_id'], mine, theirs))
+
     return {
         'config': config,
         'firmware': firmware,
         'is_vtol': bool(is_vtol),
+        'vtol_type': vtol_type_of(is_vtol, init, types),
         'events': ev_list,
         'results': results,
         'missing': sorted(missing),
+        'r7_unauthorized': r7_unauthorized,
+        # SPEC B1.6: the record lists the [watched_parameters] names in config.watched_parameters
+        # (sorted by name, byte order).
+        'watched_parameters': sorted(rules['watched'], key=lambda x: x.encode('utf-8')),
+        'sealed_topics': sealed,
     }
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('log')
-    ap.add_argument('--required', default='vehicle_status,failsafe_flags')
+    ap.add_argument('rules', help="the rules file the log is sealed with (TOML, SPEC B1.6)")
+    ap.add_argument('--required', default=None,
+                    help="comma-separated required topics; replaces the rules file's "
+                         "[required_topics] (sealed topics stay required)")
     ap.add_argument('--ptime', choices=['literal', 'max'], default='max',
                     help="time of 'P'/'O': timestamp of the last 'D' before it (literal) "
                          "or pyulog's running maximum (max)")
@@ -628,8 +904,8 @@ def main():
                          "data-section 'P' only")
     ap.add_argument('--debug', action='store_true')
     a = ap.parse_args()
-    required = [t for t in a.required.split(',') if t]
-    obj = run(a.log, required, a.ptime, a.param_index, a.debug)
+    required = None if a.required is None else [t for t in a.required.split(',') if t]
+    obj = run(a.log, load_rules(a.rules), required, a.ptime, a.param_index, a.debug)
     sys.stdout.write(json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
     sys.stdout.write("\n")
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # validate.sh: CLAUDEME pre-commit gate. RUN THIS BEFORE EVERY COMMIT.
-# Runs the checks of every CI job except two that need their own build: the fuzz job
-# (pinned nightly and cargo-fuzz) and the release-build verify timing gate. Exits non-zero
-# on any FAIL.
+# Runs the checks of every CI job except three that need their own build: the fuzz job
+# (pinned nightly and cargo-fuzz), the release-build verify timing gate, and the armv7 job
+# (QEMU). Exits non-zero on any FAIL.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,21 +41,8 @@ run "language self-test" scripts/check_language.sh --self-test
 run "language check" scripts/check_language.sh
 run "README numbers script self-test" scripts/regen_readme_numbers.sh --self-test
 
-# 4b. The shipped graph takes SHA-256 and Ed25519 only from the FIPS module (SPEC B1.10, "Crypto").
-check_crypto_graph() {
-  local tree
-  tree="$(cargo tree -p sfr --locked --prefix none)" || return 1
-  if grep -E '^(sha2|ed25519-dalek) ' <<<"$tree"; then
-    echo "  sfr's dependency graph contains a SHA-256 or Ed25519 crate outside the FIPS module"
-    return 1
-  fi
-  grep -qE '^aws-lc-fips-sys v' <<<"$tree" || { echo "  aws-lc-fips-sys missing from sfr's graph"; return 1; }
-  if grep -E '^aws-lc-sys ' <<<"$tree"; then
-    echo "  sfr's dependency graph contains the non-FIPS AWS-LC (aws-lc-sys)"
-    return 1
-  fi
-}
-run "cargo tree -p sfr: no sha2, ed25519-dalek, or aws-lc-sys" check_crypto_graph
+# 4b. One crypto stack on every target: sha2, ed25519-dalek, blake3 (SPEC B1.10, "Crypto").
+run "one crypto stack on every target" scripts/check_crypto_graph.sh
 
 # 5. Supply chain: licenses, advisories, bans, sources (SPEC B1.10, "Supply chain").
 # A missing tool is a failure, never a skip: validate.sh must keep every check it shares with CI.

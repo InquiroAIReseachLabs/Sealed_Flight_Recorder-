@@ -8,7 +8,7 @@
     clippy::indexing_slicing
 )]
 
-use sfr_core::crypto::fips::Fips;
+use sfr_core::crypto::rustcrypto::RustCrypto;
 use sfr_core::keys::parse_public_key_pem;
 use sfr_core::verify::{VerifyError, verify};
 use std::path::{Path, PathBuf};
@@ -66,11 +66,16 @@ fn keygen(dir: &Path) -> (String, String) {
 
 /// Seals `log` into `out` and returns the record path and the exit code.
 fn seal(log: &str, baseline: &str, key: &str, out: &Path) -> (String, i32) {
+    seal_with(log, RULES, baseline, key, out)
+}
+
+/// [`seal`] with a given rules file.
+fn seal_with(log: &str, rules: &str, baseline: &str, key: &str, out: &Path) -> (String, i32) {
     let o = sfr(&[
         "seal",
         log,
         "--rules",
-        RULES,
+        rules,
         "--baseline",
         baseline,
         "--key",
@@ -138,7 +143,23 @@ const GOLDEN: &[(&str, &str, i32)] = &[
         "testdata/synthetic/r4_quadchute_on_disarm.ulg",
         1,
     ),
+    (
+        "synthetic_custom_detection",
+        "testdata/synthetic/custom_detection.ulg",
+        0,
+    ),
 ];
+
+/// The rules file a golden log is sealed with: `testdata/rules/<name>.toml` when it exists (the
+/// default rules plus sections that log needs, such as `[sealed_topics]`), else the default.
+fn rules_for(name: &str) -> String {
+    let own = format!("testdata/rules/{name}.toml");
+    if root().join(&own).exists() {
+        own
+    } else {
+        RULES.to_string()
+    }
+}
 
 #[test]
 fn keygen_writes_a_private_key_only_its_owner_can_read_and_never_overwrites() {
@@ -219,9 +240,12 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
     let (key, public) = keygen(&dir.join("k"));
     for (name, log, code) in GOLDEN {
         let baseline = format!("testdata/baselines/{name}.params");
-        let (record, sealed_code) = seal(log, &baseline, &key, &dir.join(name).join("a"));
+        let rules = rules_for(name);
+        let (record, sealed_code) =
+            seal_with(log, &rules, &baseline, &key, &dir.join(name).join("a"));
         assert_eq!(sealed_code, *code, "{log}");
-        let (again, again_code) = seal(log, &baseline, &key, &dir.join(name).join("b"));
+        let (again, again_code) =
+            seal_with(log, &rules, &baseline, &key, &dir.join(name).join("b"));
         assert_eq!(again_code, *code, "{log}");
         assert_eq!(
             std::fs::read(&record).unwrap(),
@@ -264,7 +288,7 @@ fn a_thousand_seeded_byte_flips_in_a_record_all_fail_verification() {
     );
     let bytes = std::fs::read(&record).unwrap();
     let pk = pubkey(&public);
-    let crypto = Fips::new().unwrap();
+    let crypto = RustCrypto;
     assert!(verify(&bytes, None, &crypto, &pk, false).is_ok());
     let mut rng = Rng(0x5eed_0001);
     for i in 0..1000 {
@@ -295,7 +319,7 @@ fn a_thousand_seeded_byte_flips_in_a_log_all_fail_verification() {
     let rec = std::fs::read(&record).unwrap();
     let ulg = std::fs::read(root().join(log)).unwrap();
     let pk = pubkey(&public);
-    let crypto = Fips::new().unwrap();
+    let crypto = RustCrypto;
     assert!(verify(&rec, Some(&mut &ulg[..]), &crypto, &pk, false).is_ok());
     let mut rng = Rng(0x5eed_0002);
     for i in 0..1000 {
@@ -306,6 +330,115 @@ fn a_thousand_seeded_byte_flips_in_a_log_all_fail_verification() {
         match verify(&rec, Some(&mut &t[..]), &crypto, &pk, false) {
             Err(VerifyError::Mismatch(_)) => {}
             other => panic!("flip {i} at byte {at} (xor {x:#04x}) was not detected: {other:?}"),
+        }
+    }
+}
+
+/// Seals the shrunk failsafe_gps_loss seed with the default rules plus `[sealed_topics]`
+/// sealing battery_status, which no event and no default rule reads. Returns the record bytes,
+/// the log bytes, and the public key.
+fn sealed_battery_status() -> (Vec<u8>, Vec<u8>, [u8; 32]) {
+    let dir = scratch();
+    let (key, public) = keygen(&dir.join("k"));
+    let rules = dir.join("rules.toml");
+    let rules_text = std::fs::read_to_string(root().join(RULES)).unwrap()
+        + "\n[sealed_topics]\ntopics = [\"battery_status\"]\n";
+    std::fs::write(&rules, rules_text).unwrap();
+    let log = "fuzz/seeds/ulog_ingest/sitl_v1.17.0_failsafe_gps_loss_shrunk.ulg";
+    let o = sfr(&[
+        "seal",
+        log,
+        "--rules",
+        rules.to_str().unwrap(),
+        "--baseline",
+        "testdata/baselines/v1.17.0_failsafe_gps_loss.params",
+        "--key",
+        &key,
+        "--evaluation-only",
+        "--out",
+        dir.to_str().unwrap(),
+        "--seal-time",
+        SEAL_TIME,
+    ]);
+    let record = dir.join("sitl_v1.17.0_failsafe_gps_loss_shrunk.sfr");
+    assert!(record.exists(), "{}", text(&o));
+    let rec = std::fs::read(record).unwrap();
+    assert!(
+        String::from_utf8_lossy(&rec).contains("\"sealed_topics\":[{\"data_sha256\":"),
+        "the record seals battery_status"
+    );
+    (
+        rec,
+        std::fs::read(root().join(log)).unwrap(),
+        pubkey(&public),
+    )
+}
+
+/// 1,000 seeded single-byte flips inside sealed topic messages in the log (Change Order 01).
+#[test]
+fn a_thousand_flips_in_sealed_topic_messages_name_the_topic_and_instance() {
+    let (rec, ulg, pk) = sealed_battery_status();
+    let crypto = RustCrypto;
+    assert!(verify(&rec, Some(&mut &ulg[..]), &crypto, &pk, false).is_ok());
+    let spans: Vec<(usize, usize)> = data_records(&ulg)
+        .into_iter()
+        .filter(|(_, _, t)| t == "battery_status")
+        .map(|(at, len, _)| (at, len))
+        .collect();
+    assert!(!spans.is_empty());
+    let mut rng = Rng(0x5eed_0003);
+    for i in 0..1000 {
+        let (start, len) = spans[(rng.next() % spans.len() as u64) as usize];
+        let at = start + (rng.next() % len as u64) as usize;
+        let x = (rng.next() % 255 + 1) as u8;
+        let mut t = ulg.clone();
+        t[at] ^= x;
+        match verify(&rec, Some(&mut &t[..]), &crypto, &pk, false) {
+            Err(VerifyError::Mismatch(m)) => {
+                let all: Vec<&String> = std::iter::once(&m.first).chain(&m.also).collect();
+                assert!(
+                    all.iter()
+                        .any(|l| l.starts_with("sealed topic battery_status instance 0 ")),
+                    "flip {i} at byte {at} (xor {x:#04x}) did not name the sealed topic: {all:?}"
+                );
+            }
+            other => panic!("flip {i} at byte {at} (xor {x:#04x}) was not detected: {other:?}"),
+        }
+    }
+}
+
+/// 1,000 seeded single-byte flips inside the sealed topic digest in the record. Standalone
+/// verify fails on every one; deep verify also names the sealed topic and instance.
+#[test]
+fn a_thousand_flips_in_a_sealed_topic_digest_fail_and_deep_verify_names_it() {
+    let (rec, ulg, pk) = sealed_battery_status();
+    let crypto = RustCrypto;
+    let text = String::from_utf8_lossy(&rec).into_owned();
+    let start = text.find("\"sealed_topics\":[").unwrap();
+    let end = start + text[start..].find(']').unwrap();
+    let mut rng = Rng(0x5eed_0004);
+    for i in 0..1000 {
+        let at = start + (rng.next() % (end - start) as u64) as usize;
+        let x = (rng.next() % 255 + 1) as u8;
+        let mut t = rec.clone();
+        t[at] ^= x;
+        match verify(&t, None, &crypto, &pk, false) {
+            Err(VerifyError::Mismatch(_)) => {}
+            other => {
+                panic!("flip {i} at byte {at} (xor {x:#04x}) passed standalone verify: {other:?}")
+            }
+        }
+        // A flip that leaves the record readable is named by deep verify.
+        if let Err(VerifyError::Mismatch(m)) = verify(&t, Some(&mut &ulg[..]), &crypto, &pk, false)
+        {
+            let readable = sfr_core::json::parse(&t).is_ok() && !m.first.contains("canonical");
+            if readable && !m.first.starts_with("field ") && !m.first.starts_with("unknown field") {
+                let all: Vec<&String> = std::iter::once(&m.first).chain(&m.also).collect();
+                assert!(
+                    all.iter().any(|l| l.starts_with("sealed topic ")),
+                    "flip {i} at byte {at} (xor {x:#04x}): {all:?}"
+                );
+            }
         }
     }
 }

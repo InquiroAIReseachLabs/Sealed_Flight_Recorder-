@@ -2306,7 +2306,19 @@
       "WV_GAIN": "f32:1",
       "WV_ROLL_MIN": "f32:1",
       "WV_YRATE_MAX": "f32:90"
-    }
+    },
+    "watched_parameters": [
+      "VT_ARSP_TRANS",
+      "VT_B_TRANS_DUR",
+      "VT_FW_DIFTHR_EN",
+      "VT_FW_DIFTHR_S_P",
+      "VT_FW_DIFTHR_S_R",
+      "VT_FW_DIFTHR_S_Y",
+      "VT_F_TRANS_DUR",
+      "VT_PITCH_MIN",
+      "VT_TRANS_MIN_TM",
+      "VT_TRANS_TIMEOUT"
+    ]
   },
   "event_count": 19,
   "events": [
@@ -2325,6 +2337,7 @@
     },
     {
       "boot_us": "260000",
+      "category": "PAYLOAD",
       "command": 211,
       "index": 0,
       "instance": 0,
@@ -2338,6 +2351,7 @@
     },
     {
       "boot_us": "5476000",
+      "category": "GENERAL",
       "command": 400,
       "index": 1,
       "instance": 0,
@@ -2363,6 +2377,7 @@
     },
     {
       "boot_us": "8372000",
+      "category": "GENERAL",
       "command": 22,
       "index": 2,
       "instance": 0,
@@ -2376,6 +2391,7 @@
     },
     {
       "boot_us": "8384000",
+      "category": "GENERAL",
       "command": 400,
       "index": 3,
       "instance": 0,
@@ -2415,6 +2431,7 @@
     },
     {
       "boot_us": "28180000",
+      "category": "GENERAL",
       "command": 3000,
       "index": 4,
       "instance": 0,
@@ -2438,6 +2455,7 @@
     },
     {
       "boot_us": "29000000",
+      "category": "GENERAL",
       "command": 176,
       "index": 5,
       "instance": 0,
@@ -2474,6 +2492,7 @@
     },
     {
       "boot_us": "29288000",
+      "category": "GENERAL",
       "command": 1001,
       "index": 6,
       "instance": 0,
@@ -2487,6 +2506,7 @@
     },
     {
       "boot_us": "29288000",
+      "category": "GENERAL",
       "command": 1000,
       "index": 7,
       "instance": 0,
@@ -2500,6 +2520,7 @@
     },
     {
       "boot_us": "29288000",
+      "category": "GENERAL",
       "command": 1001,
       "index": 8,
       "instance": 0,
@@ -2513,6 +2534,7 @@
     },
     {
       "boot_us": "54144000",
+      "category": "GENERAL",
       "command": 0,
       "index": 9,
       "instance": 0,
@@ -2561,7 +2583,11 @@
     "size": "15324267",
     "vehicle": {
       "is_vtol": true,
-      "system_type": 22
+      "system_type": 22,
+      "vtol_type": {
+        "name": "standard",
+        "value": 2
+      }
     }
   },
   "results": [
@@ -2607,6 +2633,7 @@
     },
     {
       "detail": [
+        "VTOL type standard (VT_TYPE 2)",
         "VTOL_TRANSITION_ABORT to_fw seq 12 at boot_us 29032000"
       ],
       "expected": "every VTOL transition START has an END; none aborted",
@@ -2614,11 +2641,20 @@
       "id": "R6",
       "name": "VTOL transitions completed",
       "status": "FAIL"
+    },
+    {
+      "detail": [],
+      "expected": "every COMMAND event from a source in [authorized_sources]",
+      "found": "no [authorized_sources] in the rules file",
+      "id": "R7",
+      "name": "authorized command sources",
+      "status": "N/A"
     }
   ],
   "rules": {
-    "sha256": "ac82040893f341f697885f7fecb8dfdd13e1925ca1f24f944628e5ff2dedcd65",
-    "text": "# sfr rules file: core rules R1 to R6 only.\n# Format reference: docs/SPEC.md B1.6. Unknown keys are rejected.\nformat = \"sfr-rules/1\"\n\n[required_topics]\n# R1 also checks the vehicle_status and failsafe_flags fields that R4 to R6 read.\ntopics = [\"vehicle_status\", \"failsafe_flags\"]\n\n[parameters]\n# \"all\": a parameter present only in the baseline or only in the log is a difference.\n# \"baseline\": compare only the parameters the baseline lists.\ncompare = \"all\"\n\n# R3 skips parameters matching these patterns. \"*\" matches any run of characters.\n# Default list from docs/DIAGNOSTIC.md item 5 (two-flight experiment plus PX4 source).\nignore = [\n  \"COM_FLIGHT_UUID\",   # per-flight identifier\n  \"LND_FLIGHT_T_HI\",   # flight-time accumulator\n  \"LND_FLIGHT_T_LO\",   # flight-time accumulator\n  \"EKF2_MAG_DECL\",     # learned from position each flight\n  \"CAL_BARO*_OFF\",     # rewritten by GNSS baro auto-calibration (v1.17)\n  \"ASPD_SCALE_*\",      # airspeed scale learned in flight\n  \"COM_MODE*_HASH\",    # external mode registration hashes (v1.15 and later)\n]\n"
+    "sha256": "59cc11d1261cd1e536091452eed5e254844e4f7d7ddc92b62a5d07cd1068e71b",
+    "text": "# sfr rules file: core rules R1 to R6; R7 is N/A without [authorized_sources].\n# Format reference: docs/SPEC.md B1.6. Unknown keys are rejected.\nformat = \"sfr-rules/1\"\n\n[required_topics]\n# R1 also checks the vehicle_status and failsafe_flags fields that R4 to R6 read.\ntopics = [\"vehicle_status\", \"failsafe_flags\"]\n\n[parameters]\n# \"all\": a parameter present only in the baseline or only in the log is a difference.\n# \"baseline\": compare only the parameters the baseline lists.\ncompare = \"all\"\n\n# R3 skips parameters matching these patterns. \"*\" matches any run of characters.\n# Default list from docs/DIAGNOSTIC.md item 5 (two-flight experiment plus PX4 source).\nignore = [\n  \"COM_FLIGHT_UUID\",   # per-flight identifier\n  \"LND_FLIGHT_T_HI\",   # flight-time accumulator\n  \"LND_FLIGHT_T_LO\",   # flight-time accumulator\n  \"EKF2_MAG_DECL\",     # learned from position each flight\n  \"CAL_BARO*_OFF\",     # rewritten by GNSS baro auto-calibration (v1.17)\n  \"ASPD_SCALE_*\",      # airspeed scale learned in flight\n  \"COM_MODE*_HASH\",    # external mode registration hashes (v1.15 and later)\n]\n\n# Watched parameters (Change Order 01): R3 compares them like every other parameter; the\n# results table and the report show them in their own \"Transition tuning\" section, and the\n# record lists them in config.watched_parameters. VTOL transition tuning; every name is defined\n# in PX4 v1.14 and v1.17 (docs/DIAGNOSTIC.md item 12).\n[watched_parameters]\nnames = [\n  \"VT_F_TRANS_DUR\",    # front transition duration\n  \"VT_B_TRANS_DUR\",    # maximum back transition duration\n  \"VT_TRANS_MIN_TM\",   # front transition minimum time\n  \"VT_TRANS_TIMEOUT\",  # front transition timeout\n  \"VT_ARSP_TRANS\",     # transition airspeed\n  \"VT_PITCH_MIN\",      # minimum pitch angle during hover\n  \"VT_FW_DIFTHR_EN\",   # differential thrust in forward flight (bitmask)\n  \"VT_FW_DIFTHR_S_R\",  # roll differential thrust factor\n  \"VT_FW_DIFTHR_S_P\",  # pitch differential thrust factor\n  \"VT_FW_DIFTHR_S_Y\",  # yaw differential thrust factor\n]\n\n# COMMAND events with these ids are category PAYLOAD; every other command is GENERAL.\n# Ids and names from PX4's VehicleCommand.msg, the same in v1.14 and v1.17 (docs/DIAGNOSTIC.md\n# item 12). Flight termination (185) and parachute (208) are safety commands and stay GENERAL.\n[payload_commands]\nids = [\n  184,    # VEHICLE_CMD_DO_REPEAT_SERVO\n  187,    # VEHICLE_CMD_DO_SET_ACTUATOR\n  203,    # VEHICLE_CMD_DO_DIGICAM_CONTROL\n  206,    # VEHICLE_CMD_DO_SET_CAM_TRIGG_DIST\n  211,    # VEHICLE_CMD_DO_GRIPPER\n  214,    # VEHICLE_CMD_DO_SET_CAM_TRIGG_INTERVAL\n  260,    # VEHICLE_CMD_OBLIQUE_SURVEY\n  2000,   # VEHICLE_CMD_IMAGE_START_CAPTURE\n  2003,   # VEHICLE_CMD_DO_TRIGGER_CONTROL\n  30001,  # VEHICLE_CMD_PAYLOAD_PREPARE_DEPLOY\n  30002,  # VEHICLE_CMD_PAYLOAD_CONTROL_DEPLOY\n  42600,  # VEHICLE_CMD_DO_WINCH\n]\n"
   },
+  "sealed_topics": [],
   "status": "FAIL"
 }

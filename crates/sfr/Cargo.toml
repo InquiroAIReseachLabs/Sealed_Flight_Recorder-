@@ -11,8 +11,9 @@ name = "sfr"
 path = "src/main.rs"
 
 [dependencies]
-sfr-core = { path = "../sfr-core", features = ["crypto-fips"] }
+sfr-core = { path = "../sfr-core" }
 zeroize = { workspace = true }
+getrandom = { workspace = true }
 
 [lints]
 workspace = true

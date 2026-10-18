@@ -816,8 +816,9 @@ fn opt_u8(v: Option<u8>) -> Value {
     v.map_or(Value::Null, |n| Value::Int(i64::from(n)))
 }
 
-/// The record form of one event (SPEC B1.7: no floats, u64 times as strings).
-pub fn event_json(e: &Event, fw: &Firmware) -> Value {
+/// The record form of one event (SPEC B1.7: no floats, u64 times as strings). `rules` gives a
+/// COMMAND event its category.
+pub fn event_json(e: &Event, fw: &Firmware, rules: &crate::rules::Rules) -> Value {
     let mut o = Obj::new()
         .field("seq", Value::count(e.seq))
         .field("kind", Value::str(e.kind.name()))
@@ -865,6 +866,7 @@ pub fn event_json(e: &Event, fw: &Firmware) -> Value {
             result,
         } => {
             o.set("command", Value::count(u64::from(*command)));
+            o.set("category", Value::str(rules.category(*command).as_str()));
             o.set("source_system", Value::count(*source_system));
             o.set("source_component", Value::count(*source_component));
             o.set("result", Value::str(result.name()));
@@ -1019,7 +1021,7 @@ mod tests {
                 reason: Some(3)
             })
         );
-        let nav = event_json(&ev[1], &fw());
+        let nav = event_json(&ev[1], &fw(), &crate::rules::tests::minimal());
         assert_eq!(
             crate::json::canonical(&nav),
             "{\"boot_us\":\"5\",\"index\":0,\"instance\":0,\"kind\":\"NAV_STATE_CHANGE\",\"new\":4,\"new_name\":\"AUTO_LOITER\",\"old\":null,\"old_name\":null,\"seq\":1,\"topic\":\"vehicle_status\",\"utc_us\":null}"

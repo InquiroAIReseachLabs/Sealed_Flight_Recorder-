@@ -55,7 +55,7 @@ Measured by \`crates/sfr/tests/verify_perf.rs\` in a release build, CI run $run 
 | Measurement | What it times | Median | Min | Max | Runs | Gate (SPEC B1.10) |
 |---|---|---|---|---|---|---|
 | In-process verify | \`sfr_core::verify\` on the record bytes already in memory | $a_med | $a_min | $a_max | $a_runs | gated: median under 10 ms |
-| End-to-end \`sfr verify\` | the whole command: process start, the FIPS module's power-on self-tests, reading the record and the public key, and verify | $b_med | $b_min | $b_max | $b_runs | not gated, reported only |
+| End-to-end \`sfr verify\` | the whole command: process start, reading the record and the public key, and verify | $b_med | $b_min | $b_max | $b_runs | not gated, reported only |
 $end
 EOF
 }

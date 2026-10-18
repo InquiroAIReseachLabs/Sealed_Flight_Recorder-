@@ -1,4 +1,4 @@
-# sfr rules file: core rules R1 to R6 only.
+# sfr rules file: core rules R1 to R6; R7 is N/A without [authorized_sources].
 # Format reference: docs/SPEC.md B1.6. Unknown keys are rejected.
 format = "sfr-rules/1"
 
@@ -21,4 +21,41 @@ ignore = [
   "CAL_BARO*_OFF",     # rewritten by GNSS baro auto-calibration (v1.17)
   "ASPD_SCALE_*",      # airspeed scale learned in flight
   "COM_MODE*_HASH",    # external mode registration hashes (v1.15 and later)
+]
+
+# Watched parameters (Change Order 01): R3 compares them like every other parameter; the
+# results table and the report show them in their own "Transition tuning" section, and the
+# record lists them in config.watched_parameters. VTOL transition tuning; every name is defined
+# in PX4 v1.14 and v1.17 (docs/DIAGNOSTIC.md item 12).
+[watched_parameters]
+names = [
+  "VT_F_TRANS_DUR",    # front transition duration
+  "VT_B_TRANS_DUR",    # maximum back transition duration
+  "VT_TRANS_MIN_TM",   # front transition minimum time
+  "VT_TRANS_TIMEOUT",  # front transition timeout
+  "VT_ARSP_TRANS",     # transition airspeed
+  "VT_PITCH_MIN",      # minimum pitch angle during hover
+  "VT_FW_DIFTHR_EN",   # differential thrust in forward flight (bitmask)
+  "VT_FW_DIFTHR_S_R",  # roll differential thrust factor
+  "VT_FW_DIFTHR_S_P",  # pitch differential thrust factor
+  "VT_FW_DIFTHR_S_Y",  # yaw differential thrust factor
+]
+
+# COMMAND events with these ids are category PAYLOAD; every other command is GENERAL.
+# Ids and names from PX4's VehicleCommand.msg, the same in v1.14 and v1.17 (docs/DIAGNOSTIC.md
+# item 12). Flight termination (185) and parachute (208) are safety commands and stay GENERAL.
+[payload_commands]
+ids = [
+  184,    # VEHICLE_CMD_DO_REPEAT_SERVO
+  187,    # VEHICLE_CMD_DO_SET_ACTUATOR
+  203,    # VEHICLE_CMD_DO_DIGICAM_CONTROL
+  206,    # VEHICLE_CMD_DO_SET_CAM_TRIGG_DIST
+  211,    # VEHICLE_CMD_DO_GRIPPER
+  214,    # VEHICLE_CMD_DO_SET_CAM_TRIGG_INTERVAL
+  260,    # VEHICLE_CMD_OBLIQUE_SURVEY
+  2000,   # VEHICLE_CMD_IMAGE_START_CAPTURE
+  2003,   # VEHICLE_CMD_DO_TRIGGER_CONTROL
+  30001,  # VEHICLE_CMD_PAYLOAD_PREPARE_DEPLOY
+  30002,  # VEHICLE_CMD_PAYLOAD_CONTROL_DEPLOY
+  42600,  # VEHICLE_CMD_DO_WINCH
 ]

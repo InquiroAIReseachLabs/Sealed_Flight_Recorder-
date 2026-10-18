@@ -5,6 +5,7 @@
 #   scripts/testdata/regenerate.sh oracle      # testdata/expected/oracle/*    (needs pyulog, numpy)
 #   scripts/testdata/regenerate.sh expected    # testdata/expected/*.json      (needs a built sfr)
 #   scripts/testdata/regenerate.sh compare     # sfr expected versus oracle    (Python only)
+#   scripts/testdata/regenerate.sh list        # one "name log-path" line per golden log
 #
 # The expected files are sfr's own `seal --dry-run --json` output. They count as reviewed
 # only while `compare` reports 0 differences against the oracle, which is written from
@@ -13,7 +14,12 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 SFR="${SFR:-target/debug/sfr}"
-RULES=examples/rules.default.toml
+
+# The rules file a golden log is sealed with: testdata/rules/<name>.toml when it exists (the
+# default rules plus what that log needs, such as [sealed_topics]), else the default.
+rules_for() {
+  if [ -f "testdata/rules/$1.toml" ]; then echo "testdata/rules/$1.toml"; else echo examples/rules.default.toml; fi
+}
 
 # name -> log path
 logs() {
@@ -28,6 +34,8 @@ logs() {
 }
 
 case "${1:-}" in
+  list)
+    logs ;;
   baselines)
     mkdir -p testdata/baselines
     logs | while read -r name log; do
@@ -36,12 +44,12 @@ case "${1:-}" in
   oracle)
     mkdir -p testdata/expected/oracle
     logs | while read -r name log; do
-      python3 -I scripts/testdata/oracle.py "$log" > "testdata/expected/oracle/$name.oracle.json"
+      python3 -I scripts/testdata/oracle.py "$log" "$(rules_for "$name")" > "testdata/expected/oracle/$name.oracle.json"
     done ;;
   expected)
     logs | while read -r name log; do
       set +e
-      "$SFR" seal "$log" --rules "$RULES" --baseline "testdata/baselines/$name.params" --dry-run --json \
+      "$SFR" seal "$log" --rules "$(rules_for "$name")" --baseline "testdata/baselines/$name.params" --dry-run --json \
         > "testdata/expected/$name.json"
       code=$?
       set -e

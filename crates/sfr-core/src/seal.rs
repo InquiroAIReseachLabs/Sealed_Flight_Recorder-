@@ -2,26 +2,26 @@
 //!
 //! The record is a JSON object stored as its RFC 8785 canonical bytes. Its leaves, in this
 //! fixed order, are: the seal context (`schema_version`, `tool`, `seal`), `log`, `config`,
-//! `baseline`, `rules`, each result in rule-id order, each event in sequence order. The signed
+//! `baseline`, `rules`, each result in rule-id order, each sealed topic digest in topic and
+//! instance order, each event in sequence order. The signed
 //! payload is ASCII `SFR-RECORD-V1`, 0x00, `schema_version` as 4-byte big-endian, and the
 //! Merkle root; the signature is Ed25519 over it.
 
-use crate::crypto::{CryptoBackend, ModuleInfo, Signer};
+use crate::crypto::{CrateVersion, CryptoBackend, Signer};
 use crate::evaluate::{Evaluation, Status};
-use crate::events::event_json;
 use crate::ingest::Ingested;
 use crate::json::{Obj, Value, canonical};
 use crate::keys::fingerprint;
 use crate::merkle;
 use crate::params::Baseline;
-use crate::record::{baseline_json, config_json, log_json};
+use crate::record::{baseline_json, config_json, events_json, log_json, sealed_topics_json};
 use crate::rules::Rules;
 use crate::{SCHEMA_VERSION, SIGNED_PAYLOAD_PREFIX, TOOL_NAME, hex};
 use std::collections::BTreeMap;
 use std::fmt;
 
 /// Top-level fields of a schema 1 record, in no particular order.
-pub const RECORD_FIELDS: [&str; 12] = [
+pub const RECORD_FIELDS: [&str; 13] = [
     "schema_version",
     "tool",
     "seal",
@@ -30,6 +30,7 @@ pub const RECORD_FIELDS: [&str; 12] = [
     "baseline",
     "rules",
     "results",
+    "sealed_topics",
     "events",
     "status",
     "merkle",
@@ -83,6 +84,8 @@ pub enum LeafKind {
     Rules,
     /// A result, with its rule id.
     Result(String),
+    /// A sealed topic digest, with its topic and instance.
+    SealedTopic(String, i64),
     /// An event, with its sequence number.
     Event(u64),
 }
@@ -96,6 +99,7 @@ impl fmt::Display for LeafKind {
             LeafKind::Baseline => f.write_str("baseline"),
             LeafKind::Rules => f.write_str("rules"),
             LeafKind::Result(id) => write!(f, "result {id}"),
+            LeafKind::SealedTopic(t, i) => write!(f, "sealed topic {t} instance {i}"),
             LeafKind::Event(seq) => write!(f, "event seq {seq}"),
         }
     }
@@ -129,6 +133,25 @@ pub fn leaves(record: &BTreeMap<String, Value>) -> Result<Vec<(LeafKind, Value)>
         };
         out.push((LeafKind::Result(id), r.clone()));
     }
+    let Value::Array(sealed) = get("sealed_topics")? else {
+        return Err("`sealed_topics` is not an array".into());
+    };
+    for d in sealed {
+        let (topic, instance) = match d {
+            Value::Object(m) => (
+                match m.get("topic") {
+                    Some(Value::Str(t)) => t.clone(),
+                    _ => "?".into(),
+                },
+                match m.get("multi_id") {
+                    Some(Value::Int(i)) => *i,
+                    _ => -1,
+                },
+            ),
+            _ => ("?".into(), -1),
+        };
+        out.push((LeafKind::SealedTopic(topic, instance), d.clone()));
+    }
     let Value::Array(events) = get("events")? else {
         return Err("`events` is not an array".into());
     };
@@ -161,13 +184,19 @@ pub fn signed_payload(schema_version: u32, root: &[u8; 32]) -> Vec<u8> {
     p
 }
 
-/// `seal.crypto_module`.
-pub fn module_json(m: &ModuleInfo) -> Value {
-    Obj::new()
-        .field("profile", Value::str(m.profile))
-        .field("module", Value::str(m.module.clone()))
-        .field("certificate", Value::opt_str(m.certificate))
-        .build()
+/// `seal.crypto_crates`: the crates that computed the record, each named by its crate version.
+pub fn crates_json(crates: &[CrateVersion]) -> Value {
+    Value::Array(
+        crates
+            .iter()
+            .map(|c| {
+                Obj::new()
+                    .field("name", Value::str(c.name))
+                    .field("version", Value::str(c.version))
+                    .build()
+            })
+            .collect(),
+    )
 }
 
 /// Everything sealed besides the log analysis.
@@ -206,7 +235,6 @@ pub fn seal(
     let public = signer.public_key();
     let fp = fingerprint(crypto, &public);
     let tool = this_tool();
-    let fw = &ing.identity.firmware;
     let mut record = BTreeMap::new();
     record.insert(
         "schema_version".to_string(),
@@ -231,13 +259,13 @@ pub fn seal(
                 "token_cmvp_certificate",
                 Value::opt_str(params.token_cmvp_certificate.clone()),
             )
-            .field("crypto_module", module_json(&crypto.module_info()))
+            .field("crypto_crates", crates_json(crypto.crates()))
             .field("signer_certificate", Value::Null)
             .field("certificate_chain", Value::Null)
             .build(),
     );
     record.insert("log".to_string(), log_json(&ing.identity));
-    record.insert("config".to_string(), config_json(&ing.config));
+    record.insert("config".to_string(), config_json(&ing.config, rules));
     record.insert("baseline".to_string(), baseline_json(baseline, rules));
     record.insert(
         "rules".to_string(),
@@ -253,10 +281,8 @@ pub fn seal(
         "results".to_string(),
         Value::Array(eval.results.iter().map(|r| r.to_json()).collect()),
     );
-    record.insert(
-        "events".to_string(),
-        Value::Array(ing.events.iter().map(|e| event_json(e, fw)).collect()),
-    );
+    record.insert("sealed_topics".to_string(), sealed_topics_json(ing));
+    record.insert("events".to_string(), events_json(ing, rules));
     let status = if eval.status == Status::Fail {
         "FAIL"
     } else {

@@ -12,14 +12,13 @@
 use crate::SCHEMA_VERSION;
 use crate::crypto::{CryptoBackend, Custody, Sha256Stream};
 use crate::evaluate::evaluate;
-use crate::events::event_json;
 use crate::hex;
 use crate::ingest::{FlightLogIngestor, IngestError, Px4Ingestor};
 use crate::json::{Value, canonical, first_non_canonical_offset, parse, scan_canonical};
 use crate::keys::{fingerprint, hex_decode};
 use crate::merkle;
 use crate::params::{Baseline, FirmwareSpec};
-use crate::record::{config_json, log_json};
+use crate::record::{config_json, events_json, log_json, sealed_topics_json};
 use crate::rules::parse_rules;
 use crate::seal::{RECORD_FIELDS, signed_payload};
 use crate::ulog::ParamValue;
@@ -38,8 +37,8 @@ pub struct Verified {
     pub fingerprint: String,
     /// Seal time, UTC.
     pub time_utc: String,
-    /// `seal.crypto_module` as one line.
-    pub crypto_module: String,
+    /// `seal.crypto_crates` as one line: each crate name and its crate version.
+    pub crypto_crates: String,
     /// Sealed overall status.
     pub status: String,
     /// Number of events.
@@ -207,6 +206,7 @@ fn standalone(
         "seal",
         "rules",
         "results",
+        "sealed_topics",
         "status",
         "merkle",
         "signature",
@@ -230,7 +230,7 @@ fn standalone(
         merkle::leaf_hash(crypto, slice(span("baseline"))),
         merkle::leaf_hash(crypto, slice(span("rules"))),
     ];
-    for k in ["results", "events"] {
+    for k in ["results", "sealed_topics", "events"] {
         let m = find(k).ok_or_else(|| fail(format!("missing field `{k}`")))?;
         if slice(m.value.clone()).first() != Some(&b'[') {
             return Err(fail(format!("field `{k}` is not an array")));
@@ -273,6 +273,28 @@ fn standalone(
             break;
         }
         last_id = Some(key);
+    }
+    let mut last_topic: Option<(String, i64)> = None;
+    for d in array(record, "sealed_topics")? {
+        let key = match d {
+            Value::Object(m) => match (m.get("topic"), m.get("multi_id")) {
+                (Some(Value::Str(t)), Some(Value::Int(i))) => Some((t.clone(), *i)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(key) = key else {
+            problems.push("a sealed topic digest has no topic and multi_id".to_string());
+            break;
+        };
+        if last_topic.as_ref().is_some_and(|l| *l >= key) {
+            problems.push(format!(
+                "sealed topics are not in topic and instance order: {} instance {} comes too late",
+                key.0, key.1
+            ));
+            break;
+        }
+        last_topic = Some(key);
     }
     if let Some(m) = find("events") {
         for (i, seq) in m.seqs.iter().enumerate() {
@@ -373,21 +395,20 @@ fn standalone(
         problems.push("sealed with an evaluation key (custody file-evaluation); --require-hardware-key refuses it".to_string());
     }
 
-    let module = obj(seal, "crypto_module")?;
-    let crypto_module = format!(
-        "{} profile, {}, certificate {}",
-        string(module, "profile")?,
-        string(module, "module")?,
-        match module.get("certificate") {
-            Some(Value::Str(c)) => c.as_str(),
-            _ => "none",
-        }
-    );
+    let mut crates = Vec::new();
+    for c in array(seal, "crypto_crates")? {
+        let Value::Object(c) = c else {
+            return Err(fail(
+                "`seal.crypto_crates` holds something other than an object",
+            ));
+        };
+        crates.push(format!("{} {}", string(c, "name")?, string(c, "version")?));
+    }
     let verified = Verified {
         custody,
         fingerprint: recorded_fp.to_string(),
         time_utc: string(seal, "time_utc")?.to_string(),
-        crypto_module,
+        crypto_crates: crates.join(", "),
         status: status.to_string(),
         events: event_count,
         leaf_count,
@@ -526,6 +547,39 @@ fn compare(record: &Map, derived: &Map) -> Vec<String> {
             out.push(format!("{key}: sealed {}, found {}", ra.len(), da.len()));
         }
     }
+    // Sealed topics, by topic and instance (before the log digest, which they narrow down).
+    let name_of = |v: &Value| match v {
+        Value::Object(m) => match (m.get("topic"), m.get("multi_id")) {
+            (Some(Value::Str(t)), Some(i)) => format!("{t} instance {}", canonical(i)),
+            _ => "?".to_string(),
+        },
+        _ => "?".to_string(),
+    };
+    let (rs, ds) = (arr(record, "sealed_topics"), arr(derived, "sealed_topics"));
+    for (a, b) in rs.iter().zip(&ds) {
+        if a != b {
+            let (field, va, vb) = first_field_difference(a, b);
+            out.push(format!(
+                "sealed topic {} field `{field}`: sealed {va}, found {vb}",
+                name_of(b)
+            ));
+        }
+    }
+    if rs.len() != ds.len() {
+        let names = |v: &[Value]| v.iter().map(name_of).collect::<Vec<_>>().join(", ");
+        out.push(format!(
+            "sealed topic instances: sealed [{}], found [{}]",
+            names(&rs),
+            names(&ds)
+        ));
+    }
+    if rc.get("watched_parameters") != dc.get("watched_parameters") {
+        out.push(format!(
+            "config watched_parameters: sealed {}, found {}",
+            show_any(rc.get("watched_parameters")),
+            show_any(dc.get("watched_parameters"))
+        ));
+    }
     // Log identity: digests and size.
     let (rl, dl) = (get_obj(record, "log"), get_obj(derived, "log"));
     for k in ["sha256", "blake3", "size"] {
@@ -600,7 +654,12 @@ fn verify_parsed(
         inner: log,
         sha: crypto.sha256_stream(),
     };
-    let ingested = Px4Ingestor.ingest("log", &mut tee, crypto);
+    let rules_text = obj(record, "rules")
+        .and_then(|r| string(r, "text"))
+        .map_err(VerifyError::Mismatch)?;
+    let rules = parse_rules(rules_text)
+        .map_err(|e| VerifyError::Mismatch(fail(format!("embedded rules no longer parse: {e}"))))?;
+    let ingested = Px4Ingestor.ingest_sealing("log", &mut tee, crypto, &rules.sealed_topics);
     let mut deep: Vec<String> = Vec::new();
     match ingested {
         Err(IngestError::Io(e)) => return Err(VerifyError::Io(e)),
@@ -618,12 +677,6 @@ fn verify_parsed(
             });
         }
         Ok(ing) => {
-            let rules_text = obj(record, "rules")
-                .and_then(|r| string(r, "text"))
-                .map_err(VerifyError::Mismatch)?;
-            let rules = parse_rules(rules_text).map_err(|e| {
-                VerifyError::Mismatch(fail(format!("embedded rules no longer parse: {e}")))
-            })?;
             let baseline = obj(record, "baseline")
                 .map_err(VerifyError::Mismatch)
                 .and_then(|b| {
@@ -631,14 +684,11 @@ fn verify_parsed(
                         .map_err(|e| VerifyError::Mismatch(fail(format!("embedded {e}"))))
                 })?;
             let eval = evaluate(&ing, &rules, &baseline);
-            let fw = &ing.identity.firmware;
             let mut derived = BTreeMap::new();
-            derived.insert("config".to_string(), config_json(&ing.config));
+            derived.insert("config".to_string(), config_json(&ing.config, &rules));
             derived.insert("log".to_string(), log_json(&ing.identity));
-            derived.insert(
-                "events".to_string(),
-                Value::Array(ing.events.iter().map(|e| event_json(e, fw)).collect()),
-            );
+            derived.insert("events".to_string(), events_json(&ing, &rules));
+            derived.insert("sealed_topics".to_string(), sealed_topics_json(&ing));
             derived.insert(
                 "results".to_string(),
                 Value::Array(eval.results.iter().map(|r| r.to_json()).collect()),
@@ -769,7 +819,7 @@ mod tests {
         ));
         assert_eq!(
             m.first,
-            "results are not in rule-id order: R5 comes too late"
+            "results are not in rule-id order: R6 comes too late"
         );
         // The record still declares an evaluation key, so verify can still warn.
         assert_eq!(m.custody, Some(Custody::FileEvaluation));
@@ -851,7 +901,7 @@ mod tests {
             (
                 Custody::FileEvaluation,
                 ing.events.len(),
-                5 + 6 + ing.events.len()
+                5 + 7 + ing.events.len()
             )
         );
         assert!(
