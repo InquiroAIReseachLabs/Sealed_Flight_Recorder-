@@ -344,6 +344,8 @@ pub struct FlightLog {
     pub vehicle_status_fields: Vec<String>,
     /// Flattened field names of the `failsafe_flags` instance in use.
     pub failsafe_flags_fields: Vec<String>,
+    /// Flattened field names of `vehicle_command` (R1 checks the ones R7 reads).
+    pub vehicle_command_fields: Vec<String>,
     /// `vehicle_status`, lowest instance.
     pub vehicle_status: Vec<VehicleStatusRow>,
     /// `failsafe_flags`, lowest instance.
@@ -787,11 +789,17 @@ impl Visitor for Collector<'_> {
                     Decoder::Failsafe(flags)
                 }
             }
-            "vehicle_command" => Decoder::Command {
-                command: small_uint(l, "command"),
-                src_sys: small_uint(l, "source_system"),
-                src_comp: small_uint(l, "source_component"),
-            },
+            "vehicle_command" => {
+                if self.flight.vehicle_command_fields.is_empty() {
+                    self.flight.vehicle_command_fields =
+                        l.fields.iter().map(|f| f.name.clone()).collect();
+                }
+                Decoder::Command {
+                    command: small_uint(l, "command"),
+                    src_sys: small_uint(l, "source_system"),
+                    src_comp: small_uint(l, "source_component"),
+                }
+            }
             "vehicle_command_ack" => Decoder::Ack {
                 command: small_uint(l, "command"),
                 result: small_uint(l, "result"),

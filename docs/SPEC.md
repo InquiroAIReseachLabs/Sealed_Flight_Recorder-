@@ -102,7 +102,7 @@ Rules file format: TOML (Rust TOML tooling is actively maintained; the common Ru
 **Core rules, on by default:**
 | Id | Rule | PASS / FAIL / N/A |
 |---|---|---|
-| R1 | Required topics present (the rules file lists them, and every sealed topic is required too), each with at least one data record, plus the `vehicle_status` and `failsafe_flags` fields the core rules read | FAIL names each missing topic or `topic.field`; exit 2 |
+| R1 | Required topics present (the rules file lists them, every sealed topic is required too, and with `[authorized_sources]` so is `vehicle_command`), each with at least one data record, plus the `vehicle_status` and `failsafe_flags` fields the core rules read and, with `[authorized_sources]`, the `vehicle_command` fields R7 reads (`command`, `source_system`, `source_component`) | FAIL names each missing topic or `topic.field`; exit 2 |
 | R2 | Firmware matches baseline | FAIL shows expected and found |
 | R3 | Parameters match baseline, excluding the ignore list | FAIL lists every differing parameter with baseline and flown values |
 | R4 | No failsafe raised during flight: `vehicle_status.failsafe` never true from ARM through the `vehicle_status` sample that disarms, and no quadchute (fixed wing straight to multicopter, B1.5) in that window. The quadchute check reads the VTOL state fields (`in_transition_mode`, `in_transition_to_fw`, `vehicle_type`) only when the vehicle is VTOL, that is when `vehicle_status.is_vtol` is true on some sample; an absent `vehicle_status`, or an absent `is_vtol` field, means not VTOL here, and R1 carries that failure | FAIL lists each flag and time, and each quadchute |
@@ -112,7 +112,7 @@ Rules file format: TOML (Rust TOML tooling is actively maintained; the common Ru
 **Optional rule R7, authorized command sources** (off by default; only the operator knows their own system and component ids, so `examples/rules.extended.toml` carries a commented example):
 | Id | Rule | PASS / FAIL / N/A |
 |---|---|---|
-| R7 | Every COMMAND event came from a source listed in `[authorized_sources]`; with `category`, only commands of that category are checked | FAIL names each unauthorized event (sequence number, command, category, source system and component); N/A when the rules file has no `[authorized_sources]` |
+| R7 | Every COMMAND event came from a source listed in `[authorized_sources]`; with `category`, only commands of that category are checked | FAIL names each unauthorized event (sequence number, command, category, source system and component); FAIL when its input is missing: no `vehicle_command` data record, one of the three fields absent, or a `vehicle_command` sample whose three fields are not unsigned integers (a log with no commands is no evidence of authorized ones); PASS when commands are present and none in scope is unauthorized; N/A when the rules file has no `[authorized_sources]` |
 
 **Optional rules file sections** (Change Order 01), each absent by default unless noted:
 - `[watched_parameters] names = [...]`: parameter names shown apart for presentation. R3 compares them exactly like every other parameter, with no extra rule and no double counting; a watched name the ignore list matches is a rules file error. The record lists them in `config.watched_parameters`, and the results table and report show them in a "Transition tuning" section with the `vtol_type`, each with its baseline and flown values and MATCH or DIFF. `examples/rules.default.toml` watches ten VTOL transition parameters, each confirmed in PX4 v1.14 and v1.17 (`docs/DIAGNOSTIC.md` item 12).
@@ -140,7 +140,7 @@ Rules file format: TOML (Rust TOML tooling is actively maintained; the common Ru
 
 No rule threshold is presented as correct for any aircraft.
 
-A rule whose input data is missing is FAIL, never N/A; N/A means only that the rule does not apply (R6 on a vehicle that is not VTOL). The rules file starts with `format = "sfr-rules/1"`, and unknown keys are rejected. The baseline file is a QGroundControl `.params` export (tab-separated vehicle id, component id, name, value, type 6 int32 or 9 float32) plus one line `# Firmware: <version> [<git hash prefix>]`; float values compare after rounding to float32, as numbers (-0 equals 0, and any NaN, written `nan`, equals any NaN).
+A rule whose input data is missing is FAIL, never N/A; N/A means only that the rule does not apply (R6 on a vehicle that is not VTOL). The rules file starts with `format = "sfr-rules/1"`, and unknown keys are rejected. A topic, pattern, parameter name, command id, or source listed twice in one list is a rules file error. The baseline file is a QGroundControl `.params` export (tab-separated vehicle id, component id, name, value, type 6 int32 or 9 float32) plus one line `# Firmware: <version> [<git hash prefix>]`; float values compare after rounding to float32, as numbers (-0 equals 0, and any NaN, written `nan`, equals any NaN).
 
 ### B1.7 Record format (`.sfr`)
 

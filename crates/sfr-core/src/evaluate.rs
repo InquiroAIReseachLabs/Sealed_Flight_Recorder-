@@ -10,7 +10,7 @@ use crate::exit_code;
 use crate::ingest::{FlightLog, Ingested};
 use crate::json::{Obj, Value};
 use crate::params::Baseline;
-use crate::rules::{Compare, Rules};
+use crate::rules::{Compare, R7_TOPIC, Rules};
 use crate::ulog::f32_shortest;
 use std::collections::BTreeSet;
 
@@ -114,6 +114,9 @@ pub const VEHICLE_STATUS_FIELDS: [&str; 8] = [
 /// The `failsafe_flags` fields the core rules read.
 pub const FAILSAFE_FLAGS_FIELDS: [&str; 1] = ["timestamp"];
 
+/// The `vehicle_command` fields R7 reads (R1 checks them when R7 is enabled).
+pub const VEHICLE_COMMAND_FIELDS: [&str; 3] = ["command", "source_system", "source_component"];
+
 fn r1(f: &FlightLog, rules: &Rules) -> RuleResult {
     let topics = rules.r1_topics();
     let mut missing = Vec::new();
@@ -125,6 +128,9 @@ fn r1(f: &FlightLog, rules: &Rules) -> RuleResult {
         let (fields, have): (&[&str], &[String]) = match t.as_str() {
             "vehicle_status" => (&VEHICLE_STATUS_FIELDS, &f.vehicle_status_fields),
             "failsafe_flags" => (&FAILSAFE_FLAGS_FIELDS, &f.failsafe_flags_fields),
+            R7_TOPIC if rules.authorized_sources.is_some() => {
+                (&VEHICLE_COMMAND_FIELDS, &f.vehicle_command_fields)
+            }
             _ => (&[], &[]),
         };
         for field in fields {
@@ -133,8 +139,13 @@ fn r1(f: &FlightLog, rules: &Rules) -> RuleResult {
             }
         }
     }
+    let readers = if rules.authorized_sources.is_some() {
+        "the core rules and R7"
+    } else {
+        "the core rules"
+    };
     let expected = format!(
-        "data records for {}, and the fields the core rules read",
+        "data records for {}, and the fields {readers} read",
         topics.join(", ")
     );
     if missing.is_empty() {
@@ -603,8 +614,9 @@ fn need_armed(
 }
 
 /// R7, authorized command sources: every COMMAND event (of the configured category, if any)
-/// came from a listed MAVLink source. N/A without `[authorized_sources]`.
-fn r7(events: &[Event], rules: &Rules) -> RuleResult {
+/// came from a listed MAVLink source. N/A without `[authorized_sources]`; FAIL when the
+/// `vehicle_command` data it reads is missing or unreadable (SPEC B1.6: missing input is FAIL).
+fn r7(f: &FlightLog, events: &[Event], rules: &Rules) -> RuleResult {
     const NAME: &str = "authorized command sources";
     let Some(auth) = &rules.authorized_sources else {
         return RuleResult::new(
@@ -630,6 +642,34 @@ fn r7(events: &[Event], rules: &Rules) -> RuleResult {
         "{scope} from an authorized source (system/component {})",
         listed.join(", ")
     );
+    let rows = f.topic_rows.get(R7_TOPIC).copied().unwrap_or(0);
+    let missing: Vec<String> = if rows == 0 {
+        vec![R7_TOPIC.to_string()]
+    } else {
+        VEHICLE_COMMAND_FIELDS
+            .iter()
+            .filter(|x| !f.vehicle_command_fields.iter().any(|h| h == *x))
+            .map(|x| format!("{R7_TOPIC}.{x}"))
+            .collect()
+    };
+    if !missing.is_empty() {
+        return fail_missing("R7", NAME, &expected, missing);
+    }
+    // The ingest keeps only the samples whose three fields read as unsigned integers.
+    let read = f.commands.len() as u64;
+    if read != rows {
+        return RuleResult::new(
+            "R7",
+            NAME,
+            Status::Fail,
+            expected,
+            format!(
+                "cannot evaluate: {} of {rows} {R7_TOPIC} record(s) have no unsigned integer command, source_system and source_component",
+                rows - read
+            ),
+            vec![],
+        );
+    }
     let mut detail = Lines::new();
     let mut checked = 0usize;
     for e in events {
@@ -959,7 +999,7 @@ pub fn evaluate(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Evaluatio
         r4(f),
         r5(f, &ing.events),
         r6(f, &ing.events, ing.identity.vehicle.vtol_type.as_ref()),
-        r7(&ing.events, rules),
+        r7(f, &ing.events, rules),
     ];
     let x = &rules.extended;
     if let Some(t) = &x.min_battery {
@@ -1320,9 +1360,10 @@ mod tests {
             ))
             .unwrap()
         };
-        let na = r7(&ing.events, &rules(""));
+        let na = r7(&ing.flight, &ing.events, &rules(""));
         assert_eq!(na.status, Status::NotApplicable);
         let all = r7(
+            &ing.flight,
             &ing.events,
             &rules(
                 "[authorized_sources]\nsources = [{ system = 1, component = 1 }, { system = 255, component = 190 }]\n",
@@ -1336,6 +1377,7 @@ mod tests {
         );
         // Scoped to GENERAL, the payload commands are not checked.
         let general = r7(
+            &ing.flight,
             &ing.events,
             &rules(
                 "[authorized_sources]\ncategory = \"GENERAL\"\nsources = [{ system = 1, component = 1 }]\n",
@@ -1347,6 +1389,7 @@ mod tests {
             "1 command(s) checked, all from authorized sources"
         );
         let payload = r7(
+            &ing.flight,
             &ing.events,
             &rules(
                 "[authorized_sources]\ncategory = \"PAYLOAD\"\nsources = [{ system = 2, component = 7 }]\n",
@@ -1354,5 +1397,109 @@ mod tests {
         );
         assert_eq!(payload.status, Status::Fail);
         assert_eq!(payload.found, "1 of 2 command(s) from unauthorized sources");
+    }
+
+    #[test]
+    fn r7_fails_and_r1_names_the_command_data_when_it_is_missing() {
+        use crate::ingest::{FlightLogIngestor, Px4Ingestor};
+        use crate::ulog::tests::Builder;
+        let ingest = |log: Builder| {
+            Px4Ingestor
+                .ingest(
+                    "x.ulg",
+                    &mut &log.bytes[..],
+                    &crate::crypto::test_backend::TestBackend,
+                )
+                .unwrap()
+        };
+        let rules = |r7: bool| {
+            let extra = if r7 {
+                "[authorized_sources]\nsources = [{ system = 1, component = 1 }]\n"
+            } else {
+                ""
+            };
+            crate::rules::parse_rules(&format!(
+                "format = \"sfr-rules/1\"\n[required_topics]\ntopics = []\n{extra}"
+            ))
+            .unwrap()
+        };
+        let check = |ing: &Ingested, r1_missing: Option<&str>, r7_found: &str| {
+            let r1 = r1(&ing.flight, &rules(true));
+            assert_eq!(
+                r1.detail.iter().any(|d| Some(d.as_str()) == r1_missing),
+                r1_missing.is_some(),
+                "{:?}",
+                r1.detail
+            );
+            assert!(
+                r1.expected
+                    .ends_with("the fields the core rules and R7 read")
+            );
+            let r7 = r7(&ing.flight, &ing.events, &rules(true));
+            assert_eq!(r7.status, Status::Fail);
+            assert_eq!(r7.found, r7_found);
+        };
+
+        // No vehicle_command at all: no commands is no evidence, so R7 does not pass.
+        let none = ingest(
+            Builder::new(0)
+                .flags(&[])
+                .format("other_topic:uint64_t timestamp;")
+                .sub(0, 1, "other_topic")
+                .data(1, &10u64.to_le_bytes()),
+        );
+        check(
+            &none,
+            Some("missing vehicle_command"),
+            "cannot evaluate: missing vehicle_command",
+        );
+        // Without [authorized_sources], R1 does not ask for it and R7 is N/A.
+        assert!(
+            !r1(&none.flight, &rules(false))
+                .detail
+                .iter()
+                .any(|d| d.contains("vehicle_command"))
+        );
+        assert_eq!(
+            r7(&none.flight, &none.events, &rules(false)).status,
+            Status::NotApplicable
+        );
+
+        // A format without source_component.
+        let no_field = ingest(
+            Builder::new(0)
+                .flags(&[])
+                .format(
+                    "vehicle_command:uint64_t timestamp;uint32_t command;uint8_t source_system;",
+                )
+                .sub(0, 1, "vehicle_command")
+                .data(
+                    1,
+                    &[&10u64.to_le_bytes()[..], &176u32.to_le_bytes(), &[1]].concat(),
+                ),
+        );
+        check(
+            &no_field,
+            Some("missing vehicle_command.source_component"),
+            "cannot evaluate: missing vehicle_command.source_component",
+        );
+
+        // source_component present but not an unsigned integer: R1 sees the name, R7 cannot
+        // read the value.
+        let float = ingest(
+            Builder::new(0)
+                .flags(&[])
+                .format("vehicle_command:uint64_t timestamp;uint32_t command;uint8_t source_system;float source_component;")
+                .sub(0, 1, "vehicle_command")
+                .data(
+                    1,
+                    &[&10u64.to_le_bytes()[..], &176u32.to_le_bytes(), &[1], &1f32.to_le_bytes()].concat(),
+                ),
+        );
+        check(
+            &float,
+            None,
+            "cannot evaluate: 1 of 1 vehicle_command record(s) have no unsigned integer command, source_system and source_component",
+        );
     }
 }

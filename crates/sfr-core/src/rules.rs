@@ -48,6 +48,9 @@ pub const MAX_SEALED_TOPICS: usize = 64;
 /// Topics R1 always requires, because the core rules read them.
 pub const CORE_TOPICS: [&str; 2] = ["vehicle_status", "failsafe_flags"];
 
+/// The topic R7 reads; R1 requires it when the rules file has `[authorized_sources]`.
+pub const R7_TOPIC: &str = "vehicle_command";
+
 /// Which parameters R3 compares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compare {
@@ -174,14 +177,16 @@ pub struct Rules {
 }
 
 impl Rules {
-    /// The topics R1 checks: the file's list, then the core topics and the sealed topics it
-    /// lacks.
+    /// The topics R1 checks: the file's list, then the core topics, the sealed topics, and
+    /// (with `[authorized_sources]`) the topic R7 reads, each one the list lacks.
     pub fn r1_topics(&self) -> Vec<String> {
         let mut out = self.required_topics.clone();
+        let r7 = self.authorized_sources.as_ref().map(|_| R7_TOPIC);
         for t in CORE_TOPICS
             .iter()
             .copied()
             .chain(self.sealed_topics.iter().map(String::as_str))
+            .chain(r7)
         {
             if !out.iter().any(|x| x == t) {
                 out.push(t.to_string());
@@ -1077,7 +1082,8 @@ pub(crate) mod tests {
                 "vehicle_status",
                 "failsafe_flags",
                 "custom_detection",
-                "vehicle_visual_odometry"
+                "vehicle_visual_odometry",
+                "vehicle_command"
             ]
         );
         let none = minimal();

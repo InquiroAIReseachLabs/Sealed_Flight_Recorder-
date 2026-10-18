@@ -191,6 +191,8 @@ MODE_REQ = {
 VS_REQUIRED_FIELDS = ['timestamp', 'arming_state', 'nav_state', 'failsafe', 'is_vtol',
                       'in_transition_mode', 'in_transition_to_fw', 'vehicle_type']
 FF_REQUIRED_FIELDS = ['timestamp']
+# The vehicle_command fields R7 reads; R1 requires them when R7 is enabled (SPEC B1.6).
+VC_R7_FIELDS = ['command', 'source_system', 'source_component']
 
 
 def warn(debug, *a):
@@ -240,6 +242,20 @@ def is_monotonic(xs):
 def load_rules(path):
     with open(path, 'rb') as f:
         doc = tomllib.load(f)
+    # SPEC B1.6: an entry listed twice in one list is a rules file error.
+    lists = [
+        ('required_topics.topics', doc.get('required_topics', {}).get('topics', [])),
+        ('parameters.ignore', doc.get('parameters', {}).get('ignore', [])),
+        ('watched_parameters.names', doc.get('watched_parameters', {}).get('names', [])),
+        ('sealed_topics.topics', doc.get('sealed_topics', {}).get('topics', [])),
+        ('payload_commands.ids', doc.get('payload_commands', {}).get('ids', [])),
+        ('authorized_sources.sources',
+         [(s['system'], s['component'])
+          for s in doc.get('authorized_sources', {}).get('sources', [])]),
+    ]
+    for name, items in lists:
+        if len(set(items)) != len(items):
+            raise SystemExit('oracle.py: %s lists an entry twice (SPEC B1.6)' % name)
     sources = None
     category = None
     if 'authorized_sources' in doc:
@@ -430,11 +446,13 @@ def sealed_topic_digests(path, topics, debug):
 
 
 def run(path, rules, required, ptime, param_index, debug):
-    # R1 (SPEC B1.6): the rules file lists the required topics, and every sealed topic is
-    # required too. --required, when given, replaces the rules file's list.
+    # R1 (SPEC B1.6): the rules file lists the required topics, every sealed topic is required
+    # too, and with [authorized_sources] so is vehicle_command. --required, when given,
+    # replaces the rules file's list.
     if required is None:
         required = list(rules['required_topics'])
-    required = list(required) + [t for t in rules['sealed'] if t not in required]
+    extra = list(rules['sealed']) + (['vehicle_command'] if rules['r7_enabled'] else [])
+    required = list(required) + [t for t in extra if t not in required]
     u = TracingULog(path)
     info = u.msg_info_dict
     warn(debug, "file_corruption", u.file_corruption, "data records", u._sfr_data_count)
@@ -478,6 +496,11 @@ def run(path, rules, required, ptime, param_index, debug):
         for f in FF_REQUIRED_FIELDS:
             if not ff.has(f):
                 missing.add('failsafe_flags.' + f)
+    # With [authorized_sources], the vehicle_command fields R7 reads (SPEC B1.6 R1).
+    if rules['r7_enabled'] and vc_insts:
+        for f in VC_R7_FIELDS:
+            if f not in vc_insts[0].data:
+                missing.add('vehicle_command.' + f)
 
     events = []   # (sort key tuple, generation counter, event dict)
     gen = [0]
