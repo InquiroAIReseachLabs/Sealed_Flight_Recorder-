@@ -655,7 +655,8 @@ fn r7(f: &FlightLog, events: &[Event], rules: &Rules) -> RuleResult {
     if !missing.is_empty() {
         return fail_missing("R7", NAME, &expected, missing);
     }
-    // The ingest keeps only the samples whose three fields read as unsigned integers.
+    // The ingest keeps only the samples whose three fields are 8-, 16- or 32-bit unsigned
+    // integers (the widths PX4 uses; docs/DIAGNOSTIC.md item 4).
     let read = f.commands.len() as u64;
     if read != rows {
         return RuleResult::new(
@@ -664,7 +665,7 @@ fn r7(f: &FlightLog, events: &[Event], rules: &Rules) -> RuleResult {
             Status::Fail,
             expected,
             format!(
-                "cannot evaluate: {} of {rows} {R7_TOPIC} record(s) have no unsigned integer command, source_system and source_component",
+                "cannot evaluate: {} of {rows} {R7_TOPIC} record(s) have a command, source_system or source_component that is not an 8-, 16- or 32-bit unsigned integer",
                 rows - read
             ),
             vec![],
@@ -1425,9 +1426,15 @@ mod tests {
         };
         let check = |ing: &Ingested, r1_missing: Option<&str>, r7_found: &str| {
             let r1 = r1(&ing.flight, &rules(true));
+            // R1 names exactly the vehicle_command item expected to be missing, or none.
+            let named: Vec<&String> = r1
+                .detail
+                .iter()
+                .filter(|d| d.contains("vehicle_command"))
+                .collect();
             assert_eq!(
-                r1.detail.iter().any(|d| Some(d.as_str()) == r1_missing),
-                r1_missing.is_some(),
+                named.iter().map(|d| d.as_str()).collect::<Vec<_>>(),
+                r1_missing.map(|m| vec![m]).unwrap_or_default(),
                 "{:?}",
                 r1.detail
             );
@@ -1499,7 +1506,71 @@ mod tests {
         check(
             &float,
             None,
-            "cannot evaluate: 1 of 1 vehicle_command record(s) have no unsigned integer command, source_system and source_component",
+            "cannot evaluate: 1 of 1 vehicle_command record(s) have a command, source_system or source_component that is not an 8-, 16- or 32-bit unsigned integer",
+        );
+    }
+
+    #[test]
+    fn r1_reads_vehicle_command_fields_from_the_subscriptions_that_have_data() {
+        use crate::ingest::{FlightLogIngestor, Px4Ingestor};
+        use crate::ulog::tests::Builder;
+        let full = "vehicle_command:uint64_t timestamp;uint32_t command;uint8_t source_system;uint16_t source_component;";
+        let short = "vehicle_command:uint64_t timestamp;uint32_t command;uint8_t source_system;";
+        let row_full = [
+            &10u64.to_le_bytes()[..],
+            &176u32.to_le_bytes(),
+            &[1],
+            &1u16.to_le_bytes(),
+        ]
+        .concat();
+        let row_short = [&20u64.to_le_bytes()[..], &176u32.to_le_bytes(), &[1]].concat();
+        let rules = crate::rules::parse_rules(
+            "format = \"sfr-rules/1\"\n[required_topics]\ntopics = []\n[authorized_sources]\nsources = [{ system = 1, component = 1 }]\n",
+        )
+        .unwrap();
+        let run = |log: Builder| {
+            let ing = Px4Ingestor
+                .ingest(
+                    "x.ulg",
+                    &mut &log.bytes[..],
+                    &crate::crypto::test_backend::TestBackend,
+                )
+                .unwrap();
+            let named: Vec<String> = r1(&ing.flight, &rules)
+                .detail
+                .into_iter()
+                .filter(|d| d.contains("vehicle_command"))
+                .collect();
+            (named, r7(&ing.flight, &ing.events, &rules))
+        };
+
+        // A first subscription without source_component and without data, then the format
+        // redefined and a second subscription with data: nothing is missing, R7 passes.
+        let (named, r7) = run(Builder::new(0)
+            .flags(&[])
+            .format(short)
+            .sub(0, 1, "vehicle_command")
+            .format(full)
+            .sub(1, 2, "vehicle_command")
+            .data(2, &row_full));
+        assert!(named.is_empty(), "{named:?}");
+        assert_eq!(r7.status, Status::Pass, "{}", r7.found);
+
+        // The other order: a subscription with data has every field, a later one with data
+        // lacks source_component. R1 names it and R7 cannot evaluate.
+        let (named, r7) = run(Builder::new(0)
+            .flags(&[])
+            .format(full)
+            .sub(0, 1, "vehicle_command")
+            .data(1, &row_full)
+            .format(short)
+            .sub(1, 2, "vehicle_command")
+            .data(2, &row_short));
+        assert_eq!(named, ["missing vehicle_command.source_component"]);
+        assert_eq!(r7.status, Status::Fail);
+        assert_eq!(
+            r7.found,
+            "cannot evaluate: missing vehicle_command.source_component"
         );
     }
 }

@@ -4,21 +4,25 @@ cargo-fuzz targets (SPEC B1.2, B1.10 "Fuzzing"). This is a separate package with
 
 Gate: 60 seconds per CI run and 10 minutes nightly with zero panics, hangs, or out-of-memory.
 
-Targets: `ulog_ingest` (the ULog reader and the whole dry-run path) and `sfr_verify` (the `.sfr` reader).
+Targets: `ulog_ingest` (the ULog reader and the whole dry-run path), `sfr_verify` (the `.sfr` reader), and `rules_parse` (the rules file parser and what reads a rules file).
 
 ## Target `ulog_ingest`
 
 Arbitrary bytes go through the whole `seal --dry-run` path:
 
-1. `Px4Ingestor::ingest`: the ULog reader, SHA-256 and BLAKE3 of every byte, field decoding, and the event timeline. SHA-256 comes from `RustCrypto`, the backend every build uses.
-2. If the log is readable, `evaluate` with `examples/rules.extended.toml` (the core rules and every optional rule) and the baseline `# Firmware: 1.17.0`.
+1. `Px4Ingestor::ingest_sealing`: the ULog reader, SHA-256 and BLAKE3 of every byte, field decoding, sealed topic digests, and the event timeline. SHA-256 comes from `RustCrypto`, the backend every build uses.
+2. If the log is readable, `evaluate` with `examples/rules.extended.toml` plus the `[authorized_sources]` and `[sealed_topics]` sections it shows commented out (the core rules, R7, and every optional rule) and the baseline `# Firmware: 1.17.0`.
 3. `record::dry_run_json`, then `json::canonical`.
 
 The target also checks that the logged size and `Summary.bytes` equal the input length and that events are numbered from 0. A finding is any panic (cargo-fuzz builds check integer overflow, so an overflow is a panic), a failed check, a hang, or an out-of-memory.
 
 ## Target `sfr_verify`
 
-Arbitrary bytes go to `sfr_core::verify::verify` without a log: the canonical-form scan, the schema checks, the Merkle tree over byte ranges, and Ed25519 verification (`RustCrypto`, the backend every build uses). Its seeds in `seeds/sfr_verify/` are records sealed from three of the seed logs below by an evaluation key whose public half is `seeds/sfr_verify_key.pub`; the private half was discarded. They were last sealed at Change Order 01, when records began to name their crypto crates, with `--seal-time 2026-10-18T15:00:00Z` and these rules and baselines: `pyulog_sample_first_65516` with `examples/rules.default.toml` and `testdata/baselines/pyulog_sample.params`; the two shrunk SITL logs with `examples/rules.extended.toml` and the golden baseline of the same flight (`v1.17.0_failsafe_gps_loss`, `v1.17.0_vtol_transition_abort`). Besides panics, hangs and out-of-memory, the target treats any input that verifies but is not one of the seeds as a finding. Run it with the same commands as below, with `sfr_verify` and `seeds/sfr_verify` in place of `ulog_ingest` and `seeds/ulog_ingest`.
+Arbitrary bytes go to `sfr_core::verify::verify` without a log: the canonical-form scan, the schema checks, the Merkle tree over byte ranges, and Ed25519 verification (`RustCrypto`, the backend every build uses). Its seeds in `seeds/sfr_verify/` are records sealed from four of the seed logs below and from `testdata/synthetic/custom_detection.ulg`, by an evaluation key whose public half is `seeds/sfr_verify_key.pub`; the private half was discarded. They were last sealed at Change Order 01, after the record gained its sealed topic digests, with `--seal-time 2026-10-18T15:00:00Z` and these rules and baselines: `pyulog_sample_first_65516` with `examples/rules.default.toml` and `testdata/baselines/pyulog_sample.params`; the shrunk `failsafe_gps_loss` and `vtol_transition_abort` logs with `examples/rules.extended.toml` and the golden baseline of the same flight; the shrunk `gz_x500_vision_hover` log (one sealed topic) and `custom_detection.ulg` (three sealed instances, saved as `synthetic_custom_detection.sfr`) with their golden rules and baselines (`testdata/rules/`, `testdata/baselines/`). `crates/sfr/tests/seal_verify.rs` fails when a seed no longer verifies or is missing from the target's list, so a record format change cannot leave them stale unnoticed; re-seal all of them with a new key when that happens. Besides panics, hangs and out-of-memory, the target treats any input that verifies but is not one of the seeds as a finding. Run it with the same commands as below, with `sfr_verify` and `seeds/sfr_verify` in place of `ulog_ingest` and `seeds/ulog_ingest`.
+
+## Target `rules_parse`
+
+UTF-8 input goes to `sfr_core::rules::parse_rules`, which reads every section a rules file may hold, the Change Order 01 sections `[watched_parameters]`, `[sealed_topics]`, `[payload_commands]` and `[authorized_sources]` included. A file that parses is then used to ingest the shrunk payload flight seed (`seeds/ulog_ingest/sitl_v1.17.0_payload_two_sources_shrunk.ulg`, commands from several sources) with its sealed topics, evaluate it against the golden baseline of that flight, and build the dry-run JSON, so the fuzzed sections reach the code that uses them. The target checks that the sealed topic and watched parameter lists are sorted and unique, that the sealed topic limit holds, and that every sealed topic is required (R1). Its seeds in `seeds/rules_parse/` are copies of `examples/rules.default.toml`, `examples/rules.extended.toml`, the extended rules with every commented section enabled (as `ulog_ingest` uses them), and each golden rules file in `testdata/rules/` (prefixed `golden_`).
 
 ## Seed corpus
 

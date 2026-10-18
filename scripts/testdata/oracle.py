@@ -193,6 +193,14 @@ VS_REQUIRED_FIELDS = ['timestamp', 'arming_state', 'nav_state', 'failsafe', 'is_
 FF_REQUIRED_FIELDS = ['timestamp']
 # The vehicle_command fields R7 reads; R1 requires them when R7 is enabled (SPEC B1.6).
 VC_R7_FIELDS = ['command', 'source_system', 'source_component']
+# SPEC B1.6 R7: each of them must be an 8-, 16- or 32-bit unsigned integer to be read.
+VC_R7_TYPES = ('uint8_t', 'uint16_t', 'uint32_t')
+
+
+def vc_readable(d):
+    """A vehicle_command instance whose three R7 fields exist with an allowed type."""
+    types = {f.field_name: f.type_str for f in d.field_data}
+    return all(types.get(f) in VC_R7_TYPES for f in VC_R7_FIELDS)
 
 
 def warn(debug, *a):
@@ -456,6 +464,12 @@ def run(path, rules, required, ptime, param_index, debug):
     u = TracingULog(path)
     info = u.msg_info_dict
     warn(debug, "file_corruption", u.file_corruption, "data records", u._sfr_data_count)
+    if u.file_corruption:
+        # pyulog drops the data after records it cannot parse, among them a format record that
+        # redefines a topic in the data section, which sfr reads. Such a log is outside this
+        # oracle's scope; no golden log has one.
+        print("oracle.py: pyulog reports file corruption in %s; this output is not a reference"
+              % path, file=sys.stderr)
     warn(debug, "data-section P before first A:", u._sfr_p_before_add)
 
     # ---- config and firmware
@@ -496,11 +510,13 @@ def run(path, rules, required, ptime, param_index, debug):
         for f in FF_REQUIRED_FIELDS:
             if not ff.has(f):
                 missing.add('failsafe_flags.' + f)
-    # With [authorized_sources], the vehicle_command fields R7 reads (SPEC B1.6 R1).
-    if rules['r7_enabled'] and vc_insts:
-        for f in VC_R7_FIELDS:
-            if f not in vc_insts[0].data:
-                missing.add('vehicle_command.' + f)
+    # With [authorized_sources], the vehicle_command fields R7 reads (SPEC B1.6 R1), in every
+    # instance with data (pyulog lists only those).
+    if rules['r7_enabled']:
+        for d in vc_insts:
+            for f in VC_R7_FIELDS:
+                if f not in d.data:
+                    missing.add('vehicle_command.' + f)
 
     events = []   # (sort key tuple, generation counter, event dict)
     gen = [0]
@@ -668,6 +684,8 @@ def run(path, rules, required, ptime, param_index, debug):
     # ---- COMMAND
     cmds = []
     for d in vc_insts:
+        if not vc_readable(d):
+            continue    # no COMMAND event without a readable command and source (SPEC B1.6 R7)
         tp = Topic(d)
         for i in range(tp.n):
             cmds.append({'ts': tp['timestamp'][i], 'inst': tp.instance, 'idx': i,
@@ -841,14 +859,14 @@ def run(path, rules, required, ptime, param_index, debug):
     # N/A without [authorized_sources]. With `category`, only COMMAND events of that category
     # are checked. FAIL names each event whose (source system, source component) is not listed.
     # A rule whose input data is missing is FAIL (B1.6): no vehicle_command data record, or
-    # vehicle_command without command, source_system or source_component.
+    # vehicle_command without command, source_system or source_component, or with one of them
+    # not an 8-, 16- or 32-bit unsigned integer.
     r7_unauthorized = []
     if not rules['r7_enabled']:
         results['R7'] = 'N/A'
     else:
         vc_fields_ok = bool(vc_insts) and all(
-            all(f in d.data for f in ('timestamp', 'command', 'source_system', 'source_component'))
-            for d in vc_insts)
+            'timestamp' in d.data and vc_readable(d) for d in vc_insts)
         for seq, e in enumerate(ev_list):
             if e['kind'] != 'COMMAND':
                 continue
