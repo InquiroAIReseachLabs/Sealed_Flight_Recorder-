@@ -37,7 +37,7 @@ Every command supports `--json` for machine-readable output. `sfr --version` pri
 | 0 | Seal: all rules PASS or N/A. Verify: VERIFIED. |
 | 1 | Seal: one or more rules FAIL (record is still written). Verify: verification failed. |
 | 2 | Required topic missing from the log (record written with status FAIL and the missing topic named). |
-| 3 | Malformed or truncated input file. |
+| 3 | Malformed or truncated input file (log, rules, or baseline); the message names the file and the byte offset or line. |
 | 4 | Usage, key, or file I/O error, including a missing `--evaluation-only`, a hardware key source that fails, a signature that does not verify against the signing key, and a FIPS module that reports it is not in approved mode. |
 
 If the FIPS module fails a power-on self-test or its integrity check, the module aborts the process before `sfr` can choose an exit code (SIGABRT; a shell reports 134). Nothing is written.
@@ -46,18 +46,18 @@ If the FIPS module fails a power-on self-test or its integrity check, the module
 
 Supported: PX4 v1.14 through v1.17 ULog. Exact topic and field names per version come from `docs/DIAGNOSTIC.md` (Chunk 1), never from memory.
 
-- **Log identity:** SHA-256 and BLAKE3 of the raw file bytes; file size; firmware version and git hash from the ULog header; vehicle type.
-- **Configuration:** the full parameter set at log start as a sorted key-to-value map; firmware version.
-- **Events (the timeline), each with a sequence number, boot-time microseconds, and UTC microseconds when GPS time is available:**
-  - ARM, DISARM (from vehicle status)
-  - NAV_STATE_CHANGE (old, new)
-  - FAILSAFE_SET, FAILSAFE_CLEAR (flag name; from `failsafe_flags`)
-  - COMMAND (command id, source system and component, result from the matching `vehicle_command_ack`, or `NO_ACK`)
-  - VTOL_TRANSITION_START, VTOL_TRANSITION_END, VTOL_TRANSITION_ABORT (direction)
-  - PARAM_CHANGED_IN_FLIGHT (name, old, new)
-  - LOG_MESSAGE (flight stack messages at warning level or above)
-  - LOG_DROPOUT (duration)
-- **Event ordering** is deterministic: boot time, then topic name, then instance id, then message index.
+- **Log identity:** SHA-256 and BLAKE3 of the raw file bytes; file size; firmware version and git hash from the ULog info messages `ver_sw_release` and `ver_sw`; vehicle type from `vehicle_status.system_type` and `is_vtol`.
+- **Configuration:** the full parameter set at log start (the 'P' records before the first subscription) as a sorted key-to-value map, each value typed int32 or float32; firmware version.
+- **Events (the timeline), each with a sequence number, boot-time microseconds, UTC microseconds when GPS time is available, and its source (topic, instance, message index):** UTC comes only from the first GPS sample (`vehicle_gps_position`, else `sensor_gps` instance 0) with `fix_type` of at least 2 and a nonzero `time_utc_usec`, never from `boot_time_utc_us` or a host clock.
+  - ARM, DISARM: edges of `vehicle_status.arming_state == 2`, with the reason decoded from PX4's events enum. A log that starts armed reports ARM at its first sample, marked `initial`.
+  - NAV_STATE_CHANGE (old, new): edges of `vehicle_status.nav_state`, with per-version names; the first sample is reported with `old` null.
+  - FAILSAFE_SET, FAILSAFE_CLEAR (flag name; from `failsafe_flags`): edges of `vehicle_status.failsafe`. Each edge names the `failsafe_flags` booleans (and `battery_warning` above 0) that are true at that moment and are either required by the current `nav_state` (the flag's `mode_req_*` bit is set) or were not true at the most recent ARM; one event per named flag, or one event with flag `unattributed`.
+  - COMMAND (command id, source system and component, result from the matching `vehicle_command_ack`, or `NO_ACK`): the matching ack is the earliest unused ack with the same command id, a timestamp not before the command's and before the next identical command from the same source, and target system and component equal to the command's source; a final result is preferred over IN_PROGRESS.
+  - VTOL_TRANSITION_START, VTOL_TRANSITION_END, VTOL_TRANSITION_ABORT (direction): from the VTOL state derived from `vehicle_status` (in transition to fixed wing, in transition to multicopter, fixed wing, multicopter). START when a transition state is entered; END on transition-to-fixed-wing then fixed wing, or transition-to-multicopter then multicopter; ABORT when a transition state is left any other way. A quadchute (fixed wing straight to multicopter) is not a transition; R4 reports it.
+  - PARAM_CHANGED_IN_FLIGHT (name, old, new): a data-section 'P' record whose value differs from the last known value of that parameter, between ARM and DISARM; its time is the last data timestamp before it. Firmware-written changes count like any other.
+  - LOG_MESSAGE (flight stack messages at warning level or above): 'L' and 'C' records at levels 0 to 4 (emergency to warning), text kept verbatim. PX4 events (the `event` topic) are not decoded in v1.
+  - LOG_DROPOUT (duration): an 'O' record, in milliseconds; its time is the last data timestamp before it.
+- **Event ordering** is deterministic: boot time, then topic name, then instance id, then message index. Records without a topic use the names `ulog.logging`, `ulog.parameter`, and `ulog.dropout`. Several events from one source message keep a fixed order. Sequence numbers start at 0.
 - **Multi-instance topics** are filtered to the active instance where PX4 records one (used by optional estimator rules only).
 
 ### B1.6 Rules
@@ -67,10 +67,10 @@ Rules file format: TOML (Rust TOML tooling is actively maintained; the common Ru
 **Core rules, on by default:**
 | Id | Rule | PASS / FAIL / N/A |
 |---|---|---|
-| R1 | Required topics present | FAIL names each missing topic; exit 2 |
+| R1 | Required topics present (the rules file lists them), each with at least one data record, plus the `vehicle_status` and `failsafe_flags` fields the core rules read | FAIL names each missing topic or `topic.field`; exit 2 |
 | R2 | Firmware matches baseline | FAIL shows expected and found |
 | R3 | Parameters match baseline, excluding the ignore list | FAIL lists every differing parameter with baseline and flown values |
-| R4 | No failsafe raised during flight | FAIL lists each flag and time |
+| R4 | No failsafe raised during flight: `vehicle_status.failsafe` never true between ARM and DISARM | FAIL lists each flag and time |
 | R5 | Arm and disarm consistency: every ARM has a DISARM, log does not end armed | FAIL names the unmatched event |
 | R6 | VTOL transitions completed: every start has an end, none aborted | N/A if the vehicle is not VTOL |
 
@@ -80,9 +80,11 @@ Rules file format: TOML (Rust TOML tooling is actively maintained; the common Ru
 
 No rule threshold is presented as correct for any aircraft.
 
+A rule whose input data is missing is FAIL, never N/A; N/A means only that the rule does not apply (R6 on a vehicle that is not VTOL). The rules file starts with `format = "sfr-rules/1"`, and unknown keys are rejected. The baseline file is a QGroundControl `.params` export (tab-separated vehicle id, component id, name, value, type 6 int32 or 9 float32) plus one line `# Firmware: <version> [<git hash prefix>]`; float values compare after rounding to float32.
+
 ### B1.7 Record format (`.sfr`)
 
-JSON, canonicalized with RFC 8785 (JSON Canonicalization Scheme) wherever bytes are hashed.
+JSON, canonicalized with RFC 8785 (JSON Canonicalization Scheme) wherever bytes are hashed. The record contains no JSON floating-point numbers: unsigned 64-bit values (timestamps) are decimal strings, and parameter values are typed strings (`i32:5`, `f32:0.15`, float32 written as its shortest round-trip decimal). A `.sfr` file is stored as its canonical bytes, and verify rejects any file that differs from the canonical form of its own parse.
 
 Top-level fields: `schema_version` (starts at `1`); `tool` (name, version, build commit); `seal` (time UTC, key fingerprint, key label, key custody, token CMVP certificate number or null, crypto module, signer certificate and chain or null); `log` (file name, size, sha256, blake3, firmware, vehicle type); `config` (firmware, sorted parameter map); `baseline` (firmware, parameter map, ignore list); `rules` (embedded rules text and its sha256); `results` (per rule: id, status, expected, found, detail); `events` (ordered list); `status` (PASS or FAIL); `merkle` (algorithm, leaf count, root); `signature` (algorithm `ed25519`, value).
 
@@ -121,13 +123,13 @@ Then: sealing on the companion computer immediately after disarm (documented pos
 | Fuzzing | Fuzz targets for the ULog parser and the `.sfr` reader; 60 seconds per CI run and 10 minutes nightly with zero panics, hangs, or out-of-memory |
 | Exit codes | An integration test triggers each of codes 0 to 4 |
 | Errors | Every error names the file, and where relevant the topic, field, or parameter; no panics on any input |
-| Performance | Benchmark script reports seal time for 10, 50, and 100 MB logs and standalone verify time; gates: 100 MB seal under 2 s on x86_64 and under 4 s on real aarch64 hardware (not emulation); standalone verify under 10 ms for records up to 10,000 events |
+| Performance | Benchmark script reports seal time for 10, 50, and 100 MB logs and standalone verify time; gates: 100 MB seal under 2 s on x86_64 and under 4 s on real aarch64 hardware (not emulation); standalone verify under 10 ms for records up to 10,000 events. The validated profile compiles the FIPS module exactly as its security policy prescribes, without optimization flags; if it misses a gate, the delta is reported as the compliance tax, and neither the gate nor the build changes |
 | Code quality | `rustfmt --check` clean; `clippy` with warnings as errors; all tests green |
 | Supply chain | `cargo-deny` clean for licenses (no GPL, AGPL, or unknown) and advisories; CycloneDX SBOM per release. The allow list includes `OpenSSL` because the AWS-LC module carries it (`ISC AND (Apache-2.0 OR ISC) AND OpenSSL`) |
 | Crypto | In `sfr`, SHA-256 (record, Merkle tree, log digest), Ed25519 key generation, signing and verification, and certificate signature checks come only from the AWS-LC FIPS module through aws-lc-rs (`fips` feature; EdDSA per FIPS 186-5, SHA-256 per FIPS 180-4). Two build profiles: **development** links the module source that aws-lc-fips-sys vendors, pinned in `Cargo.lock` (approved mode and self-tests, no certificate claim); **validated** links AWS-LC FIPS 3.1.0, the module of CMVP certificate #5314 (static; status Active as checked by the founder on 2026-10-18 and re-checked at each release), built from the source archive and steps in its security policy, through aws-lc-fips-sys system-library mode. AWS states that the FIPS module shipped in aws-lc-rs 1.17.x is the #5314 module; `docs/DIAGNOSTIC.md` item 11 records how the crate's build differs from the security policy's. Only a validated-profile build may name a certificate. `seal.crypto_module` records the profile, the module version string, and the certificate number or `none`. `sfr` runs the module's FIPS-mode check before any other work. BLAKE3 (`blake3`) is a supplementary, non-approved digest of the raw log bytes and never anchors trust. `cargo tree -p sfr` contains neither `sha2` nor `ed25519-dalek`. The wasm32 sandbox uses `crypto-portable`; CI proves both backends produce byte-identical digests and signatures on RFC 8032 and generated vectors. No custom primitives; domain separation as specified |
 | Key custody | `seal` exits 4 unless given a hardware key source or `--evaluation-only`; every record sealed with a file key has custody `file-evaluation` and its report's first line says EVALUATION KEY; `seal` verifies every signature with the FIPS module before writing. CI exercises `pkcs11-token` against SoftHSM v2 (CKM_EDDSA) and `tpm-sealed` against swtpm |
 | Certificates | `verify --trust-anchor` accepts an Ed25519 signer certificate only if it chains to the anchor offline, carries extended key usage code signing, is valid at the sealed time, is not revoked by a supplied CRL, and verifies the record signature with its own key; CI covers each rejection with generated test certificates |
-| Releases | Each release ships `SHA256SUMS` plus an Ed25519 signature over it, and the public release key in the README. Each release names its crypto build profile; a validated-profile release also ships the module build log showing the archive sha256 and `bssl isfips` printing 1 |
+| Releases | Each release ships `SHA256SUMS` plus an Ed25519 signature over it, and the public release key in the README. Each release names its crypto build profile; a validated-profile release also ships the module build log showing the archive sha256 and `bssl isfips` printing 1. Release artifacts for aarch64 are built on native aarch64 hardware; cross-compiling and emulation are for CI feature branches only |
 | Reproducible claims | Every number in the README sits between markers and is written by `scripts/regen_readme_numbers.sh`; CI fails if the README drifts from the script output |
 | Sandbox | Page makes zero network requests after load (verified in browser dev tools and an automated headless test); produces records byte-identical to the CLI for the same inputs |
 | Docs | README quickstart a stranger completes in 15 minutes (founder-run test, not CI) |

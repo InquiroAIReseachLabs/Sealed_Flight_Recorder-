@@ -13252,6 +13252,13 @@ Toolchain used for every claim above: Rust 1.97.0, cargo-deny 0.20.2, cargo-zigb
 
 ## 10. Decisions the founder must approve before Chunk 2
 
+**Status: all nine decisions approved by the founder on 2026-10-18.** Binding rulings recorded with the approval:
+
+- **Optimization tax.** The validated profile compiles the FIPS module exactly per its security policy, with no optimization flags. If it misses the 2 s (x86_64) or 4 s (aarch64) gate in Chunk 5, the delta is documented as the compliance tax; the gate and the build stay as they are.
+- **Native aarch64 releases.** Cross-compiling and qemu are acceptable for CI feature branches; release artifacts are built on native ARM64 hardware.
+- **Hardware tokens.** Sandbox and hardware-in-the-loop work uses `--evaluation-only` file keys. The MVP is not blocked on finding a token whose certificate approves Ed25519; `--token-cert` holds the v1 boundary.
+- **WASM split.** `crypto-portable` (ed25519-dalek) for the browser sandbox, `crypto-fips` for the CLI, as designed.
+
 | # | Decision | Recommendation | Evidence |
 |---|---|---|---|
 | 1 | ULog parser | Write a small in-house parser in `sfr-core` behind `FlightLogIngestor`; keep px4-ulog 0.6.1 only as a test-time cross-check. All three crates fail the zero-panic fuzz gate as published. | Item 2 |
