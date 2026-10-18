@@ -364,8 +364,9 @@ fn r4(f: &FlightLog) -> RuleResult {
         active = now;
         // SPEC B1.5: a quadchute is not a transition; R4 reports it. PX4 raises the quadchute
         // failsafe only in some modes (failsafe.cpp), so the state change itself is the signal.
+        // The disarming row is in flight here too, as for failsafes above.
         let vtol = vtol_state(r);
-        if armed && prev_vtol == Some(VtolState::Fw) && vtol == Some(VtolState::Mc) {
+        if in_flight && prev_vtol == Some(VtolState::Fw) && vtol == Some(VtolState::Mc) {
             quadchutes += 1;
             detail.push(|| {
                 let flag = match flag_at(fs, &rows, "vtol_fixed_wing_system_failure", r.id.ts) {
@@ -995,6 +996,29 @@ mod tests {
             "{:?}",
             r.detail
         );
+    }
+
+    #[test]
+    fn r4_counts_a_quadchute_on_the_row_that_disarms() {
+        let fields: Vec<String> = VEHICLE_STATUS_FIELDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // MC, to FW, FW, then disarmed and multicopter on the same row.
+        let rows = vec![
+            vtol_row(0, 2, false, false, 1),
+            vtol_row(1, 2, true, true, 1),
+            vtol_row(2, 2, false, false, 2),
+            vtol_row(3, 1, false, false, 1),
+        ];
+        let flight = FlightLog {
+            vehicle_status: rows,
+            vehicle_status_fields: fields,
+            ..FlightLog::default()
+        };
+        let r = r4(&flight);
+        assert_eq!(r.status, Status::Fail);
+        assert_eq!(r.found, "true while armed 0 time(s), quadchute 1 time(s)");
     }
 
     #[test]

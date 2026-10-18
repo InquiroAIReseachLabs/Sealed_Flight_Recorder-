@@ -706,14 +706,14 @@ fn oversize_text_inputs_are_refused_and_name_the_limit() {
         stderr(&out)
     );
 
-    // A record over 512 MiB (a sparse file) fails verification and names the limit,
-    // in text and in --json.
+    // A record 1 or 2 bytes over 512 MiB (a sparse file) fails verification and names the
+    // limit, in text and in --json.
     let record = dir.join("big.sfr");
-    let f = std::fs::File::create(&record).unwrap();
-    f.set_len(512 * 1024 * 1024 + 2).unwrap();
-    drop(f);
     let pubkey = root().join("fuzz/seeds/sfr_verify_key.pub");
-    for json in [false, true] {
+    for (over, json) in [(1, false), (1, true), (2, false), (2, true)] {
+        let f = std::fs::File::create(&record).unwrap();
+        f.set_len(512 * 1024 * 1024 + over).unwrap();
+        drop(f);
         let mut args = vec![
             "verify",
             record.to_str().unwrap(),

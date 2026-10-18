@@ -531,17 +531,14 @@ fn parse_type(token: &str, offset: u64) -> Result<(FieldType, Option<usize>), Ul
             if n.is_empty() || !n.bytes().all(|c| c.is_ascii_digit()) {
                 return Err(malformed(offset, format!("bad array length in `{token}`")));
             }
-            if n.len() > 5 {
-                return Err(malformed(
-                    offset,
-                    format!(
-                        "array length in `{token}` is outside 1 to {MAX_LAYOUT_SIZE} (SPEC B1.4)"
-                    ),
-                ));
-            }
-            let len: usize = n
-                .parse()
-                .map_err(|_| malformed(offset, format!("bad array length in `{token}`")))?;
+            // Leading zeros do not change the value (pyulog reads `[000001]` as 1); more than
+            // five significant digits is over the limit whatever they are.
+            let digits = n.trim_start_matches('0');
+            let len: usize = if digits.len() > 5 {
+                usize::MAX
+            } else {
+                digits.parse().unwrap_or(0)
+            };
             if len == 0 || len > MAX_LAYOUT_SIZE {
                 return Err(malformed(
                     offset,
@@ -572,6 +569,12 @@ fn parse_format(body: &[u8], offset: u64) -> Result<(String, Vec<FieldDef>), Ulo
     if name.is_empty() {
         return Err(malformed(offset, "format with empty name"));
     }
+    // Every name a format holds is capped, so each kept definition is bounded (SPEC B1.4).
+    let too_long =
+        |what: &str| malformed(offset, crate::limit_exceeded(what, MAX_NAME_LEN, "bytes"));
+    if name.len() > MAX_NAME_LEN {
+        return Err(too_long("a format name"));
+    }
     let mut defs = Vec::new();
     for item in fields.split(';').filter(|s| !s.is_empty()) {
         let (ty, fname) = item.split_once(' ').ok_or_else(|| {
@@ -586,7 +589,13 @@ fn parse_format(body: &[u8], offset: u64) -> Result<(String, Vec<FieldDef>), Ulo
                 format!("format `{name}`: empty field name"),
             ));
         }
+        if fname.len() > MAX_NAME_LEN {
+            return Err(too_long("a field name"));
+        }
         let (ty, array) = parse_type(ty, offset)?;
+        if matches!(&ty, FieldType::Nested(t) if t.len() > MAX_NAME_LEN) {
+            return Err(too_long("a field type name"));
+        }
         defs.push(FieldDef {
             ty,
             array,
@@ -884,14 +893,15 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
             }
             b'F' => {
                 let (name, defs) = parse_format(&body, start)?;
-                format_fields = format_fields.saturating_add(defs.len());
+                // A format with no fields still costs a definition.
+                format_fields = format_fields.saturating_add(defs.len().max(1));
                 if format_fields > MAX_TOTAL_FIELDS {
                     return Err(malformed(
                         start,
                         crate::limit_exceeded(
-                            "the number of fields across all formats",
+                            "the number of field definitions across all formats",
                             MAX_TOTAL_FIELDS,
-                            "fields",
+                            "definitions",
                         ),
                     ));
                 }
@@ -1292,10 +1302,12 @@ pub(crate) mod tests {
             ),
             "{err}"
         );
+        // Format names are capped too, so a 256-byte subscription names no format; the
+        // subscription's own limit is what refuses it.
         let topic = "t".repeat(MAX_NAME_LEN + 1);
         let b = Builder::new(0)
             .flags(&[])
-            .format(&format!("{topic}:uint64_t timestamp;"))
+            .format("t:uint64_t timestamp;")
             .sub(0, 0, &topic);
         let err = read(&b.bytes[..], &mut Collect::default()).expect_err("long topic name");
         assert!(
@@ -1346,6 +1358,47 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn names_in_format_definitions_are_capped() {
+        let n = |k: usize| "n".repeat(k);
+        for (format, ok, what) in [
+            (format!("{}:uint8_t v;", n(255)), true, ""),
+            (format!("{}:uint8_t v;", n(256)), false, "a format name"),
+            (format!("f:uint8_t {};", n(255)), true, ""),
+            (format!("f:uint8_t {};", n(256)), false, "a field name"),
+            (format!("f:{} v;", n(255)), true, ""),
+            (format!("f:{} v;", n(256)), false, "a field type name"),
+        ] {
+            let b = Builder::new(0).flags(&[]).format(&format);
+            let r = read(&b.bytes[..], &mut Collect::default());
+            assert_eq!(r.is_ok(), ok, "{what}: {r:?}");
+            if let Err(e) = r {
+                assert!(
+                    e.to_string().contains(&format!(
+                        "{what} exceeds the input limit of 255 bytes (SPEC B1.4)"
+                    )),
+                    "{e}"
+                );
+            }
+        }
+        // Leading zeros do not change an array length.
+        for (len, ok) in [
+            ("000001", true),
+            ("0065535", true),
+            ("00000", false),
+            ("0065536", false),
+        ] {
+            let b = Builder::new(0)
+                .flags(&[])
+                .format(&format!("f:uint8_t[{len}] v;"));
+            assert_eq!(
+                read(&b.bytes[..], &mut Collect::default()).is_ok(),
+                ok,
+                "{len}"
+            );
+        }
+    }
+
+    #[test]
     fn nesting_and_name_limits_hold_exactly_at_the_limit() {
         // `t` holds n0, n0 holds n1, and so on: `levels` nested types below `t`.
         let nested = |levels: usize| {
@@ -1389,9 +1442,10 @@ pub(crate) mod tests {
             let r = read(&b.bytes[..], &mut Collect::default());
             assert_eq!(r.is_ok(), ok, "{}: {r:?}", field.len());
             if let Err(e) = r {
+                // A 256-byte plain field is refused as a field name before it is flattened.
                 assert!(
                     e.to_string()
-                        .contains("a flattened field name exceeds the input limit of 255 bytes"),
+                        .contains("field name exceeds the input limit of 255 bytes"),
                     "{e}"
                 );
             }
@@ -1433,11 +1487,12 @@ pub(crate) mod tests {
         }
         let at = b.format(&format!("last:{}", defs(1_000)));
         read(&at.bytes[..], &mut Collect::default()).expect("exactly 1,000,000");
-        let b = at.format("one_more:uint8_t f;");
+        // A format with no fields counts as one definition.
+        let b = at.format("one_more:");
         let e = read(&b.bytes[..], &mut Collect::default()).expect_err("1,000,001");
         assert!(
             e.to_string().contains(
-                "the number of fields across all formats exceeds the input limit of 1000000 fields"
+                "the number of field definitions across all formats exceeds the input limit of 1000000 definitions"
             ),
             "{e}"
         );
@@ -1445,13 +1500,16 @@ pub(crate) mod tests {
 
     #[test]
     fn total_flattened_fields_are_capped() {
-        // One format with 50,000 fields, subscribed 21 times: 1,050,000 fields in all.
+        // One format with 50,000 fields subscribed 20 times, and one timestamp-only
+        // subscription: 1,000,001 fields in all.
         let mut b = Builder::new(0)
             .flags(&[])
-            .format("wide:uint64_t timestamp;uint8_t[49999] x;");
-        for id in 0..21u16 {
+            .format("wide:uint64_t timestamp;uint8_t[49999] x;")
+            .format("narrow:uint64_t timestamp;");
+        for id in 0..20u16 {
             b = b.sub(0, id, "wide");
         }
+        b = b.sub(0, 20, "narrow");
         let err = read(&b.bytes[..], &mut Collect::default()).expect_err("over the cap");
         assert!(
             err.to_string()
