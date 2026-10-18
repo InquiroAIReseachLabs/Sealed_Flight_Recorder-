@@ -44,7 +44,7 @@ case "${1:-}" in
   oracle)
     mkdir -p testdata/expected/oracle
     logs | while read -r name log; do
-      python3 -I scripts/testdata/oracle.py "$log" > "testdata/expected/oracle/$name.oracle.json"
+      python3 -I scripts/testdata/oracle.py "$log" "$(rules_for "$name")" > "testdata/expected/oracle/$name.oracle.json"
     done ;;
   expected)
     logs | while read -r name log; do
