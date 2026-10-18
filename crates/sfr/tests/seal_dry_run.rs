@@ -902,10 +902,14 @@ fn r7_names_each_command_from_an_unlisted_source() {
 fn a_changed_watched_parameter_fails_r3_and_shows_diff_in_transition_tuning() {
     let dir = scratch();
     let baseline = dir.join("vtol.params");
-    let text = std::fs::read_to_string(root().join("testdata/baselines/v1.17.0_vtol_transition.params"))
-        .unwrap()
-        .replace("\tVT_B_TRANS_DUR\t10.0\t9", "\tVT_B_TRANS_DUR\t8.0\t9");
-    assert!(text.contains("\tVT_B_TRANS_DUR\t8.0\t9"), "the baseline line was edited");
+    let text =
+        std::fs::read_to_string(root().join("testdata/baselines/v1.17.0_vtol_transition.params"))
+            .unwrap()
+            .replace("\tVT_B_TRANS_DUR\t10.0\t9", "\tVT_B_TRANS_DUR\t8.0\t9");
+    assert!(
+        text.contains("\tVT_B_TRANS_DUR\t8.0\t9"),
+        "the baseline line was edited"
+    );
     std::fs::write(&baseline, text).unwrap();
     let out = dry_run(
         "testdata/sitl/v1.17.0/vtol_transition.ulg",
@@ -915,8 +919,14 @@ fn a_changed_watched_parameter_fails_r3_and_shows_diff_in_transition_tuning() {
     );
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     let t = stdout(&out);
-    assert!(t.contains("R3    FAIL    parameters match baseline     1 differ"), "{t}");
-    assert!(t.contains("- VT_B_TRANS_DUR: baseline f32:8, flown f32:10"), "{t}");
+    assert!(
+        t.contains("R3    FAIL    parameters match baseline     1 differ"),
+        "{t}"
+    );
+    assert!(
+        t.contains("- VT_B_TRANS_DUR: baseline f32:8, flown f32:10"),
+        "{t}"
+    );
     assert!(t.contains("transition tuning (VTOL type standard)"), "{t}");
     assert!(
         t.contains("  VT_B_TRANS_DUR    f32:8           f32:10          DIFF"),
