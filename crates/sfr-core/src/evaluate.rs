@@ -327,7 +327,15 @@ impl Lines {
 
 fn r4(f: &FlightLog) -> RuleResult {
     let expected = "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight";
-    let missing = missing_fields(f, &["arming_state", "failsafe"]);
+    // SPEC B1.6: the quadchute half reads the VTOL state only on a VTOL vehicle (is_vtol true
+    // on some sample). No vehicle_status, or no is_vtol field, counts as not VTOL here; R1
+    // reports what is missing.
+    let is_vtol = f.vehicle_status.iter().any(|r| r.is_vtol == Some(true));
+    let mut needed = vec!["arming_state", "failsafe"];
+    if is_vtol {
+        needed.extend(["in_transition_mode", "in_transition_to_fw", "vehicle_type"]);
+    }
+    let missing = missing_fields(f, &needed);
     if !missing.is_empty() {
         return fail_missing("R4", "no failsafe in flight", expected, missing);
     }
@@ -355,7 +363,7 @@ fn r4(f: &FlightLog) -> RuleResult {
             detail.push(|| {
                 let flags = attribute_failsafe(fs, &rows, r.id.ts, r.nav_state, last_arm);
                 format!(
-                    "failsafe while armed at boot_us {}: {}",
+                    "failsafe in flight at boot_us {}: {}",
                     r.id.ts,
                     flags.join(", ")
                 )
@@ -366,7 +374,7 @@ fn r4(f: &FlightLog) -> RuleResult {
         // failsafe only in some modes (failsafe.cpp), so the state change itself is the signal.
         // The disarming row is in flight here too, as for failsafes above.
         let vtol = vtol_state(r);
-        if in_flight && prev_vtol == Some(VtolState::Fw) && vtol == Some(VtolState::Mc) {
+        if is_vtol && in_flight && prev_vtol == Some(VtolState::Fw) && vtol == Some(VtolState::Mc) {
             quadchutes += 1;
             detail.push(|| {
                 let flag = match flag_at(fs, &rows, "vtol_fixed_wing_system_failure", r.id.ts) {
@@ -375,7 +383,7 @@ fn r4(f: &FlightLog) -> RuleResult {
                     None => "not logged",
                 };
                 format!(
-                    "quadchute while armed at boot_us {}: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure {flag}",
+                    "quadchute in flight at boot_us {}: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure {flag}",
                     r.id.ts
                 )
             });
@@ -390,13 +398,13 @@ fn r4(f: &FlightLog) -> RuleResult {
             "no failsafe in flight",
             Status::Pass,
             expected,
-            "never true while armed",
+            "never true in flight",
             vec![],
         )
     } else {
         let found = match quadchutes {
-            0 => format!("true while armed {failsafes} time(s)"),
-            q => format!("true while armed {failsafes} time(s), quadchute {q} time(s)"),
+            0 => format!("true in flight {failsafes} time(s)"),
+            q => format!("true in flight {failsafes} time(s), quadchute {q} time(s)"),
         };
         let detail = detail.finish();
         RuleResult::new(
@@ -950,11 +958,11 @@ mod tests {
         };
         let r = r4(&flight);
         assert_eq!(r.status, Status::Fail);
-        assert_eq!(r.found, "true while armed 0 time(s), quadchute 1 time(s)");
+        assert_eq!(r.found, "true in flight 0 time(s), quadchute 1 time(s)");
         assert_eq!(
             r.detail,
             [
-                "quadchute while armed at boot_us 30: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure not logged"
+                "quadchute in flight at boot_us 30: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure not logged"
             ]
         );
         // A completed back transition (FW, to MC, MC) is not a quadchute, nor is one while disarmed.
@@ -992,10 +1000,72 @@ mod tests {
         let r = r4(&flight);
         assert_eq!(r.status, Status::Fail);
         assert!(
-            r.detail[0].starts_with("failsafe while armed at boot_us 10"),
+            r.detail[0].starts_with("failsafe in flight at boot_us 10"),
             "{:?}",
             r.detail
         );
+    }
+
+    #[test]
+    fn r4_needs_the_vtol_state_only_on_a_vtol_vehicle() {
+        let fields = |drop: &str| -> Vec<String> {
+            VEHICLE_STATUS_FIELDS
+                .iter()
+                .filter(|f| **f != drop)
+                .map(|s| s.to_string())
+                .collect()
+        };
+        let row = |ts: u64, vtol: bool| {
+            let mut r = vtol_row(ts, 1, false, false, 1);
+            r.is_vtol = Some(vtol);
+            r.vehicle_type = None;
+            r
+        };
+        // Not VTOL and no vehicle_type: R4 does not need it (R1 reports it).
+        let flight = FlightLog {
+            vehicle_status: vec![row(0, false), row(1, false)],
+            vehicle_status_fields: fields("vehicle_type"),
+            ..FlightLog::default()
+        };
+        assert_eq!(r4(&flight).status, Status::Pass);
+        // VTOL and no vehicle_type: missing input, FAIL.
+        let flight = FlightLog {
+            vehicle_status: vec![row(0, true), row(1, true)],
+            vehicle_status_fields: fields("vehicle_type"),
+            ..FlightLog::default()
+        };
+        let r = r4(&flight);
+        assert_eq!(r.status, Status::Fail);
+        assert_eq!(r.detail, ["missing vehicle_status.vehicle_type"]);
+        // Not VTOL: a fixed wing to multicopter change in flight is not read as a quadchute.
+        let mut rows = vec![
+            vtol_row(0, 2, false, false, 1),
+            vtol_row(1, 2, false, false, 2),
+            vtol_row(2, 2, false, false, 1),
+        ];
+        for r in &mut rows {
+            r.is_vtol = Some(false);
+        }
+        let flight = FlightLog {
+            vehicle_status: rows,
+            vehicle_status_fields: fields(""),
+            ..FlightLog::default()
+        };
+        assert_eq!(r4(&flight).status, Status::Pass);
+        // No is_vtol field counts as not VTOL.
+        let mut rows = vec![row(0, false), row(1, false)];
+        for r in &mut rows {
+            r.is_vtol = None;
+        }
+        let flight = FlightLog {
+            vehicle_status: rows,
+            vehicle_status_fields: fields("is_vtol")
+                .into_iter()
+                .filter(|f| f != "vehicle_type")
+                .collect(),
+            ..FlightLog::default()
+        };
+        assert_eq!(r4(&flight).status, Status::Pass);
     }
 
     #[test]
@@ -1018,7 +1088,7 @@ mod tests {
         };
         let r = r4(&flight);
         assert_eq!(r.status, Status::Fail);
-        assert_eq!(r.found, "true while armed 0 time(s), quadchute 1 time(s)");
+        assert_eq!(r.found, "true in flight 0 time(s), quadchute 1 time(s)");
     }
 
     #[test]
@@ -1128,7 +1198,7 @@ mod tests {
         };
         let r = r4(&flight);
         assert_eq!(r.status, Status::Fail);
-        assert_eq!(r.found, "true while armed 1500 time(s)");
+        assert_eq!(r.found, "true in flight 1500 time(s)");
         assert_eq!(r.detail.len(), MAX_DETAIL_LINES + 1);
         assert_eq!(
             r.detail.last().map(String::as_str),

@@ -27,10 +27,10 @@ description = "Sealed Flight Record: a signed, self-verifying record of a PX4 fl
 # Do not move to aws-lc-rs 1.18 (AWS-LC FIPS 4.x): no CMVP certificate covers it (item 11.3).
 aws-lc-rs = { version = "=1.17.4", default-features = false, features = ["fips", "alloc"] }
 aws-lc-fips-sys = { version = "=0.13.17" }
-# Offline certificate path validation through the same module (SPEC B1.3 verify --trust-anchor).
-# 0.103.14 and later require aws-lc-rs 1.18.
-rustls-webpki = { version = "=0.103.13", default-features = false, features = ["std", "aws-lc-rs-fips"] }
-rustls-pki-types = { version = "=1.15.1", default-features = false, features = ["std"] }
+# Certificate path validation (SPEC B1.3 verify --trust-anchor) is not in this build. rustls-webpki
+# 0.103.13 was removed (founder decision, Chunk 3 gate): no source used it, and its aws-lc-rs-fips
+# feature also compiled the non-FIPS aws-lc-sys into every build. Its replacement is chosen when
+# certificate chains are implemented.
 # Supplementary, non-approved digest of the raw log bytes; never anchors trust (founder ruling).
 blake3 = { version = "=1.8.7", default-features = false, features = ["std"] }
 # crypto-portable backend: the wasm32 sandbox only, not validated (SPEC B1.2).

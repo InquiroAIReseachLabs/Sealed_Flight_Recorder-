@@ -27,7 +27,15 @@ jobs:
           mkdir -p fuzz/corpus/ulog_ingest
           cp fuzz/seeds/ulog_ingest/* fuzz/corpus/ulog_ingest/
           cargo +nightly-2026-10-18 fuzz run ulog_ingest fuzz/corpus/ulog_ingest -- \
-            -max_total_time=600 -rss_limit_mb=2048 -timeout=10 -max_len=1048576
+            -max_total_time=600 -rss_limit_mb=2048 -timeout=10 -max_len=1048576 \
+            2>&1 | tee fuzz-ulog_ingest.log
+          done_line="$(grep -E '^Done [0-9]+ runs' fuzz-ulog_ingest.log | tail -1)"
+          echo "ulog_ingest: $done_line"
+          {
+            echo "| Target | libFuzzer summary |"
+            echo "|---|---|"
+            echo "| ulog_ingest | $done_line |"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Keep any finding
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0

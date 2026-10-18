@@ -314,6 +314,7 @@ def run(path, required, ptime, param_index, debug):
     intervals = []           # [t_arm, t_disarm or None]
     vtol_open = None         # direction of the open transition
     vtol_abort = False
+    quadchute_rows = []      # vehicle_status rows that carry a QUADCHUTE event, in file order
     is_vtol = False
     if vs is not None and vs.has('timestamp'):
         ts = vs['timestamp']
@@ -423,6 +424,7 @@ def run(path, required, ptime, param_index, debug):
                         if row is not None and ff.has('vtol_fixed_wing_system_failure'):
                             qc = bool(flag_true(row, 'vtol_fixed_wing_system_failure'))
                         emit(dict(base, kind='QUADCHUTE', vtol_fixed_wing_system_failure=qc))
+                        quadchute_rows.append(i)
                     if vstate_prev in direction:
                         if (vstate_prev, cur) in (('TFW', 'FW'), ('TMC', 'MC')):
                             emit(dict(base, kind='VTOL_TRANSITION_END', direction=direction[vstate_prev]))
@@ -533,14 +535,60 @@ def run(path, required, ptime, param_index, debug):
     if vs is None:
         results['R4'] = results['R5'] = results['R6'] = 'FAIL'
     else:
-        # R4: a failsafe row inside an armed interval [ARM row, DISARM row)
-        if vs.has('arming_state') and vs.has('failsafe'):
-            r4 = 'PASS'
-            for i in range(vs.n):
-                if armed_rows[i] and vs['failsafe'][i] != 0:
-                    r4 = 'FAIL'
-                    break
-            results['R4'] = r4
+        # R4 (SPEC B1.6): vehicle_status.failsafe never true from ARM through the
+        # vehicle_status sample that disarms, and no QUADCHUTE (B1.5) in that window.
+        # The window of one ARM is every vehicle_status row from the ARM row through the
+        # DISARM row, both included (through the last row when there is no DISARM). In file
+        # order that is every armed row plus every disarmed row whose predecessor is armed.
+        # A QUADCHUTE counts when the row that carries it (the multicopter row that follows
+        # the fixed wing row) is in the window. R4 always reads arming_state and failsafe.
+        # The quadchute check reads the VTOL state fields (in_transition_mode,
+        # in_transition_to_fw, vehicle_type) only when the vehicle is VTOL, that is when
+        # vehicle_status.is_vtol is true on some sample; an absent is_vtol field means not
+        # VTOL here (R1 carries that failure), so R4 then neither reads nor needs those
+        # fields and counts no quadchute. A rule whose input is missing is FAIL (B1.6), never
+        # N/A: arming_state or failsafe absent, or a VTOL vehicle without the VTOL state fields.
+        r4_vtol = bool(is_vtol)  # False when vehicle_status.is_vtol is absent
+        r4_fields = ['timestamp', 'arming_state', 'failsafe']
+        if r4_vtol:
+            r4_fields += ['in_transition_mode', 'in_transition_to_fw', 'vehicle_type']
+        r4_missing = [f for f in r4_fields if not vs.has(f)]
+        warn(debug, "R4 vehicle is VTOL:", r4_vtol, "(is_vtol field present: %s)" % vs.has('is_vtol'),
+             "inputs:", r4_fields, "missing:", r4_missing)
+        if not r4_missing and len(armed_rows) == vs.n:
+            ts = vs['timestamp']
+            qc_set = set(quadchute_rows) if r4_vtol else set()
+            in_window = [bool(armed_rows[i]) or (i > 0 and bool(armed_rows[i - 1]))
+                         for i in range(vs.n)]
+            r4_fs = [i for i in range(vs.n) if in_window[i] and vs['failsafe'][i] != 0]
+            r4_qc = [i for i in range(vs.n) if in_window[i] and i in qc_set]
+            results['R4'] = 'FAIL' if (r4_fs or r4_qc) else 'PASS'
+            if debug:
+                # Cross-check: the window read as times, ARM <= t <= DISARM (open interval runs
+                # to the end of the log), against the row window above.
+                in_time = [any(a <= ts[i] and (d is None or ts[i] <= d) for a, d in intervals)
+                           for i in range(vs.n)]
+                diff = [i for i in range(vs.n) if in_time[i] != in_window[i]]
+                warn(debug, "R4 rows where row window and time window differ:", len(diff),
+                     ["%d:%d row=%s time=%s fs=%d" % (i, ts[i], in_window[i], in_time[i],
+                                                      vs['failsafe'][i]) for i in diff[:20]])
+                if not r4_vtol and quadchute_rows:
+                    warn(debug, "R4 not VTOL: QUADCHUTE events not read by R4:",
+                         ["%d:%d" % (i, ts[i]) for i in quadchute_rows])
+                spans = []
+                for i in range(vs.n):
+                    if in_window[i] and (i == 0 or not in_window[i - 1]):
+                        spans.append([i, i])
+                    elif in_window[i]:
+                        spans[-1][1] = i
+                warn(debug, "R4 windows (row:boot_us .. row:boot_us):",
+                     ["%d:%d..%d:%d" % (a, ts[a], b, ts[b]) for a, b in spans])
+                warn(debug, "R4 failsafe rows in window:", len(r4_fs),
+                     ["%d:%d" % (i, ts[i]) for i in r4_fs[:20]])
+                warn(debug, "R4 quadchute rows in window:",
+                     ["%d:%d" % (i, ts[i]) for i in r4_qc])
+                warn(debug, "R4 quadchute rows outside window:",
+                     ["%d:%d" % (i, ts[i]) for i in sorted(qc_set) if i not in set(r4_qc)])
         else:
             results['R4'] = 'FAIL'
         # R5: log must not end armed

@@ -22,6 +22,9 @@ logs() {
     v=$(basename "$(dirname "$f")")
     echo "${v}_$(basename "$f" .ulg) $f"
   done
+  for f in testdata/synthetic/*.ulg; do
+    echo "synthetic_$(basename "$f" .ulg) $f"
+  done
 }
 
 case "${1:-}" in

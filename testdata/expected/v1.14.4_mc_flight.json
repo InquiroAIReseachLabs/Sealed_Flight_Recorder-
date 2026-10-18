@@ -2046,7 +2046,7 @@
     {
       "detail": [],
       "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight",
-      "found": "never true while armed",
+      "found": "never true in flight",
       "id": "R4",
       "name": "no failsafe in flight",
       "status": "PASS"
