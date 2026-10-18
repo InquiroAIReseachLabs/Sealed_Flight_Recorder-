@@ -44,7 +44,7 @@ If the FIPS module fails a power-on self-test or its integrity check, the module
 
 #### Input limits
 
-Every input except the log's total size is bounded by the limits below, and an input over a limit is refused, never truncated. A message for a count or a size reads `... exceeds the input limit of N <unit> (SPEC B1.4)`; a message for a name, version, or length rule ends with a parenthesis that states the rule and cites SPEC B1.4. `seal` names the byte offset (log) or line (rules file, baseline) where it met the limit, except for counts over the whole log or one format (parameters at log start, `failsafe_flags` flag fields, events), file sizes, and TOML dotted-key depth, which name the file only. `seal` exits 3 for the log, the rules file, and the baseline, including a log whose record would be over the record limit (`seal --dry-run` writes no record and does not apply that limit), and 4 for the key file. `verify` exits 4 for the public key and reports any limit in the record or in the `--ulog` log as its first mismatch (exit 1). `docs/LIMITS.md` gives the reason for each limit.
+Every input except the log's total size is bounded by the limits below, and an input over a limit is refused, never truncated. A message for a count or a size reads `... exceeds the input limit of N <unit> (SPEC B1.4)`; a message for a name, version, or length rule ends with a parenthesis that states the rule and cites SPEC B1.4. `seal` names the byte offset (log) or line (rules file, baseline) where it met the limit, except for exactly these, which name the file only: three counts (parameters at log start, `failsafe_flags` flag fields, events), the file sizes, and TOML dotted-key depth. `seal` exits 3 for the log, the rules file, and the baseline, including a log whose record would be over the record limit (`seal --dry-run` writes no record and does not apply that limit), and 4 for the key file. `verify` exits 4 for the public key and reports any limit in the record or in the `--ulog` log as its first mismatch (exit 1). `docs/LIMITS.md` gives the reason for each limit.
 
 | Input | Limit |
 |---|---|
@@ -53,7 +53,9 @@ Every input except the log's total size is bounded by the limits below, and an i
 | Log: one flattened format | 65,535 bytes and 65,535 fields; array length 1 to 65,535 |
 | Log: field definitions across all formats | 1,000,000 (a format with no fields counts as one) |
 | Log: format name, field name, field type name | 255 bytes |
-| Log: flattened fields across all subscriptions | 1,000,000 |
+| Log: subscriptions | 4,096 |
+| Log: flattened fields across all subscriptions | 1,000,000, counted per subscription |
+| Log: flattened field names, summed once per distinct subscribed format | 16 MiB (16,777,216 bytes) |
 | Log: flattened field name (with its nested prefixes and `[i]` index), subscription name | 255 bytes |
 | Log: parameter name | 1 to 16 letters, digits, `_` |
 | Log: parameters at log start | 65,536 |
@@ -67,7 +69,7 @@ Every input except the log's total size is bounded by the limits below, and an i
 | Baseline: parameters | 65,536 |
 | Record (`seal` output, `verify` input) | 512 MiB (536,870,912 bytes); JSON with at most 64 nested arrays and objects |
 
-The log has no size limit. It is read once, as a stream. The reader keeps format definitions, subscriptions, and the parameters at log start, each bounded by the limits above, and the data records the events and rules use (for example `vehicle_status`, `failsafe_flags`, commands and acks, warning messages, and data-section parameter records); it hashes and drops every other record. The number of kept data records has no limit, so memory grows with them: a log made mostly of them needs memory in proportion to its size. The detail cap limits output, not input: R4, R5, R6, X2, and X3 list at most 1,000 `detail` lines, then one line `and N more; ...` that says where the rest are counted (the events, or for X3 its sample count). R3 lists every differing parameter (B1.6), so at most the two parameter limits together.
+The log has no size limit. It is read once, as a stream. The reader keeps format definitions, subscriptions, one flattened layout per distinct subscribed format (shared by its subscriptions), and the parameters at log start, each bounded by the limits above, and the data records the events and rules use (for example `vehicle_status`, `failsafe_flags`, commands and acks, warning messages, and data-section parameter records); it hashes and drops every other record. The number of kept data records has no limit, so memory grows with them: a log made mostly of them needs memory in proportion to its size. The detail cap limits output, not input: R4, R5, R6, X2, and X3 list at most 1,000 `detail` lines, then one line `and N more; ...` that says where the rest are counted (the events, or for X3 its sample count). R3 lists every differing parameter (B1.6), so at most the two parameter limits together.
 
 ### B1.5 What is extracted from the log
 
@@ -105,6 +107,19 @@ Rules file format: TOML (Rust TOML tooling is actively maintained; the common Ru
 | R6 | VTOL transitions completed: every start has an end, none aborted | N/A if the vehicle is not VTOL |
 
 **Optional example rules** (shipped in `examples/rules.extended.toml`, off by default, thresholds labeled "set by your flight-test lead"): minimum battery, GPS fix at arm, estimator fault flags, accelerometer clipping and vibration, total dropout time.
+
+**Time windows.** Each rule and in-flight event reads the log over this window. "ARM" and "DISARM" are the boot times of the `vehicle_status` samples where `arming_state` becomes and stops being armed (B1.5); an interval still open at the end of the log runs to its end. Every armed interval counts.
+
+| Rule or event | Window |
+|---|---|
+| R1 | the whole log |
+| R2, R3 | none: the firmware identity and the parameters at log start (B1.5) |
+| R4 | `vehicle_status` samples with ARM ≤ t ≤ DISARM: from the ARM sample through the sample that disarms; a quadchute is judged on the sample where the VTOL state becomes multicopter |
+| R5, R6 | the whole log (every ARM, DISARM, and VTOL event) |
+| X1 (battery), X3 (estimator faults), X4 (vibration and clipping) | samples of that topic with ARM ≤ t < DISARM; X4 compares consecutive samples only within one armed interval |
+| X2 (GPS fix at arm) | at each ARM: the latest GPS sample with a timestamp at or before it |
+| X5 (dropouts) | the whole log |
+| PARAM_CHANGED_IN_FLIGHT (B1.5) | records with ARM < t ≤ DISARM, t being the last data timestamp before the record |
 
 **Volatile parameter ignore list:** configurable in the rules file. Default list is confirmed against real logs in Chunk 1; candidates are flight-time accumulators and per-flight identifiers.
 

@@ -14,18 +14,24 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
+use std::rc::Rc;
 
 /// Maximum nesting depth of message formats (observed maximum in real logs: 2).
 pub const MAX_NESTING: usize = 8;
 /// A data record payload cannot exceed the 16-bit message size.
 pub const MAX_LAYOUT_SIZE: usize = 65_535;
-/// Most flattened fields across all subscriptions of one log. Real PX4 logs hold tens of
-/// thousands; the cap stops a small crafted file from subscribing thousands of times to a
-/// format with 65,535 fields and exhausting memory and time.
+/// Most flattened fields across all subscriptions of one log, counted per subscription, far
+/// above what the golden logs hold; the cap bounds the time a crafted file can spend.
 pub const MAX_TOTAL_FIELDS: usize = 1_000_000;
 /// Longest flattened field name or subscribed topic name, in bytes. PX4 names are under 64
 /// bytes; the cap bounds memory per field, which [`MAX_TOTAL_FIELDS`] alone does not.
 pub const MAX_NAME_LEN: usize = 255;
+/// Most bytes of flattened field names, summed once per distinct subscribed format. Each
+/// format is flattened once and its subscriptions share the layout, so this bounds the
+/// memory layouts hold. The cap is far above what the golden logs use.
+pub const MAX_FLATTENED_NAME_BYTES: usize = 16 * 1024 * 1024;
+/// Most subscriptions ('A' records) in one log, far above what the golden logs have.
+pub const MAX_SUBSCRIPTIONS: usize = 4096;
 
 const MAGIC: &[u8; 7] = b"ULog\x01\x12\x35";
 const INCOMPAT_DATA_APPENDED: u8 = 0x01;
@@ -214,13 +220,25 @@ pub struct Layout {
     pub size: usize,
     /// Every flattened scalar field, in layout order.
     pub fields: Vec<FlatField>,
-    index: BTreeMap<String, usize>,
+    /// Positions in `fields`, sorted by name (stable, so a repeated name finds its first
+    /// field). It holds no copy of the names.
+    by_name: Vec<usize>,
 }
 
 impl Layout {
-    /// Looks up a flattened field by name.
+    /// Looks up a flattened field by name; a repeated name finds its first field.
     pub fn field(&self, name: &str) -> Option<&FlatField> {
-        self.index.get(name).and_then(|&i| self.fields.get(i))
+        let name_at = |i: usize| self.fields.get(i).map_or("", |f| f.name.as_str());
+        let n = self.by_name.partition_point(|&i| name_at(i) < name);
+        self.by_name
+            .get(n)
+            .and_then(|&i| self.fields.get(i))
+            .filter(|f| f.name == name)
+    }
+
+    /// Bytes of flattened field names this layout holds.
+    pub fn name_bytes(&self) -> usize {
+        self.fields.iter().map(|f| f.name.len()).sum()
     }
 }
 
@@ -389,8 +407,9 @@ pub trait Visitor {
         _last_timestamp: u64,
     ) {
     }
-    /// An 'A' record: `msg_id` now carries `topic` instance `multi_id` with this layout.
-    fn subscription(&mut self, _msg_id: u16, _multi_id: u8, _topic: &str, _layout: &Layout) {}
+    /// An 'A' record: `msg_id` now carries `topic` instance `multi_id` with this layout. Every
+    /// subscription of one format definition gets the same shared layout.
+    fn subscription(&mut self, _msg_id: u16, _multi_id: u8, _topic: &str, _layout: &Rc<Layout>) {}
     /// A 'D' record for a known subscription.
     fn data(&mut self, _msg_id: u16, _timestamp: u64, _payload: &[u8]) {}
     /// An 'L' (tag `None`) or 'C' record; `level` is the raw ASCII level byte.
@@ -543,7 +562,7 @@ fn parse_type(token: &str, offset: u64) -> Result<(FieldType, Option<usize>), Ul
                 return Err(malformed(
                     offset,
                     format!(
-                        "array length in `{token}` is outside 1 to {MAX_LAYOUT_SIZE} (SPEC B1.4)"
+                        "array length in `{token}` is not allowed (1 to {MAX_LAYOUT_SIZE} elements; SPEC B1.4)"
                     ),
                 ));
             }
@@ -642,10 +661,15 @@ impl Flattener<'_> {
                         crate::limit_exceeded("a flattened field name", MAX_NAME_LEN, "bytes"),
                     ));
                 }
-                let name = match def.array {
-                    Some(_) => format!("{prefix}{}[{i}]", def.name),
-                    None => format!("{prefix}{}", def.name),
-                };
+                // Exactly sized: a layout keeps every name for the whole read.
+                let mut name = String::with_capacity(prefix.len() + def.name.len() + suffix);
+                name.push_str(prefix);
+                name.push_str(&def.name);
+                if def.array.is_some() {
+                    name.push('[');
+                    name.push_str(&i.to_string());
+                    name.push(']');
+                }
                 match &def.ty {
                     FieldType::Scalar(s) => {
                         self.out.push(FlatField {
@@ -736,14 +760,17 @@ fn flatten(
         offset,
     };
     let size = fl.walk(top, "", 0, 0)?;
-    let mut index = BTreeMap::new();
-    for (i, f) in fl.out.iter().enumerate() {
-        index.entry(f.name.clone()).or_insert(i);
-    }
+    let mut fields = fl.out;
+    fields.shrink_to_fit();
+    let mut by_name: Vec<usize> = (0..fields.len()).collect();
+    by_name.sort_by(|&a, &b| {
+        let name = |i: usize| fields.get(i).map_or("", |f| f.name.as_str());
+        name(a).cmp(name(b))
+    });
     let layout = Layout {
         size,
-        fields: fl.out,
-        index,
+        fields,
+        by_name,
     };
     match layout.field("timestamp") {
         Some(f) if f.scalar == Scalar::U64 => Ok(layout),
@@ -755,7 +782,7 @@ fn flatten(
 }
 
 struct Sub {
-    layout: Layout,
+    layout: Rc<Layout>,
     ts: FlatField,
 }
 
@@ -823,6 +850,9 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
     let mut body: Vec<u8> = Vec::with_capacity(4096);
     let mut field_budget = MAX_TOTAL_FIELDS;
     let mut format_fields = 0usize;
+    // One shared layout per format; a format record clears them, since it may change any.
+    let mut layouts: BTreeMap<String, Rc<Layout>> = BTreeMap::new();
+    let mut name_bytes = 0usize;
 
     loop {
         while pending.first().is_some_and(|&o| src.pos >= o) {
@@ -906,6 +936,7 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                     ));
                 }
                 formats.insert(name, defs);
+                layouts.clear();
             }
             b'I' => {
                 let klen = usize::from(c.u8("info key length")?);
@@ -975,7 +1006,35 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                         format!("message id {msg_id} subscribed twice"),
                     ));
                 }
-                let layout = flatten(&formats, &topic, start)?;
+                if subs.len() >= MAX_SUBSCRIPTIONS {
+                    return Err(malformed(
+                        start,
+                        crate::limit_exceeded(
+                            "the number of subscriptions",
+                            MAX_SUBSCRIPTIONS,
+                            "subscriptions",
+                        ),
+                    ));
+                }
+                let layout = match layouts.get(&topic) {
+                    Some(l) => Rc::clone(l),
+                    None => {
+                        let l = Rc::new(flatten(&formats, &topic, start)?);
+                        name_bytes = name_bytes.saturating_add(l.name_bytes());
+                        if name_bytes > MAX_FLATTENED_NAME_BYTES {
+                            return Err(malformed(
+                                start,
+                                crate::limit_exceeded(
+                                    "the total length of flattened field names in the subscribed formats",
+                                    MAX_FLATTENED_NAME_BYTES,
+                                    "bytes",
+                                ),
+                            ));
+                        }
+                        layouts.insert(topic.clone(), Rc::clone(&l));
+                        l
+                    }
+                };
                 field_budget = field_budget
                     .checked_sub(layout.fields.len())
                     .ok_or_else(|| {
@@ -1144,7 +1203,7 @@ pub(crate) mod tests {
             self.params
                 .push((name.into(), value.to_string(), section, last));
         }
-        fn subscription(&mut self, msg_id: u16, _m: u8, topic: &str, layout: &Layout) {
+        fn subscription(&mut self, msg_id: u16, _m: u8, topic: &str, layout: &Rc<Layout>) {
             self.subs.push((msg_id, topic.into(), layout.size));
         }
         fn data(&mut self, msg_id: u16, ts: u64, payload: &[u8]) {
@@ -1241,7 +1300,11 @@ pub(crate) mod tests {
             .format("a:uint64_t timestamp;float[0] x;")
             .bytes;
         let e = read(&zero[..], &mut Collect::default()).unwrap_err();
-        assert!(e.to_string().contains("is outside 1 to 65535"), "{e}");
+        assert!(
+            e.to_string()
+                .contains("is not allowed (1 to 65535 elements; SPEC B1.4)"),
+            "{e}"
+        );
 
         let short = Builder::new(0)
             .format("a:uint64_t timestamp;float x;")
@@ -1290,7 +1353,8 @@ pub(crate) mod tests {
 
     #[test]
     fn long_names_are_refused() {
-        let long = "n".repeat(MAX_NAME_LEN);
+        // `<253 bytes>[0]` is 256 bytes: one over.
+        let long = "n".repeat(MAX_NAME_LEN - 2);
         let b = Builder::new(0)
             .flags(&[])
             .format(&format!("t:uint64_t timestamp;uint8_t[2] {long};"))
@@ -1351,7 +1415,8 @@ pub(crate) mod tests {
                 .format(&format!("b:uint8_t[{n}] x;"));
             let e = read(&over.bytes[..], &mut Collect::default()).expect_err(n);
             assert!(
-                e.to_string().contains("is outside 1 to 65535 (SPEC B1.4)"),
+                e.to_string()
+                    .contains("is not allowed (1 to 65535 elements; SPEC B1.4)"),
                 "{n}: {e}"
             );
         }
@@ -1390,12 +1455,108 @@ pub(crate) mod tests {
             let b = Builder::new(0)
                 .flags(&[])
                 .format(&format!("f:uint8_t[{len}] v;"));
-            assert_eq!(
-                read(&b.bytes[..], &mut Collect::default()).is_ok(),
-                ok,
-                "{len}"
-            );
+            match read(&b.bytes[..], &mut Collect::default()) {
+                Ok(_) => assert!(ok, "{len} accepted"),
+                Err(e) => {
+                    assert!(!ok, "{len}: {e}");
+                    assert!(
+                        e.to_string()
+                            .contains("is not allowed (1 to 65535 elements; SPEC B1.4)"),
+                        "{e}"
+                    );
+                }
+            }
         }
+    }
+
+    /// The 78 KB log that held about 1.6 GB before each format was flattened once
+    /// (scripts/testdata/make_amplification_seed.py; also a fuzz seed).
+    const AMPLIFICATION: &[u8] =
+        include_bytes!("../../../fuzz/seeds/ulog_ingest/subscription_amplification.ulg");
+
+    #[test]
+    fn subscriptions_of_one_format_share_one_layout() {
+        #[derive(Default)]
+        struct Layouts(Vec<(String, Rc<Layout>)>);
+        impl Visitor for Layouts {
+            fn subscription(&mut self, _id: u16, _m: u8, topic: &str, layout: &Rc<Layout>) {
+                self.0.push((topic.to_string(), Rc::clone(layout)));
+            }
+        }
+        let mut v = Layouts::default();
+        read(AMPLIFICATION, &mut v).expect("accepted: 999,987 fields, one distinct format");
+        let fs: Vec<&Rc<Layout>> =
+            v.0.iter()
+                .filter(|(t, _)| t == "failsafe_flags")
+                .map(|(_, l)| l)
+                .collect();
+        assert_eq!(fs.len(), 3891);
+        assert!(fs.iter().all(|l| Rc::ptr_eq(l, fs[0])), "one shared layout");
+        assert_eq!(fs[0].fields.len(), 257);
+    }
+
+    #[test]
+    fn subscription_count_and_flattened_name_limits_are_exact() {
+        // 4,096 subscriptions are accepted; the 4,097th is refused.
+        let subs = |n: u16| {
+            let mut b = Builder::new(0).flags(&[]).format("t:uint64_t timestamp;");
+            for id in 0..n {
+                b = b.sub(0, id, "t");
+            }
+            b
+        };
+        read(&subs(4096).bytes[..], &mut Collect::default()).expect("4,096 subscriptions");
+        let e = read(&subs(4097).bytes[..], &mut Collect::default()).expect_err("4,097");
+        assert!(
+            e.to_string().contains(
+                "the number of subscriptions exceeds the input limit of 4096 subscriptions (SPEC B1.4)"
+            ),
+            "{e}"
+        );
+
+        // Distinct formats whose flattened names total exactly 16 MiB: 274 formats of a
+        // timestamp and 240 fields with 255-byte names (61,209 bytes each), and one of a
+        // timestamp, 23 such fields and one of `last` bytes (5,874 + last bytes).
+        let field = |k: usize, len: usize| {
+            let mut name = format!("f{k}_");
+            name.push_str(&"a".repeat(len - name.len()));
+            format!("uint8_t {name};")
+        };
+        let names = |last: usize| {
+            let mut b = Builder::new(0).flags(&[]);
+            for f in 0..274 {
+                let fields: String = (0..240).map(|k| field(k, 255)).collect();
+                b = b.format(&format!("g{f}:uint64_t timestamp;{fields}"));
+            }
+            let fields: String = (0..23).map(|k| field(k, 255)).collect();
+            b = b.format(&format!(
+                "g274:uint64_t timestamp;{fields}{}",
+                field(23, last)
+            ));
+            for f in 0..275u16 {
+                b = b.sub(0, f, &format!("g{f}"));
+            }
+            b
+        };
+        read(&names(76).bytes[..], &mut Collect::default()).expect("exactly 16 MiB");
+        let e = read(&names(77).bytes[..], &mut Collect::default()).expect_err("one byte over");
+        assert!(
+            e.to_string().contains(
+                "flattened field names in the subscribed formats exceeds the input limit of 16777216 bytes (SPEC B1.4)"
+            ),
+            "{e}"
+        );
+
+        // Counted once per distinct format: one 61,209-byte format subscribed 300 times
+        // (18 MB if counted per subscription) is accepted.
+        let fields: String = (0..240).map(|k| field(k, 255)).collect();
+        let mut b = Builder::new(0)
+            .flags(&[])
+            .format(&format!("g:uint64_t timestamp;{fields}"));
+        for id in 0..300u16 {
+            b = b.sub(0, id, "g");
+        }
+        read(&b.bytes[..], &mut Collect::default()).expect("one distinct format");
     }
 
     #[test]
