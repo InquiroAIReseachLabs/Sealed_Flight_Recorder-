@@ -349,37 +349,40 @@ fn a_thousand_seeded_byte_flips_in_a_log_all_fail_verification() {
     }
 }
 
-/// Seals the shrunk failsafe_gps_loss seed with the default rules plus `[sealed_topics]`
-/// sealing battery_status, which no event and no default rule reads. Returns the record bytes,
-/// the log bytes, and the public key.
-/// Sealed topics the flip tests cover, as (topic, golden flight, shrunk fuzz seed of that
-/// flight; fuzz/README.md): a PX4 topic in a SIH flight, and the external vision odometry of the
-/// Gazebo vision flight (Change Order 01 item 3c). The small seeds keep a thousand deep verifies
-/// quick; each case is its own test, so the cases run in parallel.
-const BATTERY_STATUS: (&str, &str, &str) = (
+/// Sealed topics the flip tests cover, as (topic, golden flight, log): a PX4 topic in a SIH
+/// flight and the external vision odometry of the Gazebo vision flight (Change Order 01 item
+/// 3c), each from the shrunk fuzz seed of that flight (fuzz/README.md), and the synthetic custom
+/// topic in three instances (item 3d), so a wrong instance number is caught. The small logs keep
+/// a thousand deep verifies quick; each case is its own test, so the cases run in parallel.
+type SealedCase = (&'static str, &'static str, &'static str);
+const BATTERY_STATUS: SealedCase = (
     "battery_status",
     "v1.17.0_failsafe_gps_loss",
-    "sitl_v1.17.0_failsafe_gps_loss_shrunk",
+    "fuzz/seeds/ulog_ingest/sitl_v1.17.0_failsafe_gps_loss_shrunk.ulg",
 );
-const VISUAL_ODOMETRY: (&str, &str, &str) = (
+const VISUAL_ODOMETRY: SealedCase = (
     "vehicle_visual_odometry",
     "v1.17.0_gz_x500_vision_hover",
-    "sitl_v1.17.0_gz_x500_vision_hover_shrunk",
+    "fuzz/seeds/ulog_ingest/sitl_v1.17.0_gz_x500_vision_hover_shrunk.ulg",
+);
+const CUSTOM_DETECTION: SealedCase = (
+    "custom_detection",
+    "synthetic_custom_detection",
+    "testdata/synthetic/custom_detection.ulg",
 );
 
-/// Seals `topic` from the fuzz seed `seed` of golden flight `golden`.
-fn sealed_topic_record(topic: &str, golden: &str, seed: &str) -> (Vec<u8>, Vec<u8>, [u8; 32]) {
+/// Seals `topic` from `log` against the baseline of golden flight `golden`.
+fn sealed_topic_record((topic, golden, log): SealedCase) -> (Vec<u8>, Vec<u8>, [u8; 32]) {
     let dir = scratch();
     let (key, public) = keygen(&dir.join("k"));
     let rules = dir.join("rules.toml");
     let rules_text = std::fs::read_to_string(root().join(RULES)).unwrap()
         + &format!("\n[sealed_topics]\ntopics = [\"{topic}\"]\n");
     std::fs::write(&rules, rules_text).unwrap();
-    let log = format!("fuzz/seeds/ulog_ingest/{seed}.ulg");
     let baseline = format!("testdata/baselines/{golden}.params");
     let o = sfr(&[
         "seal",
-        &log,
+        log,
         "--rules",
         rules.to_str().unwrap(),
         "--baseline",
@@ -392,7 +395,11 @@ fn sealed_topic_record(topic: &str, golden: &str, seed: &str) -> (Vec<u8>, Vec<u
         "--seal-time",
         SEAL_TIME,
     ]);
-    let record = dir.join(format!("{seed}.sfr"));
+    let stem = std::path::Path::new(log)
+        .file_stem()
+        .unwrap()
+        .to_string_lossy();
+    let record = dir.join(format!("{stem}.sfr"));
     assert!(record.exists(), "{}", text(&o));
     let rec = std::fs::read(record).unwrap();
     assert!(
@@ -407,6 +414,7 @@ fn sealed_topic_record(topic: &str, golden: &str, seed: &str) -> (Vec<u8>, Vec<u
 }
 
 /// 1,000 seeded single-byte flips inside sealed topic messages in the log (Change Order 01).
+/// Deep verify must name the topic and the instance whose message was flipped.
 #[test]
 fn a_thousand_flips_in_sealed_topic_messages_name_the_topic_and_instance() {
     flips_in_sealed_topic_messages(BATTERY_STATUS, 0x5eed_0003);
@@ -417,30 +425,36 @@ fn a_thousand_flips_in_vision_odometry_messages_name_the_topic_and_instance() {
     flips_in_sealed_topic_messages(VISUAL_ODOMETRY, 0x5eed_0103);
 }
 
-fn flips_in_sealed_topic_messages((topic, golden, seed): (&str, &str, &str), rng_seed: u64) {
-    let (rec, ulg, pk) = sealed_topic_record(topic, golden, seed);
+#[test]
+fn a_thousand_flips_in_custom_topic_messages_name_the_topic_and_instance() {
+    flips_in_sealed_topic_messages(CUSTOM_DETECTION, 0x5eed_0203);
+}
+
+fn flips_in_sealed_topic_messages(case: SealedCase, rng_seed: u64) {
+    let topic = case.0;
+    let (rec, ulg, pk) = sealed_topic_record(case);
     let crypto = RustCrypto;
     assert!(verify(&rec, Some(&mut &ulg[..]), &crypto, &pk, false).is_ok());
-    let spans: Vec<(usize, usize)> = data_records(&ulg)
+    let spans: Vec<(usize, usize, u8)> = data_records(&ulg)
         .into_iter()
-        .filter(|(_, _, t)| t == topic)
-        .map(|(at, len, _)| (at, len))
+        .filter(|(_, _, t, _)| t == topic)
+        .map(|(at, len, _, multi_id)| (at, len, multi_id))
         .collect();
     assert!(!spans.is_empty());
     let mut rng = Rng(rng_seed);
     for i in 0..1000 {
-        let (start, len) = spans[(rng.next() % spans.len() as u64) as usize];
+        let (start, len, multi_id) = spans[(rng.next() % spans.len() as u64) as usize];
         let at = start + (rng.next() % len as u64) as usize;
         let x = (rng.next() % 255 + 1) as u8;
         let mut t = ulg.clone();
         t[at] ^= x;
+        let named = format!("sealed topic {topic} instance {multi_id} ");
         match verify(&rec, Some(&mut &t[..]), &crypto, &pk, false) {
             Err(VerifyError::Mismatch(m)) => {
                 let all: Vec<&String> = std::iter::once(&m.first).chain(&m.also).collect();
                 assert!(
-                    all.iter()
-                        .any(|l| l.starts_with(&format!("sealed topic {topic} instance 0 "))),
-                    "{topic} flip {i} at byte {at} (xor {x:#04x}) did not name the sealed topic: {all:?}"
+                    all.iter().any(|l| l.starts_with(&named)),
+                    "{topic} flip {i} at byte {at} (xor {x:#04x}) did not name {named:?}: {all:?}"
                 );
             }
             other => {
@@ -450,8 +464,9 @@ fn flips_in_sealed_topic_messages((topic, golden, seed): (&str, &str, &str), rng
     }
 }
 
-/// 1,000 seeded single-byte flips inside the sealed topic digest in the record. Standalone
-/// verify fails on every one; deep verify also names the sealed topic and instance.
+/// 1,000 seeded single-byte flips inside the sealed topic digests in the record. Standalone
+/// verify fails on every one; for each flip that leaves the record readable, deep verify names
+/// the topic and the instance of the digest entry that was flipped.
 #[test]
 fn a_thousand_flips_in_a_sealed_topic_digest_fail_and_deep_verify_names_it() {
     flips_in_a_sealed_topic_digest(BATTERY_STATUS, 0x5eed_0004);
@@ -462,12 +477,32 @@ fn a_thousand_flips_in_a_vision_odometry_digest_fail_and_deep_verify_names_it() 
     flips_in_a_sealed_topic_digest(VISUAL_ODOMETRY, 0x5eed_0104);
 }
 
-fn flips_in_a_sealed_topic_digest((topic, golden, seed): (&str, &str, &str), rng_seed: u64) {
-    let (rec, ulg, pk) = sealed_topic_record(topic, golden, seed);
+#[test]
+fn a_thousand_flips_in_a_custom_topic_digest_fail_and_deep_verify_names_it() {
+    flips_in_a_sealed_topic_digest(CUSTOM_DETECTION, 0x5eed_0204);
+}
+
+fn flips_in_a_sealed_topic_digest(case: SealedCase, rng_seed: u64) {
+    let topic = case.0;
+    let (rec, ulg, pk) = sealed_topic_record(case);
     let crypto = RustCrypto;
     let text = String::from_utf8_lossy(&rec).into_owned();
     let start = text.find("\"sealed_topics\":[").unwrap();
     let end = start + text[start..].find(']').unwrap();
+    // Each digest entry is a flat object; deep verify names an entry by the instance the log
+    // gives at that position, which is the instance the record holds there.
+    let entries: Vec<(usize, String)> = text[start..end]
+        .match_indices('{')
+        .map(|(i, _)| {
+            let obj = &text[start + i..end];
+            let obj = &obj[..obj.find('}').unwrap()];
+            let id = obj.split("\"multi_id\":").nth(1).unwrap();
+            (start + i, id[..id.find(',').unwrap()].to_string())
+        })
+        .collect();
+    let mut instances: Vec<&str> = entries.iter().map(|(_, id)| id.as_str()).collect();
+    instances.dedup();
+    assert!(!entries.is_empty());
     let mut rng = Rng(rng_seed);
     for i in 0..1000 {
         let at = start + (rng.next() % (end - start) as u64) as usize;
@@ -487,18 +522,25 @@ fn flips_in_a_sealed_topic_digest((topic, golden, seed): (&str, &str, &str), rng
         {
             let readable = sfr_core::json::parse(&t).is_ok() && !m.first.contains("canonical");
             if readable && !m.first.starts_with("field ") && !m.first.starts_with("unknown field") {
+                let entry = entries.iter().rev().find(|(from, _)| *from <= at);
                 let all: Vec<&String> = std::iter::once(&m.first).chain(&m.also).collect();
+                let named = match entry {
+                    Some((_, id)) => format!("sealed topic {topic} instance {id} "),
+                    None => format!("sealed topic {topic} instance "),
+                };
                 assert!(
-                    all.iter().any(|l| l.starts_with("sealed topic ")),
-                    "{topic} flip {i} at byte {at} (xor {x:#04x}): {all:?}"
+                    all.iter().any(|l| l.starts_with(&named)),
+                    "{topic} flip {i} at byte {at} (xor {x:#04x}) did not name {named:?}: {all:?}"
                 );
             }
         }
     }
+    assert_eq!(instances.len(), entries.len(), "one entry per instance");
 }
 
-/// Offsets of the data payloads of every 'D' record, with their topic names.
-fn data_records(log: &[u8]) -> Vec<(usize, usize, String)> {
+/// Offsets and lengths of the data payloads of every 'D' record, with their topic names and
+/// instances (`multi_id`).
+fn data_records(log: &[u8]) -> Vec<(usize, usize, String, u8)> {
     let mut topics = std::collections::BTreeMap::new();
     let mut out = Vec::new();
     let mut pos = 16;
@@ -509,19 +551,53 @@ fn data_records(log: &[u8]) -> Vec<(usize, usize, String)> {
         if ty == b'A' {
             topics.insert(
                 u16::from_le_bytes([body[1], body[2]]),
-                String::from_utf8_lossy(&body[3..]).into_owned(),
+                (String::from_utf8_lossy(&body[3..]).into_owned(), body[0]),
             );
         } else if ty == b'D' {
             let id = u16::from_le_bytes([body[0], body[1]]);
-            out.push((
-                pos + 5,
-                size - 2,
-                topics.get(&id).cloned().unwrap_or_default(),
-            ));
+            let (topic, multi_id) = topics.get(&id).cloned().unwrap_or_default();
+            out.push((pos + 5, size - 2, topic, multi_id));
         }
         pos += 3 + size;
     }
     out
+}
+
+/// The `sfr_verify` fuzz seeds must stay valid records listed in the fuzz target: when a record
+/// format change leaves them stale, the target's "only the seeds verify" check becomes vacuous
+/// and mutations no longer reach the Merkle and signature code (fuzz/README.md says how to
+/// re-seal them).
+#[test]
+fn the_sfr_verify_fuzz_seeds_verify_and_are_listed_in_the_target() {
+    let pk = pubkey(
+        root()
+            .join("fuzz/seeds/sfr_verify_key.pub")
+            .to_str()
+            .unwrap(),
+    );
+    let target = std::fs::read_to_string(root().join("fuzz/fuzz_targets/sfr_verify.rs")).unwrap();
+    let mut seeds = 0;
+    for e in std::fs::read_dir(root().join("fuzz/seeds/sfr_verify")).unwrap() {
+        let p = e.unwrap().path();
+        let name = p.file_name().unwrap().to_string_lossy().into_owned();
+        let rec = std::fs::read(&p).unwrap();
+        assert!(
+            verify(&rec, None, &RustCrypto, &pk, false).is_ok(),
+            "fuzz seed {name} no longer verifies; re-seal the seeds (fuzz/README.md)"
+        );
+        assert!(
+            target.contains(&format!("../seeds/sfr_verify/{name}")),
+            "fuzz seed {name} is not listed in fuzz/fuzz_targets/sfr_verify.rs"
+        );
+        seeds += 1;
+    }
+    assert_eq!(
+        target
+            .matches("include_bytes!(\"../seeds/sfr_verify/")
+            .count(),
+        seeds,
+        "the target lists exactly the seed files"
+    );
 }
 
 #[test]
@@ -610,9 +686,9 @@ fn mismatches_are_named_precisely() {
 
     // 3. One byte elsewhere (a data field of a topic sfr does not read): log digest mismatch.
     let mut ulg = std::fs::read(root().join(log)).unwrap();
-    let (off, len, topic) = data_records(&ulg)
+    let (off, len, topic, _) = data_records(&ulg)
         .into_iter()
-        .find(|(_, len, t)| t == "sensor_combined" && *len > 12)
+        .find(|(_, len, t, _)| t == "sensor_combined" && *len > 12)
         .unwrap();
     ulg[off + len - 1] ^= 0x01;
     let edited = dir.join("elsewhere.ulg");

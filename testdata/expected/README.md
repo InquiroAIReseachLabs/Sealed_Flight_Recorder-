@@ -20,7 +20,9 @@ output to match byte for byte, with the exit code listed there.
 `oracle/<name>.oracle.json` comes from `scripts/testdata/oracle.py`, an independent implementation of
 SPEC B1.5, B1.6 and B1.7 written on pyulog, with its own ULog record reader for the sealed topic
 digests of `docs/RECORD_FORMAT.md`. It reads the same rules file `<rules>` as the seal above. It
-shares no code with `sfr` and was written without reading `crates/`.
+shares no code with `sfr` and was written without reading `crates/`. Its scope is logs pyulog
+reads to the end: pyulog drops the data after a format record that redefines a topic in the data
+section, which `sfr` reads, and the oracle says so on stderr; no golden log has one.
 `scripts/testdata/compare_oracle.py` compares, for each log:
 
 - the configuration (every parameter and its typed value) and `config.watched_parameters` (the
@@ -33,7 +35,8 @@ shares no code with `sfr` and was written without reading `crates/`.
   (COMMAND), `direction` (VTOL_*), `vtol_fixed_wing_system_failure` (QUADCHUTE), `name`, `old` and
   `new` (PARAM_CHANGED_IN_FLIGHT), `level` and `text` (LOG_MESSAGE), `duration_ms` (LOG_DROPOUT);
 - the status of R1, R4, R5, R6 and R7, and the topics and fields R1 reports missing (the rules
-  file's required topics plus every sealed topic). The oracle's R4 follows SPEC B1.6: the window
+  file's required topics, every sealed topic, and with `[authorized_sources]` `vehicle_command`
+  and the three fields R7 reads). The oracle's R4 follows SPEC B1.6: the window
   runs from the ARM sample through the sample that disarms, and the quadchute check reads the VTOL
   state only on a VTOL vehicle. Its R4 was re-derived from that wording at the Chunk 3 gate by a
   pass that did not read `crates/`;
@@ -58,8 +61,10 @@ but only R7's status is compared. What the golden files exercise: `vtol_type` is
 the three `v1.17.0_vtol_*` logs, `tailsitter` (0) on `v1.17.0_gz_quadtailsitter_transition`, value
 null and name `unknown` on `synthetic_r4_quadchute_on_disarm` (a VTOL log with no `VT_TYPE`), and
 null on the others; COMMAND events of both categories occur; R7 is FAIL on
-`v1.17.0_payload_two_sources`, whose rules file lists two of its three command sources, and N/A on
-every other golden file (R7's PASS path is covered by `seal_dry_run.rs`, not by a golden file);
+`v1.17.0_payload_two_sources`, whose rules file lists two of its four command sources (the ground
+station 255/190 and the vehicle 6/1), so R7 names the second source 42/191 and the arbitrary
+source of PX4's boot-time DO_GRIPPER (`docs/DIAGNOSTIC.md` item 12.3), and N/A on every other
+golden file (R7's PASS path is covered by `seal_dry_run.rs`, not by a golden file);
 sealed topics are `vehicle_visual_odometry` on `v1.17.0_gz_x500_vision_hover` (one instance) and
 `custom_detection` on `synthetic_custom_detection` (three instances, one with no data record).
 

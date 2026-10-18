@@ -3,7 +3,9 @@
 #
 #   1. No em-dash (U+2014) in Markdown, the sandbox page, scripts, or Rust sources (the
 #      .sfr.md report and CLI tables are generated from Rust string literals).
-#   2. If a local, git-ignored file named .forbidden-terms exists (one term per line: target
+#   2. No weapon or strike terminology in any text file (Change Order 01 language gate). This
+#      script is the one file exempt, because it holds the list.
+#   3. If a local, git-ignored file named .forbidden-terms exists (one term per line: target
 #      company, aircraft, customer names, internal codenames), none of them appears in any
 #      tracked or untracked-but-not-ignored file, case-insensitively. The terms file itself
 #      must never be committed, which is why the scan is optional and .gitignore lists it.
@@ -49,6 +51,21 @@ scan_compliance() {
   hits="$(cd "$dir" && candidate_files . \
     | grep -zE '\.(md|rs|html|js|txt)$' | grep -zvE '^(docs/SPEC\.md|docs/DIAGNOSTIC\.md|CLAUDEME\.md)$' \
     | xargs -0 -r grep -n -i -E -- "$COMPLIANCE_RE" 2>/dev/null || true)"
+  if [ -n "$hits" ]; then printf '%s\n' "$hits"; return 1; fi
+  return 0
+}
+
+# Weapon and strike terminology (case-insensitive, whole words), banned in every text file of the
+# repository: code, tests, examples, docs, and test data. Generic words that PX4 uses for other
+# meanings ("target", "payload", "release") are not on the list.
+WEAPON_RE='\b(weapon(s|ry|i[sz]e[sd]?|i[sz]ation)?|munitions?|warheads?|ordnance|missiles?|bomb(s|ing|er|ers)?|kill ?chains?|lethal(ity)?|air ?strikes?|strikes?|combat|battlefields?)\b'
+
+# Prints weapon or strike terminology under a work tree; returns 1 if any.
+scan_weapon() {
+  local dir="$1" hits
+  hits="$(cd "$dir" && candidate_files . \
+    | grep -zvE '\.(ulg|sfr|png|jpe?g|gif|ico|wasm|pdf)$' | grep -zv -x -F -- 'scripts/check_language.sh' \
+    | xargs -0 -r grep -n -i -I -E -- "$WEAPON_RE" 2>/dev/null || true)"
   if [ -n "$hits" ]; then printf '%s\n' "$hits"; return 1; fi
   return 0
 }
@@ -110,7 +127,19 @@ if [ "${1:-}" = "--self-test" ]; then
     printf '%s\n' "$out" | grep -q "^docs/FORMERLY_APPROVED.md:$n:" || { echo "FAIL: self-test: validated claim on line $n missed"; exit 1; }
   done
 
-  echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing)"
+  # Weapon and strike terms: caught in a doc, a test, and a rules example; words that only
+  # contain a term ("strikethrough", "combative") and PX4's generic words are not.
+  printf 'A loitering munition test.\n' > "$tmp/docs/USES.md"
+  printf '// simulate a strike\n' > "$tmp/flight_test.rs"
+  printf '# combat profile\n' > "$tmp/rules.example.toml"
+  printf 'strikethrough text, a combative tone, target_system, payload release\n' > "$tmp/fine.md"
+  out="$(scan_weapon "$tmp" || true)"
+  printf '%s\n' "$out" | grep -q '^docs/USES.md:1:' || { echo "FAIL: self-test: munition missed"; exit 1; }
+  printf '%s\n' "$out" | grep -q '^flight_test.rs:1:' || { echo "FAIL: self-test: strike missed"; exit 1; }
+  printf '%s\n' "$out" | grep -q '^rules.example.toml:1:' || { echo "FAIL: self-test: combat missed"; exit 1; }
+  printf '%s\n' "$out" | grep -q '^fine.md' && { echo "FAIL: self-test: false positive on fine.md"; exit 1; }
+
+  echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing; weapon and strike terms)"
   exit 0
 fi
 
@@ -131,6 +160,14 @@ if hits="$(scan_compliance "$root")"; then
   echo "PASS: no compliance claims (SPEC B1.12)"
 else
   echo "FAIL: compliance claim found (SPEC B1.12):"
+  printf '%s\n' "$hits"
+  status=1
+fi
+
+if hits="$(scan_weapon "$root")"; then
+  echo "PASS: no weapon or strike terminology"
+else
+  echo "FAIL: weapon or strike terminology found (Change Order 01):"
   printf '%s\n' "$hits"
   status=1
 fi
