@@ -214,17 +214,20 @@ fn sealing_twice_is_byte_identical_and_failing_rules_still_write() {
 }
 
 #[test]
-fn verify_with_ulog_replays_every_golden_log() {
+fn every_golden_log_seals_byte_identically_twice_and_replays() {
     let dir = scratch();
     let (key, public) = keygen(&dir.join("k"));
     for (name, log, code) in GOLDEN {
-        let (record, sealed_code) = seal(
-            log,
-            &format!("testdata/baselines/{name}.params"),
-            &key,
-            &dir.join(name),
-        );
+        let baseline = format!("testdata/baselines/{name}.params");
+        let (record, sealed_code) = seal(log, &baseline, &key, &dir.join(name).join("a"));
         assert_eq!(sealed_code, *code, "{log}");
+        let (again, again_code) = seal(log, &baseline, &key, &dir.join(name).join("b"));
+        assert_eq!(again_code, *code, "{log}");
+        assert_eq!(
+            std::fs::read(&record).unwrap(),
+            std::fs::read(&again).unwrap(),
+            "{log}: two seals with the same key and --seal-time differ"
+        );
         let o = sfr(&["verify", &record, "--pubkey", &public, "--ulog", log]);
         assert_eq!(o.status.code(), Some(0), "{log}: {}", text(&o));
         let t = text(&o);
@@ -248,8 +251,9 @@ impl Rng {
     }
 }
 
+/// 1,000 single-byte flips: seeded offsets (an offset may repeat) and nonzero XOR values.
 #[test]
-fn every_single_byte_flip_in_a_record_fails_verification() {
+fn a_thousand_seeded_byte_flips_in_a_record_all_fail_verification() {
     let dir = scratch();
     let (key, public) = keygen(&dir.join("k"));
     let (record, _) = seal(
@@ -275,8 +279,9 @@ fn every_single_byte_flip_in_a_record_fails_verification() {
     }
 }
 
+/// 1,000 single-byte flips: seeded offsets (an offset may repeat) and nonzero XOR values.
 #[test]
-fn every_single_byte_flip_in_a_log_fails_verification() {
+fn a_thousand_seeded_byte_flips_in_a_log_all_fail_verification() {
     let dir = scratch();
     let (key, public) = keygen(&dir.join("k"));
     // A complete log small enough to re-read 1,000 times (the shrunk fuzz seed).

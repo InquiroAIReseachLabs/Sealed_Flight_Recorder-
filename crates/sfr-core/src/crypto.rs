@@ -114,7 +114,9 @@ pub mod fips {
     use aws_lc_rs::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
     use zeroize::Zeroizing;
 
-    /// Handle proving the module passed its power-on self-tests and runs in approved mode.
+    /// Handle to the module after its FIPS-mode check. The module's power-on self-tests run
+    /// in a constructor before `main` and abort the process on failure, so a running `sfr`
+    /// has passed them. The FIPS-mode check reports that the module was built with FIPS mode on.
     #[derive(Debug)]
     pub struct Fips {
         _private: (),

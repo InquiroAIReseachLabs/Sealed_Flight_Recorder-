@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # validate.sh: CLAUDEME pre-commit gate. RUN THIS BEFORE EVERY COMMIT.
-# Runs the same checks CI runs. Exits non-zero on any FAIL.
+# Runs the checks of every CI job except two that need their own build: the fuzz job
+# (pinned nightly and cargo-fuzz) and the release-build verify timing gate. Exits non-zero
+# on any FAIL.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,6 +30,7 @@ run "forbid(unsafe_code) in every crate root" check_forbid_unsafe
 run "rustfmt --check" cargo fmt --all --check
 run "clippy -D warnings" cargo clippy --workspace --all-targets --locked --quiet -- -D warnings
 run "cargo test --locked" cargo test --workspace --locked --quiet
+run "golden files agree with the independent oracle" scripts/testdata/regenerate.sh compare
 
 # 3. No networking or async-runtime crates; no std::net (SPEC B1.10, "No network").
 run "deny-list self-test" scripts/check_deny_list.sh --self-test
@@ -55,7 +58,7 @@ check_crypto_graph() {
 run "cargo tree -p sfr: no sha2, ed25519-dalek, or aws-lc-sys" check_crypto_graph
 
 # 5. Supply chain: licenses, advisories, bans, sources (SPEC B1.10, "Supply chain").
-# A missing tool is a failure, never a skip: validate.sh must stay a superset of CI.
+# A missing tool is a failure, never a skip: validate.sh must keep every check it shares with CI.
 check_cargo_deny() {
   command -v cargo-deny >/dev/null 2>&1 \
     || { echo "  cargo-deny not installed. Install: cargo install cargo-deny --locked"; return 1; }
