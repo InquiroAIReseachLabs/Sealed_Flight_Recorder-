@@ -115,7 +115,7 @@ jobs:
         run: scripts/testdata/regenerate.sh compare
 
   fuzz:
-    name: fuzz ulog_ingest and sfr_verify for 60 s each (SPEC B1.10)
+    name: fuzz ulog_ingest, sfr_verify and rules_parse for 60 s each (SPEC B1.10)
     runs-on: ubuntu-latest
     env:
       # cargo-fuzz sets its own sanitizer flags; -D warnings still applies to the target.
@@ -132,7 +132,7 @@ jobs:
           set -euo pipefail
           echo "| Target | libFuzzer summary |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
-          for t in ulog_ingest sfr_verify; do
+          for t in ulog_ingest sfr_verify rules_parse; do
             mkdir -p fuzz/corpus/$t
             cp fuzz/seeds/$t/* fuzz/corpus/$t/
             cargo +nightly-2026-10-18 fuzz run $t fuzz/corpus/$t -- \
@@ -178,5 +178,5 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Language self-test
         run: scripts/check_language.sh --self-test
-      - name: No em-dash in docs, site, or scripts
+      - name: No em-dash, compliance claim, or banned term (scripts/check_language.sh)
         run: scripts/check_language.sh

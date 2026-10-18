@@ -891,6 +891,52 @@ fn a_sealed_topic_missing_from_the_log_fails_r1_and_names_it() {
     }
 }
 
+/// Change Order 01 gate: removing a declared topic's data from a log that had it fails R1 with
+/// exit 2 and names the topic. The vision flight's seed keeps its `vehicle_visual_odometry`
+/// subscription ('A' record) but loses every data record of it.
+#[test]
+fn removing_a_sealed_topics_data_from_its_log_fails_r1_and_names_it() {
+    let seed = "fuzz/seeds/ulog_ingest/sitl_v1.17.0_gz_x500_vision_hover_shrunk.ulg";
+    let log = std::fs::read(root().join(seed)).unwrap();
+    let mut out = log[..16].to_vec();
+    let (mut ids, mut dropped) = (std::collections::BTreeSet::new(), 0);
+    let mut pos = 16;
+    while pos + 3 <= log.len() {
+        let size = u16::from_le_bytes([log[pos], log[pos + 1]]) as usize;
+        let body = &log[pos + 3..pos + 3 + size];
+        match log[pos + 2] {
+            b'A' if &body[3..] == b"vehicle_visual_odometry" => {
+                ids.insert([body[1], body[2]]);
+            }
+            b'D' if ids.contains(&[body[0], body[1]]) => {
+                dropped += 1;
+                pos += 3 + size;
+                continue;
+            }
+            _ => {}
+        }
+        out.extend_from_slice(&log[pos..pos + 3 + size]);
+        pos += 3 + size;
+    }
+    assert!(dropped > 0, "the seed has vehicle_visual_odometry data");
+    let edited = scratch().join("vision_without_odometry.ulg");
+    std::fs::write(&edited, out).unwrap();
+    let o = dry_run(
+        edited.to_str().unwrap(),
+        "testdata/rules/v1.17.0_gz_x500_vision_hover.toml",
+        "testdata/baselines/v1.17.0_gz_x500_vision_hover.params",
+        false,
+    );
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert!(
+        stdout(&o).contains(
+            "R1    FAIL    required topics present       missing: vehicle_visual_odometry"
+        ),
+        "{}",
+        stdout(&o)
+    );
+}
+
 /// Change Order 01 gate: the Gazebo vision flight seals `vehicle_visual_odometry`, a real PX4
 /// topic, and the synthetic fixture seals `custom_detection`, a topic PX4 does not define.
 #[test]

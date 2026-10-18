@@ -1,0 +1,101 @@
+# sfr rules file: core rules R1 to R6, the optional rule R7 (commented out below), and the
+# optional example rules X1 to X5.
+#
+# Every threshold below is a placeholder that shows the syntax. It is not a recommendation
+# for any aircraft. Each one is set by your flight-test lead.
+format = "sfr-rules/1"
+
+[required_topics]
+topics = ["vehicle_status", "failsafe_flags"]
+
+[parameters]
+compare = "all"
+ignore = [
+  "COM_FLIGHT_UUID",
+  "LND_FLIGHT_T_HI",
+  "LND_FLIGHT_T_LO",
+  "EKF2_MAG_DECL",
+  "CAL_BARO*_OFF",
+  "ASPD_SCALE_*",
+  "COM_MODE*_HASH",
+]
+
+# Watched parameters (Change Order 01): R3 compares them like every other parameter; the
+# results table and the report show them in their own "Transition tuning" section, and the
+# record lists them in config.watched_parameters. VTOL transition tuning; every name is defined
+# in PX4 v1.14 and v1.17 (docs/DIAGNOSTIC.md item 12).
+[watched_parameters]
+names = [
+  "VT_F_TRANS_DUR",    # front transition duration
+  "VT_B_TRANS_DUR",    # maximum back transition duration
+  "VT_TRANS_MIN_TM",   # front transition minimum time
+  "VT_TRANS_TIMEOUT",  # front transition timeout
+  "VT_ARSP_TRANS",     # transition airspeed
+  "VT_PITCH_MIN",      # minimum pitch angle during hover
+  "VT_FW_DIFTHR_EN",   # differential thrust in forward flight (bitmask)
+  "VT_FW_DIFTHR_S_R",  # roll differential thrust factor
+  "VT_FW_DIFTHR_S_P",  # pitch differential thrust factor
+  "VT_FW_DIFTHR_S_Y",  # yaw differential thrust factor
+]
+
+# COMMAND events with these ids are category PAYLOAD; every other command is GENERAL.
+# Ids and names from PX4's VehicleCommand.msg, the same in v1.14 and v1.17 (docs/DIAGNOSTIC.md
+# item 12). Flight termination (185) and parachute (208) are safety commands and stay GENERAL.
+[payload_commands]
+ids = [
+  184,    # VEHICLE_CMD_DO_REPEAT_SERVO
+  187,    # VEHICLE_CMD_DO_SET_ACTUATOR
+  203,    # VEHICLE_CMD_DO_DIGICAM_CONTROL
+  206,    # VEHICLE_CMD_DO_SET_CAM_TRIGG_DIST
+  211,    # VEHICLE_CMD_DO_GRIPPER
+  214,    # VEHICLE_CMD_DO_SET_CAM_TRIGG_INTERVAL
+  260,    # VEHICLE_CMD_OBLIQUE_SURVEY
+  2000,   # VEHICLE_CMD_IMAGE_START_CAPTURE
+  2003,   # VEHICLE_CMD_DO_TRIGGER_CONTROL
+  30001,  # VEHICLE_CMD_PAYLOAD_PREPARE_DEPLOY
+  30002,  # VEHICLE_CMD_PAYLOAD_CONTROL_DEPLOY
+  42600,  # VEHICLE_CMD_DO_WINCH
+]
+
+# R7, authorized command sources: every COMMAND event (or, with category, every command of
+# that category) must come from one of these MAVLink system and component ids. Off by default:
+# only the operator knows their own ids. Source ids are what the log recorded; MAVLink source
+# ids are self-reported unless MAVLink message signing is enabled on the link. PX4 v1.17 logs
+# start with a DO_GRIPPER (211, PAYLOAD) that PX4 itself publishes with arbitrary source ids
+# (docs/DIAGNOSTIC.md item 12.3), so with category "PAYLOAD" or no category R7 reports it on
+# every v1.17 flight; with category "GENERAL" it is not checked.
+# [authorized_sources]
+# category = "PAYLOAD"
+# sources = [
+#   { system = 1, component = 1 },     # the autopilot itself
+#   { system = 255, component = 190 }, # the ground control station
+# ]
+
+# Sealed topics: each listed topic is required (R1), and the record holds a digest of each of
+# its instances: format, message count, first and last timestamp, and data. Up to 64 topics.
+# [sealed_topics]
+# topics = ["vehicle_visual_odometry"]
+
+# X1: lowest battery_status.remaining (fraction 0 to 1) while armed.
+# Threshold set by your flight-test lead.
+[extended.min_battery]
+min_remaining = 0.25
+
+# X2: vehicle_gps_position at each ARM.
+# fix_type: 2 is a 2D fix, 3 a 3D fix. Thresholds set by your flight-test lead.
+[extended.gps_fix_at_arm]
+min_fix_type = 3
+min_satellites = 8
+
+# X3: any nonzero estimator_status.filter_fault_flags on the primary estimator while armed.
+[extended.estimator_faults]
+
+# X4: vehicle_imu_status for the accelerometer named in sensor_selection, while armed.
+# Thresholds set by your flight-test lead.
+[extended.vibration]
+max_accel_vibration_metric = 3.0
+max_accel_clipping = 0
+
+# X5: total time of logging dropouts ('O' records). Threshold set by your flight-test lead.
+[extended.dropouts]
+max_total_ms = 0

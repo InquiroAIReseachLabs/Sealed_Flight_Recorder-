@@ -344,7 +344,8 @@ pub struct FlightLog {
     pub vehicle_status_fields: Vec<String>,
     /// Flattened field names of the `failsafe_flags` instance in use.
     pub failsafe_flags_fields: Vec<String>,
-    /// Flattened field names of `vehicle_command` (R1 checks the ones R7 reads).
+    /// Flattened field names that every `vehicle_command` subscription with data records has
+    /// (R1 checks the ones R7 reads); empty when no subscription has data.
     pub vehicle_command_fields: Vec<String>,
     /// `vehicle_status`, lowest instance.
     pub vehicle_status: Vec<VehicleStatusRow>,
@@ -680,6 +681,8 @@ struct Collector<'c> {
     // The flag schema of the last failsafe_flags layout seen, so subscriptions sharing a
     // layout share one schema.
     fs_schema: Option<(Rc<Layout>, Rc<Vec<FlagDef>>)>,
+    // Per vehicle_command subscription (msg_id): its layout, and whether it had a data record.
+    vc_subs: BTreeMap<u16, (Rc<Layout>, bool)>,
     flight: FlightLog,
     limit: Option<String>,
 }
@@ -790,10 +793,7 @@ impl Visitor for Collector<'_> {
                 }
             }
             "vehicle_command" => {
-                if self.flight.vehicle_command_fields.is_empty() {
-                    self.flight.vehicle_command_fields =
-                        l.fields.iter().map(|f| f.name.clone()).collect();
-                }
+                self.vc_subs.insert(msg_id, (Rc::clone(layout), false));
                 Decoder::Command {
                     command: small_uint(l, "command"),
                     src_sys: small_uint(l, "source_system"),
@@ -939,6 +939,9 @@ impl Visitor for Collector<'_> {
                 src_sys,
                 src_comp,
             } => {
+                if let Some((_, rows)) = self.vc_subs.get_mut(&msg_id) {
+                    *rows = true;
+                }
                 if let (Some(c), Some(s), Some(k)) = (
                     get_u64(command, p),
                     get_u64(src_sys, p),
@@ -1105,6 +1108,18 @@ impl Collector<'_> {
                 flags: inst.flags.as_ref().clone(),
                 rows: inst.rows,
             };
+        }
+        // vehicle_command: a field counts as present only if every subscription with data
+        // records has it (a later format record may redefine the topic for later
+        // subscriptions); a subscription without data records says nothing.
+        let mut with_rows = self.vc_subs.values().filter(|(_, rows)| *rows);
+        if let Some((first, _)) = with_rows.next() {
+            let rest: Vec<&Rc<Layout>> = with_rows.map(|(l, _)| l).collect();
+            let present: Vec<String> = names(first);
+            flight.vehicle_command_fields = present
+                .into_iter()
+                .filter(|n| rest.iter().all(|l| l.fields.iter().any(|f| &f.name == n)))
+                .collect();
         }
         let release = self.ver_sw_release;
         let firmware = Firmware {

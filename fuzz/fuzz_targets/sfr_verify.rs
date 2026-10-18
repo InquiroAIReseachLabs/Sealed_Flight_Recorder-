@@ -26,6 +26,8 @@ static SEEDS: LazyLock<Vec<[u8; 32]>> = LazyLock::new(|| {
         &include_bytes!("../seeds/sfr_verify/pyulog_sample_first_65516.sfr")[..],
         &include_bytes!("../seeds/sfr_verify/sitl_v1.17.0_failsafe_gps_loss_shrunk.sfr")[..],
         &include_bytes!("../seeds/sfr_verify/sitl_v1.17.0_vtol_transition_abort_shrunk.sfr")[..],
+        &include_bytes!("../seeds/sfr_verify/sitl_v1.17.0_gz_x500_vision_hover_shrunk.sfr")[..],
+        &include_bytes!("../seeds/sfr_verify/synthetic_custom_detection.sfr")[..],
     ]
     .iter()
     .map(|s| RustCrypto.sha256(s))
