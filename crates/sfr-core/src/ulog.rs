@@ -254,6 +254,23 @@ impl PartialEq for ParamValue {
 
 impl Eq for ParamValue {}
 
+impl ParamValue {
+    /// Parses the typed string form (`i32:5`, `f32:0.15`, `f32:NaN`, `f32:Infinity`). Only the
+    /// exact form [`fmt::Display`] writes is accepted, so each value has one spelling.
+    pub fn from_typed(text: &str) -> Option<ParamValue> {
+        let (ty, v) = text.split_once(':')?;
+        let v = match (ty, v) {
+            ("i32", i) => ParamValue::I32(i.parse().ok()?),
+            ("f32", "NaN") => ParamValue::F32(f32::NAN),
+            ("f32", "Infinity") => ParamValue::F32(f32::INFINITY),
+            ("f32", "-Infinity") => ParamValue::F32(f32::NEG_INFINITY),
+            ("f32", f) => ParamValue::F32(f.parse().ok()?),
+            _ => return None,
+        };
+        (v.to_string() == text).then_some(v)
+    }
+}
+
 impl fmt::Display for ParamValue {
     /// Typed string form used in the record (SPEC B1.7): `i32:5`, `f32:0.15`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -594,8 +611,9 @@ impl Flattener<'_> {
         for def in defs {
             let count = def.array.unwrap_or(1);
             for i in 0..count {
-                // "[65535]" adds at most 7 bytes to the name.
-                if prefix.len() + def.name.len() + 7 > MAX_NAME_LEN {
+                // An array element adds "[i]", at most 7 bytes ("[65535]").
+                let suffix = if def.array.is_some() { 7 } else { 0 };
+                if prefix.len() + def.name.len() + suffix > MAX_NAME_LEN {
                     return Err(malformed(
                         self.offset,
                         format!("flattened field name longer than {MAX_NAME_LEN} bytes"),
@@ -740,6 +758,12 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
         version: hc.u8("version")?,
         timestamp: hc.u64("start timestamp")?,
     };
+    if header.version > 1 {
+        return Err(malformed(
+            7,
+            format!("unsupported ULog file format version {}", header.version),
+        ));
+    }
     visitor.header(&header);
 
     let mut summary = Summary::default();
@@ -751,6 +775,7 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
     let mut last_ts = header.timestamp;
     let mut body: Vec<u8> = Vec::with_capacity(4096);
     let mut field_budget = MAX_TOTAL_FIELDS;
+    let mut format_fields = 0usize;
 
     loop {
         while pending.first().is_some_and(|&o| src.pos >= o) {
@@ -821,6 +846,13 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
             }
             b'F' => {
                 let (name, defs) = parse_format(&body, start)?;
+                format_fields = format_fields.saturating_add(defs.len());
+                if format_fields > MAX_TOTAL_FIELDS {
+                    return Err(malformed(
+                        start,
+                        format!("more than {MAX_TOTAL_FIELDS} fields across all formats"),
+                    ));
+                }
                 formats.insert(name, defs);
             }
             b'I' => {
@@ -840,6 +872,12 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                 let (ptype, name) = key.split_once(' ').ok_or_else(|| {
                     malformed(start, format!("parameter key `{key}` has no type"))
                 })?;
+                if !crate::params::valid_param_name(name) {
+                    return Err(malformed(
+                        start,
+                        format!("`{name}` is not a parameter name (1 to 16 letters, digits, `_`)"),
+                    ));
+                }
                 let raw = c.take(4, "parameter value")?;
                 let raw: [u8; 4] = raw
                     .try_into()
@@ -942,6 +980,15 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
             }
             _ => {}
         }
+    }
+    // An appended-data offset the file never reached means the file was cut short.
+    if let Some(&off) = pending.first()
+        && off > src.pos
+    {
+        return Err(UlogError::Truncated {
+            offset: src.pos,
+            what: "data before an appended-data offset",
+        });
     }
     summary.bytes = src.pos;
     Ok(summary)
@@ -1248,6 +1295,30 @@ pub(crate) mod tests {
         assert_eq!(ParamValue::F32(f32::NAN).to_string(), "f32:NaN");
         assert_eq!(ParamValue::I32(-3).to_string(), "i32:-3");
         assert!(ParamValue::F32(0.0).same_as(&ParamValue::F32(-0.0)));
+        for t in [
+            "i32:-3",
+            "f32:0.15",
+            "f32:NaN",
+            "f32:-0",
+            "f32:Infinity",
+            "f32:2.4414062",
+        ] {
+            assert_eq!(
+                ParamValue::from_typed(t).map(|v| v.to_string()).as_deref(),
+                Some(t)
+            );
+        }
+        for t in [
+            "i32:+3",
+            "f32:0.150",
+            "f32:nan",
+            "f32:1e3",
+            "u8:1",
+            "i32:",
+            "f32:2.4414063",
+        ] {
+            assert_eq!(ParamValue::from_typed(t), None, "{t}");
+        }
         assert!(ParamValue::F32(f32::NAN).same_as(&ParamValue::F32(f32::from_bits(0x7fc0_0001))));
         assert!(!ParamValue::F32(f32::NAN).same_as(&ParamValue::F32(0.0)));
         assert!(!ParamValue::F32(1.0).same_as(&ParamValue::I32(1)));

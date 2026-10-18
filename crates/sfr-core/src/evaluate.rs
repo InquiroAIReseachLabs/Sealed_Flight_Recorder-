@@ -338,8 +338,11 @@ fn r4(f: &FlightLog) -> RuleResult {
         if armed && !was_armed {
             last_arm = Some(r.id.ts);
         }
+        // The row that disarms still belongs to the flight: a failsafe that disarms the
+        // vehicle (or appears together with the disarm) is a failsafe in flight.
+        let in_flight = armed || was_armed;
         was_armed = armed;
-        let now = armed && r.failsafe == Some(true);
+        let now = in_flight && r.failsafe == Some(true);
         if now && !active {
             failsafes += 1;
             detail.push(|| {
@@ -546,6 +549,13 @@ fn in_armed(armed: &[ArmedInterval], t: u64) -> bool {
     armed_sample(armed, t)
 }
 
+/// Index of the armed interval holding a sample at `t`.
+fn armed_index(armed: &[ArmedInterval], t: u64) -> Option<usize> {
+    let n = armed.partition_point(|a| a.arm <= t);
+    let i = n.checked_sub(1)?;
+    armed.get(i).filter(|a| a.contains_sample(t)).map(|_| i)
+}
+
 fn need_armed(
     id: &'static str,
     name: &'static str,
@@ -584,7 +594,8 @@ fn x1(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::MinBattery) -> R
         if !in_armed(armed, b.id.ts) || b.connected == Some(false) {
             continue;
         }
-        let Some(rem) = b.remaining.filter(|r| r.is_finite()) else {
+        // PX4 reports -1 when the remaining capacity is unknown (battery_status.msg).
+        let Some(rem) = b.remaining.filter(|r| r.is_finite() && *r >= 0.0) else {
             continue;
         };
         if min.is_none_or(|(m, _, _)| rem < m) {
@@ -601,7 +612,9 @@ fn x1(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::MinBattery) -> R
         Some((m, ts, inst)) => {
             let shown = f32_shortest(m);
             let found = format!("minimum {shown} (instance {inst}, boot_us {ts})");
-            let status = if f64::from(m) >= t.min_remaining.value {
+            // Compare in float32, the type of the logged value, so the message cannot say a
+            // reading shown equal to the threshold is below it.
+            let status = if m >= t.min_remaining.value as f32 {
                 Status::Pass
             } else {
                 Status::Fail
@@ -631,35 +644,40 @@ fn x2(f: &FlightLog, events: &[Event], t: &crate::rules::GpsFixAtArm) -> RuleRes
     }
     let mut rows = f.vehicle_gps.clone();
     rows.sort_by_key(|g| (g.id.ts, g.id.index));
-    let mut detail = Vec::new();
+    let mut detail = Lines::new();
     let mut found = Vec::new();
+    let mut arms = 0usize;
     for e in events
         .iter()
         .filter(|e| matches!(e.kind, EventKind::Arm { .. }))
     {
+        arms += 1;
         let n = rows.partition_point(|g| g.id.ts <= e.boot_us);
         let sample = n.checked_sub(1).and_then(|i| rows.get(i));
         match sample.map(|g| (g.fix_type, g.satellites_used)) {
             Some((Some(fix), Some(sats))) => {
-                found.push(format!("ARM at boot_us {}: fix_type {fix}, satellites_used {sats}", e.boot_us));
+                let line = || format!("ARM at boot_us {}: fix_type {fix}, satellites_used {sats}", e.boot_us);
+                if found.len() < 5 {
+                    found.push(line());
+                }
                 if fix < t.min_fix_type || sats < t.min_satellites {
-                    detail.push(format!("ARM at boot_us {}: fix_type {fix}, satellites_used {sats}", e.boot_us));
+                    detail.push(line);
                 }
             }
-            _ => detail.push(format!("ARM at boot_us {}: no vehicle_gps_position sample with fix_type and satellites_used at or before it", e.boot_us)),
+            _ => detail.push(|| format!("ARM at boot_us {}: no vehicle_gps_position sample with fix_type and satellites_used at or before it", e.boot_us)),
         }
     }
-    let status = if detail.is_empty() {
+    let status = if detail.total == 0 {
         Status::Pass
     } else {
         Status::Fail
     };
-    let found = if found.is_empty() {
-        "no GPS sample at any ARM".to_string()
-    } else {
-        found.join("; ")
+    let found = match (arms, found.is_empty()) {
+        (_, true) => "no GPS sample at any ARM".to_string(),
+        (n, false) if n <= 5 => found.join("; "),
+        (n, false) => format!("{n} ARMs checked; first: {}", found.join("; ")),
     };
-    RuleResult::new(id, name, status, expected, found, detail)
+    RuleResult::new(id, name, status, expected, found, detail.finish())
 }
 
 fn x3(f: &FlightLog, armed: &[ArmedInterval]) -> RuleResult {
@@ -678,7 +696,7 @@ fn x3(f: &FlightLog, armed: &[ArmedInterval]) -> RuleResult {
             .unwrap_or(0)
     };
     let mut checked = 0usize;
-    let mut detail = Vec::new();
+    let mut detail = Lines::new();
     for e in &f.estimator {
         if !in_armed(armed, e.id.ts) || e.id.instance != primary_at(e.id.ts) {
             continue;
@@ -687,11 +705,13 @@ fn x3(f: &FlightLog, armed: &[ArmedInterval]) -> RuleResult {
             continue;
         };
         checked += 1;
-        if flags != 0 && detail.len() < 20 {
-            detail.push(format!(
-                "filter_fault_flags 0x{flags:x} on instance {} at boot_us {}",
-                e.id.instance, e.id.ts
-            ));
+        if flags != 0 {
+            detail.push(|| {
+                format!(
+                    "filter_fault_flags 0x{flags:x} on instance {} at boot_us {}",
+                    e.id.instance, e.id.ts
+                )
+            });
         }
     }
     if checked == 0 {
@@ -705,17 +725,17 @@ fn x3(f: &FlightLog, armed: &[ArmedInterval]) -> RuleResult {
             ],
         );
     }
-    let status = if detail.is_empty() {
+    let status = if detail.total == 0 {
         Status::Pass
     } else {
         Status::Fail
     };
-    let found = if detail.is_empty() {
+    let found = if detail.total == 0 {
         format!("0 on all {checked} samples")
     } else {
-        format!("nonzero in flight ({} shown)", detail.len())
+        format!("nonzero on {} of {checked} samples", detail.total)
     };
-    RuleResult::new(id, name, status, expected, found, detail)
+    RuleResult::new(id, name, status, expected, found, detail.finish())
 }
 
 fn x4(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::Vibration) -> RuleResult {
@@ -737,16 +757,19 @@ fn x4(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::Vibration) -> Ru
     };
     let mut max_vib: Option<(f32, u64)> = None;
     let mut clip_increase: u64 = 0;
-    let mut prev: std::collections::BTreeMap<u8, u64> = std::collections::BTreeMap::new();
+    // Last clipping total per IMU instance: (armed interval, total). A delta is counted only
+    // between consecutive samples of the selected accelerometer within one armed interval, so
+    // clipping while disarmed or while another accelerometer was selected is not counted.
+    let mut prev: std::collections::BTreeMap<u8, (usize, u64)> = std::collections::BTreeMap::new();
     let mut samples = 0usize;
     for r in &f.imu {
-        if !in_armed(armed, r.id.ts) {
-            continue;
-        }
-        let Some(dev) = device_at(r.id.ts) else {
+        let Some(interval) = armed_index(armed, r.id.ts) else {
+            prev.remove(&r.id.instance);
             continue;
         };
-        if r.accel_device_id != Some(dev) {
+        let selected = device_at(r.id.ts).is_some_and(|dev| r.accel_device_id == Some(dev));
+        if !selected {
+            prev.remove(&r.id.instance);
             continue;
         }
         samples += 1;
@@ -757,9 +780,15 @@ fn x4(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::Vibration) -> Ru
         }
         if let Some(c) = r.accel_clipping {
             let total = c.iter().fold(0u64, |a, b| a.saturating_add(*b));
-            if let Some(p) = prev.insert(r.id.instance, total) {
-                clip_increase = clip_increase.saturating_add(total.saturating_sub(p));
+            if let Some((k, p)) = prev.insert(r.id.instance, (interval, total))
+                && k == interval
+            {
+                // A counter that went down was reset; everything it now holds is new.
+                let delta = if total >= p { total - p } else { total };
+                clip_increase = clip_increase.saturating_add(delta);
             }
+        } else {
+            prev.remove(&r.id.instance);
         }
     }
     let Some((vib, vib_ts)) = max_vib.filter(|_| samples > 0) else {
@@ -775,7 +804,7 @@ fn x4(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::Vibration) -> Ru
     };
     let shown = f32_shortest(vib);
     let mut detail = Vec::new();
-    if f64::from(vib) > t.max_accel_vibration_metric.value {
+    if vib > t.max_accel_vibration_metric.value as f32 {
         detail.push(format!(
             "accel_vibration_metric {shown} at boot_us {vib_ts}, above {}",
             t.max_accel_vibration_metric.text
@@ -933,6 +962,106 @@ mod tests {
             ..FlightLog::default()
         };
         assert_eq!(r4(&flight).status, Status::Pass);
+    }
+
+    #[test]
+    fn r4_counts_a_failsafe_that_disarms_the_vehicle() {
+        let fields: Vec<String> = VEHICLE_STATUS_FIELDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut rows = vec![
+            vtol_row(0, 2, false, false, 1),
+            vtol_row(1, 1, false, false, 1),
+        ];
+        rows[1].failsafe = Some(true); // failsafe first appears on the row that disarms
+        let flight = FlightLog {
+            vehicle_status: rows,
+            vehicle_status_fields: fields,
+            ..FlightLog::default()
+        };
+        let r = r4(&flight);
+        assert_eq!(r.status, Status::Fail);
+        assert!(
+            r.detail[0].starts_with("failsafe while armed at boot_us 10"),
+            "{:?}",
+            r.detail
+        );
+    }
+
+    #[test]
+    fn x4_counts_clipping_only_on_the_selected_accelerometer_while_armed() {
+        use crate::ingest::{ImuRow, SensorSelectionRow};
+        use crate::rules::{Threshold, Vibration};
+        let imu = |ts: u64, i: u64, inst: u8, dev: u64, clip: u64| ImuRow {
+            id: RowId {
+                ts,
+                instance: inst,
+                index: i,
+            },
+            accel_device_id: Some(dev),
+            accel_clipping: Some([clip, 0, 0]),
+            accel_vibration_metric: Some(1.0),
+        };
+        let armed = [
+            ArmedInterval {
+                arm: 0,
+                disarm: Some(100),
+            },
+            ArmedInterval {
+                arm: 200,
+                disarm: Some(300),
+            },
+        ];
+        let flight = FlightLog {
+            vehicle_status: vec![vtol_row(0, 2, false, false, 1)],
+            vehicle_status_fields: VEHICLE_STATUS_FIELDS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            sensor_selection: vec![
+                SensorSelectionRow {
+                    id: RowId {
+                        ts: 0,
+                        instance: 0,
+                        index: 0,
+                    },
+                    accel_device_id: Some(7),
+                },
+                SensorSelectionRow {
+                    id: RowId {
+                        ts: 250,
+                        instance: 0,
+                        index: 1,
+                    },
+                    accel_device_id: Some(8),
+                },
+            ],
+            imu: vec![
+                imu(10, 0, 0, 7, 0),
+                imu(50, 1, 0, 7, 2),   // +2 while armed and selected
+                imu(150, 2, 0, 7, 40), // disarmed: +38 not counted
+                imu(210, 3, 0, 7, 41), // new interval: no delta across the gap
+                imu(260, 4, 0, 7, 90), // instance 0 no longer selected: not counted
+                imu(260, 0, 1, 8, 5),
+                imu(280, 1, 1, 8, 6), // +1 on the newly selected accelerometer
+            ],
+            ..FlightLog::default()
+        };
+        let t = Vibration {
+            max_accel_vibration_metric: Threshold {
+                value: 3.0,
+                text: "3.0".into(),
+            },
+            max_accel_clipping: 2,
+        };
+        let r = x4(&flight, &armed, &t);
+        assert!(
+            r.found.ends_with("accel_clipping increase 3"),
+            "{}",
+            r.found
+        );
+        assert_eq!(r.status, Status::Fail);
     }
 
     #[test]

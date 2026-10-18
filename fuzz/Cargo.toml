@@ -15,10 +15,19 @@ libfuzzer-sys = "=0.4.13"
 sfr-core = { path = "../crates/sfr-core" }
 # SHA-256 for the fuzz-only crypto backend, so the fuzz build does not need the FIPS module.
 sha2 = "=0.11.1"
+# Ed25519 for the fuzz-only backend of the `.sfr` reader target.
+ed25519-dalek = "=3.0.0"
 
 [[bin]]
 name = "ulog_ingest"
 path = "fuzz_targets/ulog_ingest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sfr_verify"
+path = "fuzz_targets/sfr_verify.rs"
 test = false
 doc = false
 bench = false

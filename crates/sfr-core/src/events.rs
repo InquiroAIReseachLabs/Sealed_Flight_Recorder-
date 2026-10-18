@@ -21,8 +21,9 @@ pub const TOPIC_DROPOUT: &str = "ulog.dropout";
 
 /// Most events one log may produce. A real flight has hundreds; the cap stops a crafted log
 /// (for example a failsafe that toggles on every row, each naming many flags) from building
-/// a timeline that exhausts memory.
-pub const MAX_EVENTS: usize = 1_000_000;
+/// a timeline, and a record, that exhausts memory. It is ten times the size at which SPEC
+/// B1.10 measures standalone verify.
+pub const MAX_EVENTS: usize = 100_000;
 
 /// Direction of a VTOL transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -468,6 +469,9 @@ fn vehicle_status_events(b: &mut Builder, flight: &FlightLog) {
     let mut prev: Option<&VehicleStatusRow> = None;
     let mut last_arm: Option<u64> = None;
     for r in &flight.vehicle_status {
+        if b.overflow {
+            return;
+        }
         let (ts, inst, idx) = (r.id.ts, r.id.instance, r.id.index);
         let topic = "vehicle_status";
         // Arming.
@@ -533,7 +537,7 @@ fn vehicle_status_events(b: &mut Builder, flight: &FlightLog) {
         // Failsafe.
         if let Some(on) = r.failsafe {
             let was_on = prev.and_then(|p| p.failsafe).unwrap_or(false);
-            if on != was_on {
+            if on != was_on && !b.overflow {
                 let initial = prev.is_none();
                 for flag in attribute_failsafe(fs, &flag_rows, ts, r.nav_state, last_arm) {
                     let kind = if on {
@@ -679,6 +683,10 @@ pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> 
         overflow: false,
     };
     vehicle_status_events(&mut b, flight);
+    let over = |b: &Builder| b.overflow.then(|| format!("more than {MAX_EVENTS} events"));
+    if let Some(e) = over(&b) {
+        return Err(e);
+    }
 
     let results = pair_commands(&flight.commands, &flight.acks);
     for (c, result) in flight.commands.iter().zip(results) {
@@ -703,6 +711,9 @@ pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> 
         .iter()
         .map(|(k, v)| (k.as_str(), *v))
         .collect();
+    if let Some(e) = over(&b) {
+        return Err(e);
+    }
     for p in &flight.param_records {
         let old = last.get(p.name.as_str()).copied();
         let changed = old.is_none_or(|o| !o.same_as(&p.value));
@@ -723,6 +734,9 @@ pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> 
         }
     }
 
+    if let Some(e) = over(&b) {
+        return Err(e);
+    }
     for l in &flight.log_records {
         b.push(
             l.time,
@@ -735,6 +749,9 @@ pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> 
                 text: l.text.clone(),
             },
         );
+    }
+    if let Some(e) = over(&b) {
+        return Err(e);
     }
     for d in &flight.dropouts {
         b.push(

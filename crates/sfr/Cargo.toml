@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 sfr-core = { path = "../sfr-core", features = ["crypto-fips"] }
+zeroize = { workspace = true }
 
 [lints]
 workspace = true

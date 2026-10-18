@@ -1,10 +1,10 @@
 # fuzz/
 
-cargo-fuzz targets (SPEC B1.2, B1.10 "Fuzzing"). This is a separate package with its own `[workspace]` and a committed `Cargo.lock`; the root `Cargo.toml` excludes `fuzz/`. cargo-fuzz needs a nightly toolchain, and the root `rust-toolchain.toml` pins stable, so every command below passes `+nightly`. Run them from the repository root.
+cargo-fuzz targets (SPEC B1.2, B1.10 "Fuzzing"). This is a separate package with its own `[workspace]` and a committed `Cargo.lock`; the root `Cargo.toml` excludes `fuzz/`. cargo-fuzz needs a nightly toolchain, and the root `rust-toolchain.toml` pins stable, so every command below passes `+nightly-2026-10-18`, the nightly CI pins (`rustup toolchain install nightly-2026-10-18 --profile minimal`). Run them from the repository root.
 
 Gate: 60 seconds per CI run and 10 minutes nightly with zero panics, hangs, or out-of-memory.
 
-The `.sfr` reader target arrives in Chunk 3.
+Targets: `ulog_ingest` (the ULog reader and the whole dry-run path) and `sfr_verify` (the `.sfr` reader).
 
 ## Target `ulog_ingest`
 
@@ -15,6 +15,10 @@ Arbitrary bytes go through the whole `seal --dry-run` path:
 3. `record::dry_run_json`, then `json::canonical`.
 
 The target also checks that the logged size and `Summary.bytes` equal the input length and that events are numbered from 0. A finding is any panic (cargo-fuzz builds check integer overflow, so an overflow is a panic), a failed check, a hang, or an out-of-memory.
+
+## Target `sfr_verify`
+
+Arbitrary bytes go to `sfr_core::verify::verify` without a log: the canonical-form scan, the schema checks, the Merkle tree over byte ranges, and Ed25519 verification (a fuzz-only backend on `sha2` and `ed25519-dalek`). Its seeds in `seeds/sfr_verify/` are records sealed from the shrunk logs below by an evaluation key whose public half is `seeds/sfr_verify_key.pub`; the private half was discarded. Besides panics, hangs and out-of-memory, the target treats any input that verifies but is not one of the seeds as a finding. Run it with the same commands as below, with `sfr_verify` and `seeds/sfr_verify` in place of `ulog_ingest` and `seeds/ulog_ingest`.
 
 ## Seed corpus
 
@@ -63,8 +67,8 @@ A clean run exits with status 0, and its last line reads `Done <runs> runs in <s
 ## Reproduce and minimize a finding
 
 ```sh
-RUST_BACKTRACE=1 cargo +nightly fuzz run ulog_ingest fuzz/artifacts/ulog_ingest/crash-<hash>
-cargo +nightly fuzz tmin ulog_ingest fuzz/artifacts/ulog_ingest/crash-<hash>
+RUST_BACKTRACE=1 cargo +nightly-2026-10-18 fuzz run ulog_ingest fuzz/artifacts/ulog_ingest/crash-<hash>
+cargo +nightly-2026-10-18 fuzz tmin ulog_ingest fuzz/artifacts/ulog_ingest/crash-<hash>
 ```
 
 The first command runs that one input and prints the panic and backtrace. `tmin` writes smaller inputs with the same failure to `fuzz/artifacts/ulog_ingest/minimized-from-*` and prints the path of the last one under `Minimized artifact:`; rerun the first command on that file to confirm.
@@ -75,5 +79,5 @@ The first command runs that one input and prints the panic and backtrace. `tmin`
 
 ```sh
 cp Cargo.lock fuzz/Cargo.lock
-cargo +nightly metadata --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
+cargo +nightly-2026-10-18 metadata --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
 ```

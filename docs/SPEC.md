@@ -37,7 +37,7 @@ Every command supports `--json` for machine-readable output. `sfr --version` pri
 | 0 | Seal: all rules PASS or N/A. Verify: VERIFIED. |
 | 1 | Seal: one or more rules FAIL (record is still written). Verify: verification failed. |
 | 2 | Required topic missing from the log (record written with status FAIL and the missing topic named). |
-| 3 | Malformed or truncated input file (log, rules, or baseline); the message names the file and the byte offset or line. |
+| 3 | Malformed or truncated input file (log, rules, or baseline), including a log with no data records and an input over a documented size limit; the message names the file and the byte offset or line. |
 | 4 | Usage, key, or file I/O error, including a missing `--evaluation-only`, a hardware key source that fails, a signature that does not verify against the signing key, and a FIPS module that reports it is not in approved mode. |
 
 If the FIPS module fails a power-on self-test or its integrity check, the module aborts the process before `sfr` can choose an exit code (SIGABRT; a shell reports 134). Nothing is written.
@@ -57,7 +57,7 @@ Supported: PX4 v1.14 through v1.17 ULog. Exact topic and field names per version
   - PARAM_CHANGED_IN_FLIGHT (name, old, new): a data-section 'P' record whose value differs from the last known value of that parameter, between ARM and DISARM (ARM time < its time <= DISARM time, so the timeline shows it after ARM and before DISARM); its time is the last data timestamp before it. Firmware-written changes count like any other.
   - LOG_MESSAGE (flight stack messages at warning level or above): 'L' and 'C' records at levels 0 to 4 (emergency to warning), text kept verbatim. PX4 events (the `event` topic) are not decoded in v1.
   - LOG_DROPOUT (duration): an 'O' record, in milliseconds; its time is the last data timestamp before it.
-- **Event ordering** is deterministic: boot time, then topic name, then instance id, then message index. Records without a topic use the names `ulog.logging`, `ulog.parameter`, and `ulog.dropout`. Several events from one source message keep a fixed order. Sequence numbers start at 0.
+- **Event ordering** is deterministic: boot time, then topic name, then instance id, then message index. Records without a topic use the names `ulog.logging`, `ulog.parameter`, and `ulog.dropout`. Several events from one source message keep a fixed order. Sequence numbers start at 0. The message index counts from 0: for a topic, the data record's position among that topic instance's data records; for `ulog.parameter`, among all 'P' records in the file, definitions section included; for `ulog.logging`, among all 'L' and 'C' records; for `ulog.dropout`, among all 'O' records.
 - **Multi-instance topics** are filtered to the active instance where PX4 records one (used by optional estimator rules only).
 
 ### B1.6 Rules
@@ -84,15 +84,17 @@ A rule whose input data is missing is FAIL, never N/A; N/A means only that the r
 
 ### B1.7 Record format (`.sfr`)
 
-JSON, canonicalized with RFC 8785 (JSON Canonicalization Scheme) wherever bytes are hashed. The record contains no JSON floating-point numbers: unsigned 64-bit values (timestamps) are decimal strings, and parameter values are typed strings (`i32:5`, `f32:0.15`, float32 written as its shortest round-trip decimal in plain positional notation, with the digits ECMAScript `Number::toString` would choose: fewest digits, then the closest, an exact tie to the even digit; `f32:NaN` for any NaN). A `.sfr` file is stored as its canonical bytes, and verify rejects any file that differs from the canonical form of its own parse.
+JSON, canonicalized with RFC 8785 (JSON Canonicalization Scheme) wherever bytes are hashed. The record contains no JSON floating-point numbers: unsigned 64-bit measurements (timestamps, sizes) are decimal strings; counts, sequence numbers, message indexes, and enumerated values (nav state, command id, MAVLink ids) are JSON integers, each below 2^53 by construction (a log yields at most 100,000 events); and parameter values are typed strings (`i32:5`, `f32:0.15`, float32 written as its shortest round-trip decimal in plain positional notation, with the digits ECMAScript `Number::toString` would choose: fewest digits, then the closest, an exact tie to the even digit; `f32:NaN` for any NaN, `f32:Infinity` and `f32:-Infinity`). A `.sfr` file is stored as its canonical bytes, and verify rejects any file that differs from the canonical form of its own parse.
 
-Top-level fields: `schema_version` (starts at `1`); `tool` (name, version, build commit); `seal` (time UTC, key fingerprint, key label, key custody, token CMVP certificate number or null, crypto module, signer certificate and chain or null); `log` (file name, size, sha256, blake3, firmware, vehicle type); `config` (firmware, sorted parameter map); `baseline` (firmware, parameter map, ignore list); `rules` (embedded rules text and its sha256); `results` (per rule: id, status, expected, found, detail); `events` (ordered list); `status` (PASS or FAIL); `merkle` (algorithm, leaf count, root); `signature` (algorithm `ed25519`, value).
+Top-level fields: `schema_version` (starts at `1`); `tool` (`name`, `version`, `build_commit`); `seal` (`time_utc` as `YYYY-MM-DDTHH:MM:SSZ`, `key_fingerprint`, `key_label`, `key_custody`, `token_cmvp_certificate` or null, `crypto_module` with `profile`, `module` and `certificate` or null, `signer_certificate` and `certificate_chain` or null); `log` (file name, size, sha256, blake3, firmware, vehicle type); `config` (firmware, sorted parameter map); `baseline` (firmware, parameter map, ignore list); `rules` (embedded rules text and its sha256); `results` (per rule: id, status, expected, found, detail); `events` (ordered list); `status` (PASS or FAIL); `merkle` (algorithm, leaf count, root); `signature` (algorithm `ed25519`, value).
 
 **Leaves**, in this fixed order: seal context (`schema_version`, `tool`, `seal` without the signature); log identity; config; baseline; rules; each result in rule-id order; each event in sequence order.
 
 **Key custody** is one of `pkcs11-token` (the private key never leaves a PKCS#11 token or HSM), `tpm-sealed` (the seed is sealed to one TPM 2.0 at rest and is in process memory for one signature), or `file-evaluation` (a key file; evaluation only). Custody is signed but declared by the sealer; only the certificate chain proves it (B1.9).
 
-**Hashing:** leaf hash = SHA-256(0x00 || JCS(leaf)). Node hash = SHA-256(0x01 || left || right). Odd-node handling follows RFC 6962. **Signed payload** = ASCII `SFR-RECORD-V1` || 0x00 || schema_version as 4-byte big-endian || Merkle root. Ed25519 signature over the signed payload.
+**Hashing:** leaf hash = SHA-256(0x00 || JCS(leaf)). Node hash = SHA-256(0x01 || left || right). Odd-node handling follows RFC 6962 (the left subtree holds the largest power of two below the leaf count; nothing is duplicated); `merkle.algorithm` is `sha256-rfc6962`, `merkle.root` and `signature.value` are lowercase hex. **Signed payload** = ASCII `SFR-RECORD-V1` || 0x00 || schema_version as 4-byte big-endian || Merkle root. Ed25519 signature over the signed payload.
+
+**Keys:** `sfr.pub` is a PEM `PUBLIC KEY` (RFC 8410 SubjectPublicKeyInfo) and `sfr.key` a PEM `PRIVATE KEY` (PKCS#8 v1), the forms `openssl pkey` reads. The key fingerprint is `sha256:` and the lowercase hex SHA-256 of the SubjectPublicKeyInfo DER.
 
 **Compatibility rule:** a verifier must reject a `schema_version` it does not know; it must never guess.
 

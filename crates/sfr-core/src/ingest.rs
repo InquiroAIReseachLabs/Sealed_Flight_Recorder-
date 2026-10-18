@@ -415,6 +415,12 @@ fn field(layout: &Layout, name: &str) -> Option<FlatField> {
     layout.field(name).cloned()
 }
 
+/// A field that PX4 declares as `uint8_t`, `uint16_t` or `uint32_t` (DIAGNOSTIC 4.6). Any other
+/// type is not PX4's schema and is treated as absent, so the record's integers stay small.
+fn small_uint(layout: &Layout, name: &str) -> Option<FlatField> {
+    field(layout, name).filter(|f| matches!(f.scalar, Scalar::U8 | Scalar::U16 | Scalar::U32))
+}
+
 fn get_u8(f: &Option<FlatField>, p: &[u8]) -> Option<u8> {
     f.as_ref()
         .and_then(|f| f.read_u64(p))
@@ -660,15 +666,15 @@ impl Visitor for Collector {
                 Decoder::Failsafe(flags)
             }
             "vehicle_command" => Decoder::Command {
-                command: field(l, "command"),
-                src_sys: field(l, "source_system"),
-                src_comp: field(l, "source_component"),
+                command: small_uint(l, "command"),
+                src_sys: small_uint(l, "source_system"),
+                src_comp: small_uint(l, "source_component"),
             },
             "vehicle_command_ack" => Decoder::Ack {
-                command: field(l, "command"),
-                result: field(l, "result"),
-                tgt_sys: field(l, "target_system"),
-                tgt_comp: field(l, "target_component"),
+                command: small_uint(l, "command"),
+                result: small_uint(l, "result"),
+                tgt_sys: small_uint(l, "target_system"),
+                tgt_comp: small_uint(l, "target_component"),
             },
             "vehicle_gps_position" | "sensor_gps" => Decoder::Gps {
                 sensor: topic == "sensor_gps",
@@ -901,6 +907,14 @@ impl Collector {
     ) -> Result<Ingested, IngestError> {
         if let Some(limit) = self.limit.take() {
             return Err(IngestError::Limit(limit));
+        }
+        // A log with no data records (a header, or a definitions section alone) is a file cut
+        // short, not a flight with every topic missing.
+        if self.flight.topic_rows.is_empty() {
+            return Err(IngestError::Malformed(UlogError::Truncated {
+                offset: size,
+                what: "data section (the log ends before any data record)",
+            }));
         }
         let mut flight = std::mem::take(&mut self.flight);
         flight.start_timestamp = self.header.map_or(0, |h| h.timestamp);

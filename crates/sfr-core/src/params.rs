@@ -78,6 +78,14 @@ pub fn valid_param_name(name: &str) -> bool {
         && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
+impl FirmwareSpec {
+    /// Parses `<version> [<git hash prefix>]`, the text after `# Firmware:` and the record's
+    /// `baseline.firmware`.
+    pub fn parse(text: &str) -> Result<FirmwareSpec, String> {
+        parse_firmware(text, 0).map_err(|e| e.reason)
+    }
+}
+
 fn parse_firmware(rest: &str, line: usize) -> Result<FirmwareSpec, BaselineError> {
     let mut parts = rest.split_whitespace();
     let version = parts
@@ -139,12 +147,20 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, BaselineError> {
             continue;
         }
         let cols: Vec<&str> = line.split('\t').collect();
-        let [_vehicle, _component, name, value, ty] = cols.as_slice() else {
+        let [vehicle, component, name, value, ty] = cols.as_slice() else {
             return Err(err(
                 n,
                 format!("expected 5 tab-separated columns, found {}", cols.len()),
             ));
         };
+        if vehicle.parse::<u8>().is_err() || component.parse::<u8>().is_err() {
+            return Err(err(
+                n,
+                format!(
+                    "vehicle id `{vehicle}` and component id `{component}` must be numbers from 0 to 255"
+                ),
+            ));
+        }
         if !valid_param_name(name) {
             return Err(err(n, format!("`{name}` is not a parameter name")));
         }
@@ -158,12 +174,15 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, BaselineError> {
                 let v = value
                     .parse::<f32>()
                     .map_err(|_| err(n, format!("{name}: `{value}` is not a number")))?;
-                // A logged parameter can be NaN (the record prints it `f32:NaN`), so a baseline
-                // may say so too; infinities cannot be set from a ground station and are refused.
-                if v.is_infinite() {
+                // NaN and infinities parse (`nan`, `inf`, `-inf`, `infinity`), so a baseline can
+                // state any value a log can hold; a finite number beyond float32 is refused.
+                let lower = value.to_ascii_lowercase();
+                let infinite_text =
+                    matches!(lower.trim_start_matches(['+', '-']), "inf" | "infinity");
+                if v.is_infinite() && !infinite_text {
                     return Err(err(
                         n,
-                        format!("{name}: `{value}` is not a finite float32 or NaN"),
+                        format!("{name}: `{value}` is outside the float32 range"),
                     ));
                 }
                 ParamValue::F32(v)
@@ -182,8 +201,13 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, BaselineError> {
             return Err(err(n, format!("more than {MAX_PARAMS} parameters")));
         }
     }
-    let firmware =
-        firmware.ok_or_else(|| err(0, "no `# Firmware: <version> [<git hash prefix>]` line"))?;
+    let end = text.lines().count() + 1;
+    let firmware = firmware.ok_or_else(|| {
+        err(
+            end,
+            "no `# Firmware: <version> [<git hash prefix>]` line before the end of the file",
+        )
+    })?;
     Ok(Baseline { firmware, params })
 }
 
@@ -267,13 +291,17 @@ mod tests {
     #[test]
     fn rejects_bad_baselines_with_line_numbers() {
         let cases: &[(&str, usize, &str)] = &[
-            ("1\t1\tA\t1\t6\n", 0, "no `# Firmware"),
+            ("1\t1\tA\t1\t6\n", 2, "no `# Firmware"),
+            ("# Firmware: 1.17.0\nx\t1\tA\t1\t6\n", 2, "vehicle id"),
+            (
+                "# Firmware: 1.17.0\n1\t1\tA\t1e39\t9\n",
+                2,
+                "outside the float32 range",
+            ),
             ("# Firmware: 1.17.0\n# Firmware: 1.17.0\n", 2, "second"),
             ("# Firmware: 1.17.0 xyz\n", 1, "7 to 40 hex"),
             ("# Firmware: 1.17.0\n1\t1\tA\t1\n", 2, "5 tab-separated"),
             ("# Firmware: 1.17.0\n1\t1\tA\t1.5\t6\n", 2, "not an int32"),
-            ("# Firmware: 1.17.0\n1\t1\tA\tinf\t9\n", 2, "finite"),
-            ("# Firmware: 1.17.0\n1\t1\tA\t-infinity\t9\n", 2, "finite"),
             ("# Firmware: 1.17.0\n1\t1\tA\t1\t7\n", 2, "type `7`"),
             (
                 "# Firmware: 1.17.0\n1\t1\tA\t1\t6\n1\t1\tA\t2\t6\n",

@@ -496,10 +496,10 @@ fn usage_and_io_errors_exit_4() {
     assert_eq!(
         out.status.code(),
         Some(4),
-        "seal without --dry-run is not available yet"
+        "seal without --dry-run needs a key source"
     );
     assert!(
-        stderr(&out).contains("run with --dry-run"),
+        stderr(&out).contains("seal needs a key source"),
         "{}",
         stderr(&out)
     );
@@ -549,4 +549,88 @@ fn usage_and_io_errors_exit_4() {
 
     assert_eq!(sfr(&["verify"]).status.code(), Some(4));
     assert_eq!(sfr(&["--help"]).status.code(), Some(0));
+}
+
+/// Byte offsets where records start, after the 16-byte header.
+fn record_starts(log: &[u8]) -> Vec<(usize, u8)> {
+    let mut out = Vec::new();
+    let mut pos = 16;
+    while pos + 3 <= log.len() {
+        let size = usize::from(u16::from_le_bytes([log[pos], log[pos + 1]]));
+        out.push((pos, log[pos + 2]));
+        pos += 3 + size;
+    }
+    out
+}
+
+#[test]
+fn a_log_without_data_records_is_truncated_exit_3() {
+    let dir = scratch();
+    let bytes = std::fs::read(root().join("testdata/sitl/v1.17.0/mc_flight_1.ulg")).unwrap();
+    let first_sub = record_starts(&bytes)
+        .into_iter()
+        .find(|(_, t)| *t == b'A')
+        .unwrap()
+        .0;
+    for (name, cut) in [("header_only", 16), ("definitions_only", first_sub)] {
+        let path = dir.join(format!("{name}.ulg"));
+        std::fs::write(&path, &bytes[..cut]).unwrap();
+        let out = dry_run(
+            path.to_str().unwrap(),
+            RULES,
+            "testdata/baselines/v1.17.0_mc_flight_1.params",
+            false,
+        );
+        assert_eq!(out.status.code(), Some(3), "{name}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("ends before any data record"),
+            "{}",
+            stderr(&out)
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn r2_fails_on_other_firmware_and_r5_when_the_log_ends_armed() {
+    let dir = scratch();
+    let text =
+        std::fs::read_to_string(root().join("testdata/baselines/v1.17.0_mc_flight_1.params"))
+            .unwrap();
+    let other = text.replace("# Firmware: 1.17.0 ", "# Firmware: 1.16.2 ");
+    let baseline = dir.join("other_fw.params");
+    std::fs::write(&baseline, other).unwrap();
+    let s = stdout(&dry_run(
+        "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+        RULES,
+        baseline.to_str().unwrap(),
+        false,
+    ));
+    assert!(
+        s.contains("R2    FAIL") && s.contains("- version: baseline 1.16.2, log 1.17.0"),
+        "{s}"
+    );
+
+    // Cut on a record boundary in the middle of the flight: the log ends armed.
+    let bytes = std::fs::read(root().join("testdata/sitl/v1.17.0/mc_flight_1.ulg")).unwrap();
+    let cut = record_starts(&bytes)
+        .into_iter()
+        .map(|(p, _)| p)
+        .find(|&p| p > bytes.len() * 6 / 10)
+        .unwrap();
+    let path = dir.join("ends_armed.ulg");
+    std::fs::write(&path, &bytes[..cut]).unwrap();
+    let out = dry_run(
+        path.to_str().unwrap(),
+        RULES,
+        "testdata/baselines/v1.17.0_mc_flight_1.params",
+        false,
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let s = stdout(&out);
+    assert!(
+        s.contains("R5    FAIL") && s.contains("has no DISARM: the log ends armed"),
+        "{s}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

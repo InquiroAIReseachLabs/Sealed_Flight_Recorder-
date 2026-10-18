@@ -317,7 +317,7 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
     )?;
 
     let format = get(root, "format").ok_or_else(|| RulesError {
-        line: 0,
+        line: 1,
         reason: format!("missing `format = \"{RULES_FORMAT}\"`"),
     })?;
     let f = as_str(&ctx, format, "format")?;
@@ -348,7 +348,7 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
     }
 
     let rt = get(root, "required_topics").ok_or_else(|| RulesError {
-        line: 0,
+        line: body.lines().count() + 1,
         reason: "missing `[required_topics]`".into(),
     })?;
     let rt_table = as_table(&ctx, rt, "required_topics")?;
@@ -571,10 +571,10 @@ mod tests {
     fn rejects_unknown_keys_and_bad_values_with_lines() {
         let cases: &[(&str, usize, &str)] = &[
             ("format = \"sfr-rules/2\"\n", 1, "is not `sfr-rules/1`"),
-            ("[required_topics]\ntopics = []\n", 0, "missing `format"),
+            ("[required_topics]\ntopics = []\n", 1, "missing `format"),
             (
                 "format = \"sfr-rules/1\"\n",
-                0,
+                2,
                 "missing `[required_topics]`",
             ),
             (
@@ -639,12 +639,12 @@ mod tests {
             ),
             (
                 "[required_topics]\ntopics = []\n[parameters]\nformat = 1\n",
-                0,
+                1,
                 "missing `format",
             ),
             (
                 "[required_topics]\ntopics = []\n\nformat = \"sfr-rules/1\"\n",
-                0,
+                1,
                 "missing `format",
             ),
             (

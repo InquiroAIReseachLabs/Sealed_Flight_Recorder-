@@ -33,8 +33,9 @@ blake3 = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
-# Test-only SHA-256 so `cargo test -p sfr-core` runs without choosing a backend.
+# Test-only SHA-256 and Ed25519 so `cargo test -p sfr-core` runs without choosing a backend.
 sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
 
 [lints]
 workspace = true

@@ -7,7 +7,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sfr_core::crypto::{CryptoBackend, Sha256Stream};
+use sfr_core::crypto::{CryptoBackend, ModuleInfo, Sha256Stream};
 use sfr_core::evaluate::evaluate;
 use sfr_core::ingest::{FlightLogIngestor, Px4Ingestor};
 use sfr_core::json::canonical;
@@ -40,6 +40,13 @@ impl CryptoBackend for FuzzBackend {
     }
     fn sha256_stream(&self) -> Box<dyn Sha256Stream> {
         Box::new(FuzzSha256(sha2::Sha256::new()))
+    }
+    fn module_info(&self) -> ModuleInfo {
+        ModuleInfo { profile: "fuzz", module: "sha2".into(), certificate: None }
+    }
+    fn ed25519_verify(&self, _public_key: &[u8; 32], _message: &[u8], _signature: &[u8; 64]) -> bool {
+        // Ingest never verifies signatures.
+        false
     }
 }
 

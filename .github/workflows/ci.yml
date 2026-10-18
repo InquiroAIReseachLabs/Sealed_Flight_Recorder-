@@ -49,6 +49,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: cargo test --locked
         run: cargo test --workspace --locked
+      - name: Standalone verify of 10,000 events under 10 ms (SPEC B1.10 Performance, release build)
+        run: cargo test --release --locked -p sfr --test verify_perf -- --ignored --nocapture
 
   golden-oracle:
     name: golden files agree with the independent pyulog oracle
@@ -59,7 +61,7 @@ jobs:
         run: scripts/testdata/regenerate.sh compare
 
   fuzz:
-    name: fuzz ulog_ingest for 60 s (SPEC B1.10)
+    name: fuzz ulog_ingest and sfr_verify for 60 s each (SPEC B1.10)
     runs-on: ubuntu-latest
     env:
       # cargo-fuzz sets its own sanitizer flags; -D warnings still applies to the target.
@@ -71,13 +73,15 @@ jobs:
           set -euo pipefail
           rustup toolchain install nightly-2026-10-18 --profile minimal
           cargo +nightly-2026-10-18 install cargo-fuzz --version 0.13.2 --locked
-      - name: Run 60 seconds from the committed seeds
+      - name: Run each target 60 seconds from its committed seeds
         run: |
           set -euo pipefail
-          mkdir -p fuzz/corpus/ulog_ingest
-          cp fuzz/seeds/ulog_ingest/* fuzz/corpus/ulog_ingest/
-          cargo +nightly-2026-10-18 fuzz run ulog_ingest fuzz/corpus/ulog_ingest -- \
-            -max_total_time=60 -rss_limit_mb=2048 -timeout=10 -max_len=1048576
+          for t in ulog_ingest sfr_verify; do
+            mkdir -p fuzz/corpus/$t
+            cp fuzz/seeds/$t/* fuzz/corpus/$t/
+            cargo +nightly-2026-10-18 fuzz run $t fuzz/corpus/$t -- \
+              -max_total_time=60 -rss_limit_mb=2048 -timeout=10 -max_len=1048576
+          done
       - name: Keep any finding
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0

@@ -11,10 +11,14 @@ pub mod evaluate;
 pub mod events;
 pub mod ingest;
 pub mod json;
+pub mod keys;
+pub mod merkle;
 pub mod params;
 pub mod record;
 pub mod rules;
+pub mod seal;
 pub mod ulog;
+pub mod verify;
 
 /// Lowercase hex of `bytes`.
 pub fn hex(bytes: &[u8]) -> String {
