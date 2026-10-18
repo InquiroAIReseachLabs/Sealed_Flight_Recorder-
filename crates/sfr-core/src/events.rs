@@ -21,8 +21,13 @@ pub const TOPIC_DROPOUT: &str = "ulog.dropout";
 
 /// Most events one log may produce. A real flight has hundreds; the cap stops a crafted log
 /// (for example a failsafe that toggles on every row, each naming many flags) from building
-/// a timeline that exhausts memory.
-pub const MAX_EVENTS: usize = 1_000_000;
+/// a timeline, and a record, that exhausts memory. It is ten times the size at which SPEC
+/// B1.10 measures standalone verify.
+pub const MAX_EVENTS: usize = 100_000;
+
+fn too_many_events() -> String {
+    crate::limit_exceeded("the number of events", MAX_EVENTS, "events")
+}
 
 /// Direction of a VTOL transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +136,12 @@ pub enum EventKind {
         /// Direction.
         direction: Direction,
     },
+    /// The VTOL state went from fixed wing straight to multicopter without a transition (a
+    /// quadchute). Not a transition (R6 ignores it); R4 reports it.
+    Quadchute {
+        /// `failsafe_flags.vtol_fixed_wing_system_failure` at that moment, if logged.
+        fixed_wing_system_failure: Option<bool>,
+    },
     /// A parameter changed between ARM and DISARM.
     ParamChangedInFlight {
         /// Name.
@@ -167,6 +178,7 @@ impl EventKind {
             EventKind::VtolTransitionStart { .. } => "VTOL_TRANSITION_START",
             EventKind::VtolTransitionEnd { .. } => "VTOL_TRANSITION_END",
             EventKind::VtolTransitionAbort { .. } => "VTOL_TRANSITION_ABORT",
+            EventKind::Quadchute { .. } => "QUADCHUTE",
             EventKind::ParamChangedInFlight { .. } => "PARAM_CHANGED_IN_FLIGHT",
             EventKind::LogMessage { .. } => "LOG_MESSAGE",
             EventKind::LogDropout { .. } => "LOG_DROPOUT",
@@ -468,6 +480,9 @@ fn vehicle_status_events(b: &mut Builder, flight: &FlightLog) {
     let mut prev: Option<&VehicleStatusRow> = None;
     let mut last_arm: Option<u64> = None;
     for r in &flight.vehicle_status {
+        if b.overflow {
+            return;
+        }
         let (ts, inst, idx) = (r.id.ts, r.id.instance, r.id.index);
         let topic = "vehicle_status";
         // Arming.
@@ -533,7 +548,7 @@ fn vehicle_status_events(b: &mut Builder, flight: &FlightLog) {
         // Failsafe.
         if let Some(on) = r.failsafe {
             let was_on = prev.and_then(|p| p.failsafe).unwrap_or(false);
-            if on != was_on {
+            if on != was_on && !b.overflow {
                 let initial = prev.is_none();
                 for flag in attribute_failsafe(fs, &flag_rows, ts, r.nav_state, last_arm) {
                     let kind = if on {
@@ -567,6 +582,20 @@ fn vehicle_status_events(b: &mut Builder, flight: &FlightLog) {
                             EventKind::VtolTransitionAbort { direction }
                         };
                         b.push(ts, topic, inst, idx, 3, kind);
+                    }
+                    Some(VtolState::Fw) if cur == VtolState::Mc => {
+                        let fixed_wing_system_failure =
+                            flag_at(fs, &flag_rows, "vtol_fixed_wing_system_failure", ts);
+                        b.push(
+                            ts,
+                            topic,
+                            inst,
+                            idx,
+                            3,
+                            EventKind::Quadchute {
+                                fixed_wing_system_failure,
+                            },
+                        );
                     }
                     _ => {}
                 }
@@ -679,6 +708,10 @@ pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> 
         overflow: false,
     };
     vehicle_status_events(&mut b, flight);
+    let over = |b: &Builder| b.overflow.then(too_many_events);
+    if let Some(e) = over(&b) {
+        return Err(e);
+    }
 
     let results = pair_commands(&flight.commands, &flight.acks);
     for (c, result) in flight.commands.iter().zip(results) {
@@ -703,6 +736,9 @@ pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> 
         .iter()
         .map(|(k, v)| (k.as_str(), *v))
         .collect();
+    if let Some(e) = over(&b) {
+        return Err(e);
+    }
     for p in &flight.param_records {
         let old = last.get(p.name.as_str()).copied();
         let changed = old.is_none_or(|o| !o.same_as(&p.value));
@@ -723,6 +759,9 @@ pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> 
         }
     }
 
+    if let Some(e) = over(&b) {
+        return Err(e);
+    }
     for l in &flight.log_records {
         b.push(
             l.time,
@@ -735,6 +774,9 @@ pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> 
                 text: l.text.clone(),
             },
         );
+    }
+    if let Some(e) = over(&b) {
+        return Err(e);
     }
     for d in &flight.dropouts {
         b.push(
@@ -750,7 +792,7 @@ pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> 
     }
 
     if b.overflow {
-        return Err(format!("more than {MAX_EVENTS} events"));
+        return Err(too_many_events());
     }
     let mut events = b.out;
     events.sort_by(|x, y| {
@@ -826,6 +868,14 @@ pub fn event_json(e: &Event, fw: &Firmware) -> Value {
             o.set("source_system", Value::count(*source_system));
             o.set("source_component", Value::count(*source_component));
             o.set("result", Value::str(result.name()));
+        }
+        EventKind::Quadchute {
+            fixed_wing_system_failure,
+        } => {
+            o.set(
+                "vtol_fixed_wing_system_failure",
+                fixed_wing_system_failure.map_or(Value::Null, Value::Bool),
+            );
         }
         EventKind::VtolTransitionStart { direction }
         | EventKind::VtolTransitionEnd { direction }
@@ -913,12 +963,12 @@ mod tests {
     }
 
     #[test]
-    fn vtol_states_give_start_end_abort_and_ignore_quadchute() {
+    fn vtol_states_give_start_end_abort_and_quadchute() {
         let rows = vec![
             vs(0, 0, 2, 4, false, false, false, 1),
             vs(10, 1, 2, 4, false, true, true, 1), // start to_fw
             vs(20, 2, 2, 4, false, false, false, 2), // end to_fw
-            vs(30, 3, 2, 4, false, false, false, 1), // quadchute FW to MC: nothing
+            vs(30, 3, 2, 4, false, false, false, 1), // quadchute FW to MC: QUADCHUTE, no transition
             vs(40, 4, 2, 4, false, true, true, 1), // start to_fw
             vs(50, 5, 2, 4, false, true, false, 1), // abort to_fw, start to_mc
             vs(60, 6, 2, 4, false, false, false, 1), // end to_mc
@@ -931,13 +981,14 @@ mod tests {
         let ev = build(&flight, &Config::default()).unwrap();
         let k: Vec<String> = kinds(&ev)
             .into_iter()
-            .filter(|k| k.starts_with("VTOL"))
+            .filter(|k| k.starts_with("VTOL") || k == "QUADCHUTE")
             .collect();
         assert_eq!(
             k,
             [
                 "VTOL_TRANSITION_START:to_fw",
                 "VTOL_TRANSITION_END:to_fw",
+                "QUADCHUTE",
                 "VTOL_TRANSITION_START:to_fw",
                 "VTOL_TRANSITION_ABORT:to_fw",
                 "VTOL_TRANSITION_START:to_mc",
@@ -1125,10 +1176,7 @@ mod tests {
             failsafe_flags: fs,
             ..FlightLog::default()
         };
-        assert_eq!(
-            build(&flight, &Config::default()),
-            Err(format!("more than {MAX_EVENTS} events"))
-        );
+        assert_eq!(build(&flight, &Config::default()), Err(too_many_events()));
     }
 
     #[test]

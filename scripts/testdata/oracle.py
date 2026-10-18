@@ -416,6 +416,13 @@ def run(path, required, ptime, param_index, debug):
                         emit(dict(base, kind='VTOL_TRANSITION_START', direction=direction[cur]))
                         vtol_open = direction[cur]
                 elif cur != vstate_prev:
+                    # SPEC B1.5: fixed wing straight to multicopter is a QUADCHUTE, not a transition.
+                    if (vstate_prev, cur) == ('FW', 'MC'):
+                        row = ff_row_at(t)
+                        qc = None
+                        if row is not None and ff.has('vtol_fixed_wing_system_failure'):
+                            qc = bool(flag_true(row, 'vtol_fixed_wing_system_failure'))
+                        emit(dict(base, kind='QUADCHUTE', vtol_fixed_wing_system_failure=qc))
                     if vstate_prev in direction:
                         if (vstate_prev, cur) in (('TFW', 'FW'), ('TMC', 'MC')):
                             emit(dict(base, kind='VTOL_TRANSITION_END', direction=direction[vstate_prev]))

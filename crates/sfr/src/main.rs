@@ -15,9 +15,12 @@ use sfr_core::params::parse_baseline;
 use sfr_core::record::dry_run_json;
 use sfr_core::rules::parse_rules;
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
+
+/// Largest rules file or baseline `sfr` reads (SPEC B1.4 input limits).
+const MAX_TEXT_BYTES: u64 = 16 * 1024 * 1024;
 
 const USAGE: &str = "usage: sfr seal <flight.ulg> --rules <rules.toml> --baseline <baseline.params> --dry-run [--json]";
 
@@ -86,14 +89,29 @@ fn parse_seal(args: &[String]) -> Result<SealArgs, Failure> {
     })
 }
 
+/// Reads a UTF-8 text file of at most [`MAX_TEXT_BYTES`]; a longer file exits 3 and names
+/// the limit.
 fn read_text(path: &str, what: &str) -> Result<String, Failure> {
-    let bytes = std::fs::read(path)
+    let file = File::open(path)
         .map_err(|e| fail(exit_code::USAGE, format!("cannot read {what} {path}: {e}")))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_TEXT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| fail(exit_code::USAGE, format!("cannot read {what} {path}: {e}")))?;
+    if bytes.len() as u64 > MAX_TEXT_BYTES {
+        return Err(fail(
+            exit_code::MALFORMED_INPUT,
+            format!(
+                "{what} {path}: {}",
+                sfr_core::limit_exceeded("the file", MAX_TEXT_BYTES, "bytes")
+            ),
+        ));
+    }
     String::from_utf8(bytes).map_err(|e| {
         fail(
             exit_code::MALFORMED_INPUT,
             format!(
-                "{what} {path}: not UTF-8 at byte {}",
+                "{what} {path}: not UTF-8 at byte offset {}",
                 e.utf8_error().valid_up_to()
             ),
         )
@@ -195,6 +213,24 @@ fn seal(args: &[String], stdout: &mut dyn Write) -> Result<i32, Failure> {
             ),
         })?;
     let eval = evaluate(&ing, &rules, &baseline);
+    if ing
+        .identity
+        .firmware
+        .series()
+        .is_none_or(|s| !((1, 14)..=(1, 17)).contains(&s))
+    {
+        let _ = writeln!(
+            io::stderr().lock(),
+            "sfr: note: log {}: firmware {} is outside the supported range PX4 v1.14 to v1.17; \
+             version-dependent names are null",
+            a.log,
+            ing.identity
+                .firmware
+                .version
+                .as_deref()
+                .unwrap_or("unknown")
+        );
+    }
     let text = if a.json {
         json::pretty(&dry_run_json(
             &ing,

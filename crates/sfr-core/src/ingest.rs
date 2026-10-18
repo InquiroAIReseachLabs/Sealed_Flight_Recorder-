@@ -35,7 +35,7 @@ impl std::fmt::Display for IngestError {
         match self {
             IngestError::Malformed(e) => write!(f, "{e}"),
             IngestError::Io(e) => write!(f, "read error: {e}"),
-            IngestError::Limit(e) => write!(f, "exceeds a limit: {e}"),
+            IngestError::Limit(e) => write!(f, "{e}"),
         }
     }
 }
@@ -415,6 +415,12 @@ fn field(layout: &Layout, name: &str) -> Option<FlatField> {
     layout.field(name).cloned()
 }
 
+/// A field that PX4 declares as `uint8_t`, `uint16_t` or `uint32_t` (DIAGNOSTIC 4.6). Any other
+/// type is not PX4's schema and is treated as absent, so the record's integers stay small.
+fn small_uint(layout: &Layout, name: &str) -> Option<FlatField> {
+    field(layout, name).filter(|f| matches!(f.scalar, Scalar::U8 | Scalar::U16 | Scalar::U32))
+}
+
 fn get_u8(f: &Option<FlatField>, p: &[u8]) -> Option<u8> {
     f.as_ref()
         .and_then(|f| f.read_u64(p))
@@ -599,9 +605,10 @@ impl Visitor for Collector {
                 if self.params.len() >= crate::params::MAX_PARAMS && !self.params.contains_key(name)
                 {
                     self.limit.get_or_insert_with(|| {
-                        format!(
-                            "more than {} parameters at log start",
-                            crate::params::MAX_PARAMS
+                        crate::limit_exceeded(
+                            "the number of parameters at log start",
+                            crate::params::MAX_PARAMS,
+                            "parameters",
                         )
                     });
                 } else {
@@ -642,7 +649,11 @@ impl Visitor for Collector {
             }
             "failsafe_flags" if failsafe_schema(l).len() > MAX_FAILSAFE_FLAGS => {
                 self.limit.get_or_insert_with(|| {
-                    format!("failsafe_flags has more than {MAX_FAILSAFE_FLAGS} flag fields")
+                    crate::limit_exceeded(
+                        "the number of failsafe_flags flag fields",
+                        MAX_FAILSAFE_FLAGS,
+                        "fields",
+                    )
                 });
                 Decoder::Count
             }
@@ -660,15 +671,15 @@ impl Visitor for Collector {
                 Decoder::Failsafe(flags)
             }
             "vehicle_command" => Decoder::Command {
-                command: field(l, "command"),
-                src_sys: field(l, "source_system"),
-                src_comp: field(l, "source_component"),
+                command: small_uint(l, "command"),
+                src_sys: small_uint(l, "source_system"),
+                src_comp: small_uint(l, "source_component"),
             },
             "vehicle_command_ack" => Decoder::Ack {
-                command: field(l, "command"),
-                result: field(l, "result"),
-                tgt_sys: field(l, "target_system"),
-                tgt_comp: field(l, "target_component"),
+                command: small_uint(l, "command"),
+                result: small_uint(l, "result"),
+                tgt_sys: small_uint(l, "target_system"),
+                tgt_comp: small_uint(l, "target_component"),
             },
             "vehicle_gps_position" | "sensor_gps" => Decoder::Gps {
                 sensor: topic == "sensor_gps",
@@ -902,6 +913,14 @@ impl Collector {
         if let Some(limit) = self.limit.take() {
             return Err(IngestError::Limit(limit));
         }
+        // A log with no data records (a header, or a definitions section alone) is a file cut
+        // short, not a flight with every topic missing.
+        if self.flight.topic_rows.is_empty() {
+            return Err(IngestError::Malformed(UlogError::Truncated {
+                offset: size,
+                what: "data section (the log ends before any data record)",
+            }));
+        }
         let mut flight = std::mem::take(&mut self.flight);
         flight.start_timestamp = self.header.map_or(0, |h| h.timestamp);
         flight.summary = summary;
@@ -1102,10 +1121,10 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            IngestError::Limit(format!(
-                "more than {} parameters at log start",
-                crate::params::MAX_PARAMS
-            ))
+            IngestError::Limit(
+                "the number of parameters at log start exceeds the input limit of 65536 parameters (SPEC B1.4)"
+                    .to_string()
+            )
         );
     }
 
@@ -1125,11 +1144,15 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            IngestError::Limit(format!(
-                "failsafe_flags has more than {MAX_FAILSAFE_FLAGS} flag fields"
-            ))
+            IngestError::Limit(
+                "the number of failsafe_flags flag fields exceeds the input limit of 256 fields (SPEC B1.4)"
+                    .to_string()
+            )
         );
-        assert!(err.to_string().starts_with("exceeds a limit: "));
+        assert!(
+            err.to_string()
+                .starts_with("the number of failsafe_flags flag fields exceeds")
+        );
     }
 
     #[test]

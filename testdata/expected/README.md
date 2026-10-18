@@ -18,8 +18,17 @@ SPEC B1.5 and B1.6 written on pyulog. It shares no code with `sfr` and was writt
 
 - the configuration (every parameter and its typed value);
 - the firmware version and git hash, and `is_vtol`;
-- every event: kind, boot time, source topic, instance and index, the kind's own fields, and the order;
+- every event: kind, boot time, source topic, instance and index, and the order, with these kind
+  fields: `initial` and `reason` (ARM), `reason` (DISARM), `old` and `new` (NAV_STATE_CHANGE),
+  `flag` (FAILSAFE_*), `command`, `source_system`, `source_component` and `result` (COMMAND),
+  `direction` (VTOL_*), `vtol_fixed_wing_system_failure` (QUADCHUTE), `name`, `old` and `new` (PARAM_CHANGED_IN_FLIGHT), `level` and `text`
+  (LOG_MESSAGE), `duration_ms` (LOG_DROPOUT);
 - the status of R1, R4, R5 and R6, and the topics and fields R1 reports missing.
+
+It does not compare the version-dependent names (`old_name`, `new_name`, `reason_name`), `utc_us`,
+FAILSAFE_SET `initial`, the log digests and size, R2, R3, or result wording. An independent
+pyulog check during the Chunk 2 verification compared those fields on the 8 files then in `testdata/`
+(all but `v1.17.0_vtol_quadchute`) and found no difference; it is not part of CI.
 
 A file counts as reviewed only while that comparison reports 0 differences. CI runs it on every
 push (job `golden-oracle`).

@@ -317,7 +317,7 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
     )?;
 
     let format = get(root, "format").ok_or_else(|| RulesError {
-        line: 0,
+        line: 1,
         reason: format!("missing `format = \"{RULES_FORMAT}\"`"),
     })?;
     let f = as_str(&ctx, format, "format")?;
@@ -348,7 +348,7 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
     }
 
     let rt = get(root, "required_topics").ok_or_else(|| RulesError {
-        line: 0,
+        line: body.lines().count() + 1,
         reason: "missing `[required_topics]`".into(),
     })?;
     let rt_table = as_table(&ctx, rt, "required_topics")?;
@@ -358,13 +358,21 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
     let mut seen = std::collections::BTreeSet::new();
     for (t, at) in as_str_list(&ctx, topics_v, "required_topics.topics")? {
         if !valid_topic(&t) {
-            return Err(ctx.err(at, format!("`{t}` is not a topic name")));
+            return Err(ctx.err(
+                at,
+                format!(
+                    "`{t}` is not a topic name (1 to 64 lowercase letters, digits, `_`; SPEC B1.4)"
+                ),
+            ));
         }
         if !seen.insert(t.clone()) {
             return Err(ctx.err(at, format!("topic `{t}` listed twice")));
         }
         if seen.len() > MAX_LIST_ENTRIES {
-            return Err(ctx.err(at, format!("more than {MAX_LIST_ENTRIES} required topics")));
+            return Err(ctx.err(
+                at,
+                crate::limit_exceeded("`required_topics`", MAX_LIST_ENTRIES, "entries"),
+            ));
         }
         required_topics.push(t);
     }
@@ -393,15 +401,16 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
                     return Err(ctx.err(at, format!("pattern `{pat}` listed twice")));
                 }
                 if seen.len() > MAX_LIST_ENTRIES {
-                    return Err(
-                        ctx.err(at, format!("more than {MAX_LIST_ENTRIES} ignore patterns"))
-                    );
+                    return Err(ctx.err(
+                        at,
+                        crate::limit_exceeded("`parameters.ignore`", MAX_LIST_ENTRIES, "entries"),
+                    ));
                 }
                 let parsed = Pattern::new(&pat).ok_or_else(|| {
                     ctx.err(
                         at,
                         format!(
-                            "`{pat}` is not a parameter name pattern (letters, digits, `_`, at most {} `*`)",
+                            "`{pat}` is not a parameter name pattern (1 to 64 letters, digits, `_`, `*`, at most {} `*`; SPEC B1.4)",
                             crate::params::MAX_PATTERN_STARS
                         ),
                     )
@@ -532,6 +541,48 @@ mod tests {
         "format = \"sfr-rules/1\"\n[required_topics]\ntopics = [\"vehicle_status\"]\n";
 
     #[test]
+    fn list_and_pattern_limits_are_enforced_and_named() {
+        let list =
+            |n: usize, f: &dyn Fn(usize) -> String| (0..n).map(f).collect::<Vec<_>>().join(", ");
+        let topics = |n| {
+            format!(
+                "format = \"sfr-rules/1\"\n[required_topics]\ntopics = [{}]\n",
+                list(n, &|i| format!("\"t{i}\""))
+            )
+        };
+        parse_rules(&topics(MAX_LIST_ENTRIES)).expect("at the limit");
+        let e = parse_rules(&topics(MAX_LIST_ENTRIES + 1)).expect_err("over the limit");
+        assert!(
+            e.to_string()
+                .contains("`required_topics` exceeds the input limit of 256 entries (SPEC B1.4)"),
+            "{e}"
+        );
+        let ignore = |n| {
+            format!(
+                "{MIN}[parameters]\nignore = [{}]\n",
+                list(n, &|i| format!("\"P{i}\""))
+            )
+        };
+        parse_rules(&ignore(MAX_LIST_ENTRIES)).expect("at the limit");
+        let e = parse_rules(&ignore(MAX_LIST_ENTRIES + 1)).expect_err("over the limit");
+        assert!(
+            e.to_string()
+                .contains("`parameters.ignore` exceeds the input limit of 256 entries"),
+            "{e}"
+        );
+        let stars = |n| format!("{MIN}[parameters]\nignore = [\"A{}\"]\n", "*".repeat(n));
+        parse_rules(&stars(crate::params::MAX_PATTERN_STARS)).expect("at the limit");
+        let e = parse_rules(&stars(crate::params::MAX_PATTERN_STARS + 1)).expect_err("9 stars");
+        assert!(e.to_string().contains("at most 8 `*`"), "{e}");
+        let long_topic = format!(
+            "format = \"sfr-rules/1\"\n[required_topics]\ntopics = [\"{}\"]\n",
+            "t".repeat(65)
+        );
+        let e = parse_rules(&long_topic).expect_err("65 bytes");
+        assert!(e.to_string().contains("1 to 64 lowercase letters"), "{e}");
+    }
+
+    #[test]
     fn comments_and_a_byte_order_mark_may_precede_format() {
         let text = format!("\u{feff}# rules for the test rig\n\n{MIN}");
         let r = parse_rules(&text).expect("valid");
@@ -571,10 +622,10 @@ mod tests {
     fn rejects_unknown_keys_and_bad_values_with_lines() {
         let cases: &[(&str, usize, &str)] = &[
             ("format = \"sfr-rules/2\"\n", 1, "is not `sfr-rules/1`"),
-            ("[required_topics]\ntopics = []\n", 0, "missing `format"),
+            ("[required_topics]\ntopics = []\n", 1, "missing `format"),
             (
                 "format = \"sfr-rules/1\"\n",
-                0,
+                2,
                 "missing `[required_topics]`",
             ),
             (
@@ -639,12 +690,12 @@ mod tests {
             ),
             (
                 "[required_topics]\ntopics = []\n[parameters]\nformat = 1\n",
-                0,
+                1,
                 "missing `format",
             ),
             (
                 "[required_topics]\ntopics = []\n\nformat = \"sfr-rules/1\"\n",
-                0,
+                1,
                 "missing `format",
             ),
             (

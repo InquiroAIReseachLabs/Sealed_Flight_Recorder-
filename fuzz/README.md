@@ -1,6 +1,6 @@
 # fuzz/
 
-cargo-fuzz targets (SPEC B1.2, B1.10 "Fuzzing"). This is a separate package with its own `[workspace]` and a committed `Cargo.lock`; the root `Cargo.toml` excludes `fuzz/`. cargo-fuzz needs a nightly toolchain, and the root `rust-toolchain.toml` pins stable, so every command below passes `+nightly`. Run them from the repository root.
+cargo-fuzz targets (SPEC B1.2, B1.10 "Fuzzing"). This is a separate package with its own `[workspace]` and a committed `Cargo.lock`; the root `Cargo.toml` excludes `fuzz/`. cargo-fuzz needs a nightly toolchain, and the root `rust-toolchain.toml` pins stable, so every command below passes `+nightly-2026-10-18`, the nightly CI pins (`rustup toolchain install nightly-2026-10-18 --profile minimal`). Run them from the repository root.
 
 Gate: 60 seconds per CI run and 10 minutes nightly with zero panics, hangs, or out-of-memory.
 
@@ -24,7 +24,7 @@ The target also checks that the logged size and `Summary.bytes` equal the input 
 d=fuzz/seeds/ulog_ingest
 mkdir -p $d
 for n in v1.17.0/mc_flight_1 v1.17.0/failsafe_gps_loss v1.17.0/failsafe_battery_empty \
-         v1.17.0/vtol_transition_abort v1.14.4/mc_flight; do
+         v1.17.0/vtol_transition_abort v1.17.0/vtol_quadchute v1.14.4/mc_flight; do
   python3 -I scripts/testdata/shrink_ulog.py testdata/sitl/$n.ulg \
     $d/sitl_$(echo $n | tr / _)_shrunk.ulg --every 50 --no-multi-info
 done
@@ -63,8 +63,8 @@ A clean run exits with status 0, and its last line reads `Done <runs> runs in <s
 ## Reproduce and minimize a finding
 
 ```sh
-RUST_BACKTRACE=1 cargo +nightly fuzz run ulog_ingest fuzz/artifacts/ulog_ingest/crash-<hash>
-cargo +nightly fuzz tmin ulog_ingest fuzz/artifacts/ulog_ingest/crash-<hash>
+RUST_BACKTRACE=1 cargo +nightly-2026-10-18 fuzz run ulog_ingest fuzz/artifacts/ulog_ingest/crash-<hash>
+cargo +nightly-2026-10-18 fuzz tmin ulog_ingest fuzz/artifacts/ulog_ingest/crash-<hash>
 ```
 
 The first command runs that one input and prints the panic and backtrace. `tmin` writes smaller inputs with the same failure to `fuzz/artifacts/ulog_ingest/minimized-from-*` and prints the path of the last one under `Minimized artifact:`; rerun the first command on that file to confirm.
@@ -75,5 +75,5 @@ The first command runs that one input and prints the panic and backtrace. `tmin`
 
 ```sh
 cp Cargo.lock fuzz/Cargo.lock
-cargo +nightly metadata --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
+cargo +nightly-2026-10-18 metadata --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
 ```
