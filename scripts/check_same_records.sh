@@ -2,7 +2,8 @@
 # check_same_records.sh: two sfr builds seal byte-identical records (SPEC B1.10 Crypto).
 #
 # Seals every golden log (scripts/testdata/regenerate.sh list) with each build, using one
-# evaluation key, the default rules, the log's golden baseline, and one --seal-time, and
+# evaluation key, the log's golden rules (testdata/rules/<name>.toml, else the default rules),
+# its golden baseline, and one --seal-time, and
 # compares the records byte for byte. CI runs it with the x86_64 build and the armv7 build
 # (under QEMU) to show that a record does not depend on where it is sealed.
 #
@@ -23,7 +24,9 @@ while read -r name log; do
     mkdir -p "$work/$side/$name"
     # A failing rule exits 1 or 2 and still writes the record; anything else is a failure.
     rc=0
-    "$bin" seal "$log" --rules examples/rules.default.toml --baseline "testdata/baselines/$name.params" \
+    rules=examples/rules.default.toml
+    [ -f "testdata/rules/$name.toml" ] && rules="testdata/rules/$name.toml"
+    "$bin" seal "$log" --rules "$rules" --baseline "testdata/baselines/$name.params" \
       --key "$work/key/sfr.key" --evaluation-only --seal-time 2026-10-18T15:00:00Z \
       --out "$work/$side/$name" > "$work/$side/$name.out" 2>&1 || rc=$?
     if [ "$rc" -gt 2 ]; then

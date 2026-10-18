@@ -14,7 +14,12 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 SFR="${SFR:-target/debug/sfr}"
-RULES=examples/rules.default.toml
+
+# The rules file a golden log is sealed with: testdata/rules/<name>.toml when it exists (the
+# default rules plus what that log needs, such as [sealed_topics]), else the default.
+rules_for() {
+  if [ -f "testdata/rules/$1.toml" ]; then echo "testdata/rules/$1.toml"; else echo examples/rules.default.toml; fi
+}
 
 # name -> log path
 logs() {
@@ -44,7 +49,7 @@ case "${1:-}" in
   expected)
     logs | while read -r name log; do
       set +e
-      "$SFR" seal "$log" --rules "$RULES" --baseline "testdata/baselines/$name.params" --dry-run --json \
+      "$SFR" seal "$log" --rules "$(rules_for "$name")" --baseline "testdata/baselines/$name.params" --dry-run --json \
         > "testdata/expected/$name.json"
       code=$?
       set -e

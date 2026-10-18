@@ -3,8 +3,12 @@
 `<name>.json` is the output of
 
 ```
-sfr seal <log> --rules examples/rules.default.toml --baseline testdata/baselines/<name>.params --dry-run --json
+sfr seal <log> --rules <rules> --baseline testdata/baselines/<name>.params --dry-run --json
 ```
+
+where `<rules>` is `testdata/rules/<name>.toml` when that file exists (the default rules followed by
+the sections that log needs, such as `[sealed_topics]`; `seal_dry_run.rs` checks that each one
+starts with the default rules), else `examples/rules.default.toml`,
 
 for every log in `testdata/` (`pyulog_sample` is `testdata/pyulog/sample.ulg`; `v1.17.0_mc_flight_1` is
 `testdata/sitl/v1.17.0/mc_flight_1.ulg`, `synthetic_r4_quadchute_on_disarm` is

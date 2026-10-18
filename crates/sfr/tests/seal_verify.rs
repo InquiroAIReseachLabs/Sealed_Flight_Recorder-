@@ -66,11 +66,16 @@ fn keygen(dir: &Path) -> (String, String) {
 
 /// Seals `log` into `out` and returns the record path and the exit code.
 fn seal(log: &str, baseline: &str, key: &str, out: &Path) -> (String, i32) {
+    seal_with(log, RULES, baseline, key, out)
+}
+
+/// [`seal`] with a given rules file.
+fn seal_with(log: &str, rules: &str, baseline: &str, key: &str, out: &Path) -> (String, i32) {
     let o = sfr(&[
         "seal",
         log,
         "--rules",
-        RULES,
+        rules,
         "--baseline",
         baseline,
         "--key",
@@ -138,7 +143,23 @@ const GOLDEN: &[(&str, &str, i32)] = &[
         "testdata/synthetic/r4_quadchute_on_disarm.ulg",
         1,
     ),
+    (
+        "synthetic_custom_detection",
+        "testdata/synthetic/custom_detection.ulg",
+        0,
+    ),
 ];
+
+/// The rules file a golden log is sealed with: `testdata/rules/<name>.toml` when it exists (the
+/// default rules plus sections that log needs, such as `[sealed_topics]`), else the default.
+fn rules_for(name: &str) -> String {
+    let own = format!("testdata/rules/{name}.toml");
+    if root().join(&own).exists() {
+        own
+    } else {
+        RULES.to_string()
+    }
+}
 
 #[test]
 fn keygen_writes_a_private_key_only_its_owner_can_read_and_never_overwrites() {
@@ -219,9 +240,12 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
     let (key, public) = keygen(&dir.join("k"));
     for (name, log, code) in GOLDEN {
         let baseline = format!("testdata/baselines/{name}.params");
-        let (record, sealed_code) = seal(log, &baseline, &key, &dir.join(name).join("a"));
+        let rules = rules_for(name);
+        let (record, sealed_code) =
+            seal_with(log, &rules, &baseline, &key, &dir.join(name).join("a"));
         assert_eq!(sealed_code, *code, "{log}");
-        let (again, again_code) = seal(log, &baseline, &key, &dir.join(name).join("b"));
+        let (again, again_code) =
+            seal_with(log, &rules, &baseline, &key, &dir.join(name).join("b"));
         assert_eq!(again_code, *code, "{log}");
         assert_eq!(
             std::fs::read(&record).unwrap(),

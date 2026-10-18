@@ -104,7 +104,23 @@ const GOLDEN: &[(&str, &str, i32)] = &[
         "testdata/synthetic/r4_quadchute_on_disarm.ulg",
         1,
     ),
+    (
+        "synthetic_custom_detection",
+        "testdata/synthetic/custom_detection.ulg",
+        0,
+    ),
 ];
+
+/// The rules file a golden log is sealed with: `testdata/rules/<name>.toml` when it exists (the
+/// default rules plus sections that log needs, such as `[sealed_topics]`), else the default.
+fn rules_for(name: &str) -> String {
+    let own = format!("testdata/rules/{name}.toml");
+    if root().join(&own).exists() {
+        own
+    } else {
+        RULES.to_string()
+    }
+}
 
 #[test]
 fn golden_logs_match_reviewed_expected_files() {
@@ -136,7 +152,7 @@ fn golden_logs_match_reviewed_expected_files() {
 
     for (name, log, code) in GOLDEN {
         let baseline = format!("testdata/baselines/{name}.params");
-        let out = dry_run(log, RULES, &baseline, true);
+        let out = dry_run(log, &rules_for(name), &baseline, true);
         assert_eq!(
             out.status.code(),
             Some(*code),
@@ -150,6 +166,29 @@ fn golden_logs_match_reviewed_expected_files() {
             "{log}: output differs from testdata/expected/{name}.json; run scripts/testdata/regenerate.sh expected and compare"
         );
     }
+}
+
+#[test]
+fn per_log_rules_extend_the_default_rules() {
+    let default = std::fs::read_to_string(root().join(RULES)).unwrap();
+    let mut n = 0;
+    for e in std::fs::read_dir(root().join("testdata/rules")).unwrap() {
+        let p = e.unwrap().path();
+        let name = p.file_stem().unwrap().to_string_lossy().into_owned();
+        assert!(
+            GOLDEN.iter().any(|g| g.0 == name),
+            "{}: names no golden log",
+            p.display()
+        );
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            text.starts_with(&default),
+            "{}: must start with the text of {RULES}",
+            p.display()
+        );
+        n += 1;
+    }
+    assert!(n > 0);
 }
 
 #[test]
@@ -764,4 +803,97 @@ fn the_subscription_amplification_log_is_handled() {
         stdout(&out)
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The default rules followed by `extra`, written to a scratch rules file.
+fn rules_plus(extra: &str) -> PathBuf {
+    let path = scratch().join("rules.toml");
+    let text = std::fs::read_to_string(root().join(RULES)).unwrap() + "\n" + extra;
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+#[test]
+fn a_sealed_topic_missing_from_the_log_fails_r1_and_names_it() {
+    let rules = rules_plus("[sealed_topics]\ntopics = [\"custom_detection\"]\n");
+    let out = dry_run(
+        "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+        rules.to_str().unwrap(),
+        "testdata/baselines/v1.17.0_mc_flight_1.params",
+        false,
+    );
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(
+        stdout(&out)
+            .contains("R1    FAIL    required topics present       missing: custom_detection"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn more_than_64_sealed_topics_is_a_usage_error() {
+    let list: Vec<String> = (0..65).map(|i| format!("\"t{i}\"")).collect();
+    let rules = rules_plus(&format!(
+        "[sealed_topics]\ntopics = [{}]\n",
+        list.join(", ")
+    ));
+    let out = dry_run(
+        "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+        rules.to_str().unwrap(),
+        "testdata/baselines/v1.17.0_mc_flight_1.params",
+        false,
+    );
+    assert_eq!(out.status.code(), Some(4), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("`sealed_topics` exceeds the input limit of 64 topics (SPEC B1.4)"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn r7_names_each_command_from_an_unlisted_source() {
+    // In mc_flight_1, twelve commands come from system 1 component 1. payload_deliverer's
+    // boot-time DO_GRIPPER (211, PAYLOAD) carries uninitialized source ids, here system 191
+    // component 46144: arbitrary, but in range for v1.17's 16-bit component field.
+    let run = |extra: &str| {
+        let rules = rules_plus(extra);
+        dry_run(
+            "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+            rules.to_str().unwrap(),
+            "testdata/baselines/v1.17.0_mc_flight_1.params",
+            false,
+        )
+    };
+    let out = run("[authorized_sources]\nsources = [{ system = 1, component = 1 }]\n");
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let t = stdout(&out);
+    assert!(
+        t.contains("R7    FAIL    authorized command sources    1 of 13 command(s) from unauthorized sources"),
+        "{t}"
+    );
+    assert!(
+        t.contains(
+            "- event seq 1: command 211 (PAYLOAD) from system 191 component 46144 at boot_us "
+        ),
+        "{t}"
+    );
+    let out = run(
+        "[authorized_sources]\nsources = [{ system = 1, component = 1 }, { system = 191, component = 46144 }]\n",
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("R7    PASS    authorized command sources    13 command(s) checked"),
+        "{}",
+        stdout(&out)
+    );
+    let out = run(
+        "[authorized_sources]\ncategory = \"GENERAL\"\nsources = [{ system = 1, component = 1 }]\n",
+    );
+    assert!(
+        stdout(&out).contains("R7    PASS    authorized command sources    12 command(s) checked"),
+        "{}",
+        stdout(&out)
+    );
 }

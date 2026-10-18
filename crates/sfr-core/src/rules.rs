@@ -132,13 +132,13 @@ impl Category {
     }
 }
 
-/// A MAVLink command source R7 accepts.
+/// A command source R7 accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Source {
-    /// MAVLink system id.
+    /// `vehicle_command.source_system` (8 bits).
     pub system: u8,
-    /// MAVLink component id.
-    pub component: u8,
+    /// `vehicle_command.source_component`: 16 bits in PX4 v1.17 (docs/DIAGNOSTIC.md item 12).
+    pub component: u16,
 }
 
 /// `[authorized_sources]`: R7's configuration.
@@ -806,7 +806,7 @@ fn parse_authorized_sources(
         let component = require(ctx, s, at, "authorized_sources.sources", "component")?;
         let src = Source {
             system: as_uint(ctx, system, "system", 255)? as u8,
-            component: as_uint(ctx, component, "component", 255)? as u8,
+            component: as_uint(ctx, component, "component", u64::from(u16::MAX))? as u16,
         };
         if !sources.insert(src) {
             return Err(ctx.err(

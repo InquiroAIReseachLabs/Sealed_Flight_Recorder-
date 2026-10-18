@@ -1,0 +1,8 @@
+# Onboard parameters for Vehicle 1
+#
+# Initial parameters of custom_detection.ulg (definitions-section 'P' records)
+# Firmware: 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4
+#
+# Vehicle-Id Component-Id Name Value Type
+1	1	COM_DISARM_LAND	2	6
+1	1	SYS_AUTOSTART	10040	6

@@ -42,7 +42,7 @@ A message for a name, version, or length rule ends with a parenthesis that state
 | `required_topics.topics`, `parameters.ignore`, `watched_parameters.names`, `payload_commands.ids`, `authorized_sources.sources` | 256 entries each | Bounds the work done per log. | `rules.rs` `MAX_LIST_ENTRIES` |
 | `sealed_topics.topics` | 64 entries; more is a usage error, exit 4 | Each sealed topic instance keeps one running digest while the log streams; Change Order 01 sets the cap and the exit code. | `rules.rs` `MAX_SEALED_TOPICS` |
 | Watched parameter name | 1 to 64 letters, digits, `_` | The same bound as a parameter name pattern, without `*`. | `rules.rs` `valid_param_name` |
-| Payload command id; MAVLink system and component id | 0 to 4,294,967,295; 0 to 255 each | `vehicle_command.command` is 32 bits; MAVLink ids are 8 bits. | `rules.rs` `parse_payload_commands`, `parse_authorized_sources` |
+| Payload command id; source system id; source component id | 0 to 4,294,967,295; 0 to 255; 0 to 65,535 | `vehicle_command.command` is 32 bits; `source_system` is 8 bits; `source_component` is 16 bits in PX4 v1.17. | `rules.rs` `parse_payload_commands`, `parse_authorized_sources` |
 | Topic name | 1 to 64 lowercase letters, digits, `_` | The uORB topic name rule. | `rules.rs` `valid_topic` |
 | Parameter name pattern | 1 to 64 characters, at most 8 `*` | Wildcard matching cost grows with the number of `*`; the cap keeps it small. | `params.rs` `MAX_PATTERN_STARS` |
 | TOML nesting and dotted keys | 80 levels | The `toml` parser's own limit; `sfr` reports it as an input limit. The parser gives a line for nested arrays and inline tables but not for a dotted key or table header, which name the file only. | `rules.rs` `TOML_MAX_DEPTH` |

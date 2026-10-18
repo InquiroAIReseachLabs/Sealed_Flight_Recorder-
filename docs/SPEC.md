@@ -63,7 +63,7 @@ Every input except the log's total size is bounded by the limits below, and an i
 | Rules: `required_topics.topics`, `parameters.ignore`, `watched_parameters.names`, `payload_commands.ids`, `authorized_sources.sources` | 256 entries each |
 | Rules: `sealed_topics.topics` | 64 entries; more is a usage error (exit 4) |
 | Rules: watched parameter name | 1 to 64 letters, digits, `_` |
-| Rules: payload command id; MAVLink system and component id | 0 to 4,294,967,295; 0 to 255 each |
+| Rules: payload command id; source system id; source component id | 0 to 4,294,967,295; 0 to 255; 0 to 65,535 (`vehicle_command.source_component` is 16 bits in PX4 v1.17) |
 | Rules: topic name | 1 to 64 lowercase letters, digits, `_` |
 | Rules: parameter name pattern | 1 to 64 letters, digits, `_`, `*`, with at most 8 `*` |
 | Rules: TOML nesting and dotted keys | 80 levels (the limit of the `toml` parser) |
