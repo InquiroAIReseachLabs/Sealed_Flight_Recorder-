@@ -537,7 +537,9 @@ fn parse_type(token: &str, offset: u64) -> Result<(FieldType, Option<usize>), Ul
             if len == 0 || len > MAX_LAYOUT_SIZE {
                 return Err(malformed(
                     offset,
-                    format!("array length out of range in `{token}`"),
+                    format!(
+                        "array length in `{token}` is outside 1 to {MAX_LAYOUT_SIZE} (SPEC B1.4)"
+                    ),
                 ));
             }
             (b, Some(len))
@@ -604,7 +606,7 @@ impl Flattener<'_> {
         if depth > MAX_NESTING {
             return Err(malformed(
                 self.offset,
-                format!("format nesting deeper than {MAX_NESTING}"),
+                crate::limit_exceeded("format nesting", MAX_NESTING, "levels"),
             ));
         }
         let mut pos = base;
@@ -616,7 +618,7 @@ impl Flattener<'_> {
                 if prefix.len() + def.name.len() + suffix > MAX_NAME_LEN {
                     return Err(malformed(
                         self.offset,
-                        format!("flattened field name longer than {MAX_NAME_LEN} bytes"),
+                        crate::limit_exceeded("a flattened field name", MAX_NAME_LEN, "bytes"),
                     ));
                 }
                 let name = match def.array {
@@ -634,7 +636,14 @@ impl Flattener<'_> {
                             .checked_add(s.size())
                             .filter(|&p| p <= MAX_LAYOUT_SIZE)
                             .ok_or_else(|| {
-                                malformed(self.offset, "flattened format larger than 65535 bytes")
+                                malformed(
+                                    self.offset,
+                                    crate::limit_exceeded(
+                                        "a flattened format",
+                                        MAX_LAYOUT_SIZE,
+                                        "bytes",
+                                    ),
+                                )
                             })?;
                     }
                     FieldType::Nested(t) => {
@@ -652,12 +661,26 @@ impl Flattener<'_> {
                             .checked_add(used)
                             .filter(|&p| p <= MAX_LAYOUT_SIZE)
                             .ok_or_else(|| {
-                                malformed(self.offset, "flattened format larger than 65535 bytes")
+                                malformed(
+                                    self.offset,
+                                    crate::limit_exceeded(
+                                        "a flattened format",
+                                        MAX_LAYOUT_SIZE,
+                                        "bytes",
+                                    ),
+                                )
                             })?;
                     }
                 }
                 if self.out.len() > MAX_LAYOUT_SIZE {
-                    return Err(malformed(self.offset, "more than 65535 flattened fields"));
+                    return Err(malformed(
+                        self.offset,
+                        crate::limit_exceeded(
+                            "the number of flattened fields in a format",
+                            MAX_LAYOUT_SIZE,
+                            "fields",
+                        ),
+                    ));
                 }
             }
         }
@@ -850,7 +873,11 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                 if format_fields > MAX_TOTAL_FIELDS {
                     return Err(malformed(
                         start,
-                        format!("more than {MAX_TOTAL_FIELDS} fields across all formats"),
+                        crate::limit_exceeded(
+                            "the number of fields across all formats",
+                            MAX_TOTAL_FIELDS,
+                            "fields",
+                        ),
                     ));
                 }
                 formats.insert(name, defs);
@@ -912,7 +939,7 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                 if topic.len() > MAX_NAME_LEN {
                     return Err(malformed(
                         start,
-                        format!("subscription name longer than {MAX_NAME_LEN} bytes"),
+                        crate::limit_exceeded("a subscription name", MAX_NAME_LEN, "bytes"),
                     ));
                 }
                 if subs.contains_key(&msg_id) {
@@ -922,12 +949,18 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                     ));
                 }
                 let layout = flatten(&formats, &topic, start)?;
-                field_budget = field_budget.checked_sub(layout.fields.len()).ok_or_else(|| {
-                    malformed(
-                        start,
-                        format!("more than {MAX_TOTAL_FIELDS} flattened fields across all subscriptions"),
-                    )
-                })?;
+                field_budget = field_budget
+                    .checked_sub(layout.fields.len())
+                    .ok_or_else(|| {
+                        malformed(
+                            start,
+                            crate::limit_exceeded(
+                                "the number of flattened fields across all subscriptions",
+                                MAX_TOTAL_FIELDS,
+                                "fields",
+                            ),
+                        )
+                    })?;
                 let ts = layout.field("timestamp").cloned().ok_or_else(|| {
                     malformed(start, format!("format `{topic}` has no timestamp"))
                 })?;
@@ -1171,13 +1204,17 @@ pub(crate) mod tests {
             .sub(0, 1, "a")
             .bytes;
         let e = read(&nest[..], &mut Collect::default()).unwrap_err();
-        assert!(e.to_string().contains("nesting deeper"), "{e}");
+        assert!(
+            e.to_string()
+                .contains("format nesting exceeds the input limit of 8 levels"),
+            "{e}"
+        );
 
         let zero = Builder::new(0)
             .format("a:uint64_t timestamp;float[0] x;")
             .bytes;
         let e = read(&zero[..], &mut Collect::default()).unwrap_err();
-        assert!(e.to_string().contains("array length out of range"), "{e}");
+        assert!(e.to_string().contains("is outside 1 to 65535"), "{e}");
 
         let short = Builder::new(0)
             .format("a:uint64_t timestamp;float x;")
@@ -1233,7 +1270,9 @@ pub(crate) mod tests {
             .sub(0, 0, "t");
         let err = read(&b.bytes[..], &mut Collect::default()).expect_err("long field name");
         assert!(
-            err.to_string().contains("flattened field name longer than"),
+            err.to_string().contains(
+                "a flattened field name exceeds the input limit of 255 bytes (SPEC B1.4)"
+            ),
             "{err}"
         );
         let topic = "t".repeat(MAX_NAME_LEN + 1);
@@ -1243,8 +1282,43 @@ pub(crate) mod tests {
             .sub(0, 0, &topic);
         let err = read(&b.bytes[..], &mut Collect::default()).expect_err("long topic name");
         assert!(
-            err.to_string().contains("subscription name longer than"),
+            err.to_string()
+                .contains("a subscription name exceeds the input limit of 255 bytes"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn format_size_and_definition_limits_are_named() {
+        // 8 bytes of timestamp and 65,528 bytes of array: 65,536 bytes, one over.
+        let b = Builder::new(0)
+            .flags(&[])
+            .format("wide:uint64_t timestamp;uint8_t[65528] x;")
+            .sub(0, 0, "wide");
+        let e = read(&b.bytes[..], &mut Collect::default()).expect_err("65,536 bytes");
+        assert!(
+            e.to_string()
+                .contains("a flattened format exceeds the input limit of 65535 bytes (SPEC B1.4)"),
+            "{e}"
+        );
+        let b = Builder::new(0)
+            .flags(&[])
+            .format("wide:uint64_t timestamp;uint8_t[65527] x;")
+            .sub(0, 0, "wide");
+        read(&b.bytes[..], &mut Collect::default()).expect("65,535 bytes");
+
+        // 223 formats of 4,500 definitions each (under 64 KiB per message): 1,003,500 in all.
+        let defs: String = (0..4_500).map(|i| format!("uint8_t f{i};")).collect();
+        let mut b = Builder::new(0).flags(&[]);
+        for k in 0..223 {
+            b = b.format(&format!("t{k}:{defs}"));
+        }
+        let e = read(&b.bytes[..], &mut Collect::default()).expect_err("over 1,000,000");
+        assert!(
+            e.to_string().contains(
+                "the number of fields across all formats exceeds the input limit of 1000000 fields"
+            ),
+            "{e}"
         );
     }
 
@@ -1260,7 +1334,7 @@ pub(crate) mod tests {
         let err = read(&b.bytes[..], &mut Collect::default()).expect_err("over the cap");
         assert!(
             err.to_string()
-                .contains("flattened fields across all subscriptions"),
+                .contains("across all subscriptions exceeds the input limit of 1000000 fields"),
             "{err}"
         );
         // Sixteen subscriptions (960,016 fields) are still accepted.

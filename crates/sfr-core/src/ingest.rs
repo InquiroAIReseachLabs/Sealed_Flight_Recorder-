@@ -35,7 +35,7 @@ impl std::fmt::Display for IngestError {
         match self {
             IngestError::Malformed(e) => write!(f, "{e}"),
             IngestError::Io(e) => write!(f, "read error: {e}"),
-            IngestError::Limit(e) => write!(f, "exceeds a limit: {e}"),
+            IngestError::Limit(e) => write!(f, "{e}"),
         }
     }
 }
@@ -605,9 +605,10 @@ impl Visitor for Collector {
                 if self.params.len() >= crate::params::MAX_PARAMS && !self.params.contains_key(name)
                 {
                     self.limit.get_or_insert_with(|| {
-                        format!(
-                            "more than {} parameters at log start",
-                            crate::params::MAX_PARAMS
+                        crate::limit_exceeded(
+                            "the number of parameters at log start",
+                            crate::params::MAX_PARAMS,
+                            "parameters",
                         )
                     });
                 } else {
@@ -648,7 +649,11 @@ impl Visitor for Collector {
             }
             "failsafe_flags" if failsafe_schema(l).len() > MAX_FAILSAFE_FLAGS => {
                 self.limit.get_or_insert_with(|| {
-                    format!("failsafe_flags has more than {MAX_FAILSAFE_FLAGS} flag fields")
+                    crate::limit_exceeded(
+                        "the number of failsafe_flags flag fields",
+                        MAX_FAILSAFE_FLAGS,
+                        "fields",
+                    )
                 });
                 Decoder::Count
             }
@@ -1116,10 +1121,10 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            IngestError::Limit(format!(
-                "more than {} parameters at log start",
-                crate::params::MAX_PARAMS
-            ))
+            IngestError::Limit(
+                "the number of parameters at log start exceeds the input limit of 65536 parameters (SPEC B1.4)"
+                    .to_string()
+            )
         );
     }
 
@@ -1139,11 +1144,15 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            IngestError::Limit(format!(
-                "failsafe_flags has more than {MAX_FAILSAFE_FLAGS} flag fields"
-            ))
+            IngestError::Limit(
+                "the number of failsafe_flags flag fields exceeds the input limit of 256 fields (SPEC B1.4)"
+                    .to_string()
+            )
         );
-        assert!(err.to_string().starts_with("exceeds a limit: "));
+        assert!(
+            err.to_string()
+                .starts_with("the number of failsafe_flags flag fields exceeds")
+        );
     }
 
     #[test]

@@ -28,7 +28,7 @@ Arbitrary bytes go to `sfr_core::verify::verify` without a log: the canonical-fo
 d=fuzz/seeds/ulog_ingest
 mkdir -p $d
 for n in v1.17.0/mc_flight_1 v1.17.0/failsafe_gps_loss v1.17.0/failsafe_battery_empty \
-         v1.17.0/vtol_transition_abort v1.14.4/mc_flight; do
+         v1.17.0/vtol_transition_abort v1.17.0/vtol_quadchute v1.14.4/mc_flight; do
   python3 -I scripts/testdata/shrink_ulog.py testdata/sitl/$n.ulg \
     $d/sitl_$(echo $n | tr / _)_shrunk.ulg --every 50 --no-multi-info
 done

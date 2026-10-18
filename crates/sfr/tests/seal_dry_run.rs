@@ -90,6 +90,11 @@ const GOLDEN: &[(&str, &str, i32)] = &[
         0,
     ),
     (
+        "v1.17.0_vtol_quadchute",
+        "testdata/sitl/v1.17.0/vtol_quadchute.ulg",
+        1,
+    ),
+    (
         "v1.17.0_vtol_transition_abort",
         "testdata/sitl/v1.17.0/vtol_transition_abort.ulg",
         1,
@@ -631,6 +636,39 @@ fn r2_fails_on_other_firmware_and_r5_when_the_log_ends_armed() {
     assert!(
         s.contains("R5    FAIL") && s.contains("has no DISARM: the log ends armed"),
         "{s}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn oversize_text_inputs_are_refused_and_name_the_limit() {
+    let dir = scratch();
+    let big = dir.join("big.toml");
+    // 16 MiB and one byte.
+    std::fs::write(&big, vec![b'#'; 16 * 1024 * 1024 + 1]).unwrap();
+    let out = dry_run(
+        "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+        big.to_str().unwrap(),
+        "testdata/baselines/v1.17.0_mc_flight_1.params",
+        false,
+    );
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("exceeds the input limit of 16777216 bytes (SPEC B1.4)"),
+        "{}",
+        stderr(&out)
+    );
+    let out = sfr(&[
+        "verify",
+        "--pubkey",
+        big.to_str().unwrap(),
+        big.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(4), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("public key") && stderr(&out).contains("16777216 bytes"),
+        "{}",
+        stderr(&out)
     );
     std::fs::remove_dir_all(dir).unwrap();
 }

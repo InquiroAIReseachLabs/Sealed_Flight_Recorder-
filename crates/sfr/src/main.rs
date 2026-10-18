@@ -108,7 +108,8 @@ impl Args {
     }
 }
 
-fn read_bytes(path: &str, what: &str, max: u64) -> Result<Vec<u8>, Failure> {
+/// Reads at most `max` bytes; a longer file fails with exit code `code` and names the limit.
+fn read_bytes(path: &str, what: &str, max: u64, code: i32) -> Result<Vec<u8>, Failure> {
     let file = File::open(path)
         .map_err(|e| fail(exit_code::USAGE, format!("cannot read {what} {path}: {e}")))?;
     let mut buf = Vec::new();
@@ -117,18 +118,23 @@ fn read_bytes(path: &str, what: &str, max: u64) -> Result<Vec<u8>, Failure> {
         .map_err(|e| fail(exit_code::USAGE, format!("cannot read {what} {path}: {e}")))?;
     if buf.len() as u64 > max {
         return Err(fail(
-            exit_code::MALFORMED_INPUT,
-            format!("{what} {path}: larger than {max} bytes"),
+            code,
+            format!(
+                "{what} {path}: {}",
+                sfr_core::limit_exceeded("the file", max, "bytes")
+            ),
         ));
     }
     Ok(buf)
 }
 
-fn read_text(path: &str, what: &str) -> Result<String, Failure> {
-    let bytes = read_bytes(path, what, MAX_TEXT_BYTES)?;
+/// Reads a UTF-8 text file of at most [`MAX_TEXT_BYTES`]; content errors exit with `code`
+/// (3 for rules and baseline, 4 for keys).
+fn read_text(path: &str, what: &str, code: i32) -> Result<String, Failure> {
+    let bytes = read_bytes(path, what, MAX_TEXT_BYTES, code)?;
     String::from_utf8(bytes).map_err(|e| {
         fail(
-            exit_code::MALFORMED_INPUT,
+            code,
             format!(
                 "{what} {path}: not UTF-8 at byte offset {}",
                 e.utf8_error().valid_up_to()
@@ -351,7 +357,7 @@ fn seal_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<i3
                  (--key-uri pkcs11:... or --key-uri tpm-sealed:<dir>)",
             ));
         }
-        let text = Zeroizing::new(read_text(path, "key file")?);
+        let text = Zeroizing::new(read_text(path, "key file", exit_code::USAGE)?);
         let der = Zeroizing::new(
             pem_decode(&text, "PRIVATE KEY")
                 .map_err(|e| fail(exit_code::USAGE, format!("key file {path}: {e}")))?,
@@ -395,14 +401,14 @@ fn seal_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<i3
         ));
     }
 
-    let rules_text = read_text(rules_path, "rules file")?;
+    let rules_text = read_text(rules_path, "rules file", exit_code::MALFORMED_INPUT)?;
     let rules: Rules = parse_rules(&rules_text).map_err(|e| {
         fail(
             exit_code::MALFORMED_INPUT,
             format!("rules file {rules_path}: {e}"),
         )
     })?;
-    let baseline_text = read_text(baseline_path, "baseline")?;
+    let baseline_text = read_text(baseline_path, "baseline", exit_code::MALFORMED_INPUT)?;
     let baseline: Baseline = parse_baseline(&baseline_text).map_err(|e| {
         fail(
             exit_code::MALFORMED_INPUT,
@@ -538,9 +544,16 @@ fn verify_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<
     let pub_path = a
         .value("--pubkey")
         .ok_or_else(|| usage("--pubkey <sfr.pub> is required"))?;
-    let public = parse_public_key_pem(&read_text(pub_path, "public key")?)
+    let public = parse_public_key_pem(&read_text(pub_path, "public key", exit_code::USAGE)?)
         .map_err(|e| fail(exit_code::USAGE, format!("public key {pub_path}: {e}")))?;
-    let record = read_bytes(&record_path, "record", MAX_RECORD_BYTES as u64)?;
+    // One byte over the limit is read so that `verify` reports the oversize record as a
+    // verification failure (exit 1) naming the limit.
+    let record = read_bytes(
+        &record_path,
+        "record",
+        MAX_RECORD_BYTES as u64 + 1,
+        exit_code::RULE_FAIL,
+    )?;
     let mut log_file = match a.value("--ulog") {
         Some(p) => Some(
             File::open(p)

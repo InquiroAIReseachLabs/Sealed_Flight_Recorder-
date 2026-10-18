@@ -21,6 +21,7 @@ KIND_FIELDS = {
     "VTOL_TRANSITION_START": ["direction"],
     "VTOL_TRANSITION_END": ["direction"],
     "VTOL_TRANSITION_ABORT": ["direction"],
+    "QUADCHUTE": ["vtol_fixed_wing_system_failure"],
     "PARAM_CHANGED_IN_FLIGHT": ["name", "old", "new"],
     "LOG_MESSAGE": ["level", "text"],
     "LOG_DROPOUT": ["duration_ms"],

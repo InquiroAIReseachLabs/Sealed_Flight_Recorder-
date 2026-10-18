@@ -118,8 +118,10 @@ fn standalone(
     require_hardware_key: bool,
 ) -> Result<Parsed, Mismatch> {
     if bytes.len() > MAX_RECORD_BYTES {
-        return Err(fail(format!(
-            "record is larger than {MAX_RECORD_BYTES} bytes"
+        return Err(fail(crate::limit_exceeded(
+            "the record",
+            MAX_RECORD_BYTES,
+            "bytes",
         )));
     }
     let spans = match scan_canonical(bytes) {

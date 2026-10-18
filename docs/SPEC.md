@@ -42,6 +42,31 @@ Every command supports `--json` for machine-readable output. `sfr --version` pri
 
 If the FIPS module fails a power-on self-test or its integrity check, the module aborts the process before `sfr` can choose an exit code (SIGABRT; a shell reports 134). Nothing is written.
 
+#### Input limits
+
+Every input is bounded. An input over a limit is refused, never truncated, and the message names the limit (`... exceeds the input limit of N <unit> (SPEC B1.4)`). `seal` exits 3 for the log, rules file, and baseline, and 4 for key files. `verify` treats any limit, in the record or in the `--ulog` log, as a verification failure (exit 1). `docs/LIMITS.md` gives the reason for each limit.
+
+| Input | Limit |
+|---|---|
+| Log: ULog file format version | 0 or 1 |
+| Log: format nesting | 8 levels |
+| Log: one flattened format | 65,535 bytes and 65,535 fields; array length 1 to 65,535 |
+| Log: fields across all format definitions | 1,000,000 |
+| Log: flattened fields across all subscriptions | 1,000,000 |
+| Log: flattened field name, subscription name | 255 bytes |
+| Log: parameter name | 1 to 16 letters, digits, `_` |
+| Log: parameters at log start | 65,536 |
+| Log: `failsafe_flags` flag fields | 256 |
+| Log: events (B1.5) | 100,000 |
+| Rules file, baseline, key file, public key | 16 MiB (16,777,216 bytes) each |
+| Rules: `required_topics.topics`, `parameters.ignore` | 256 entries each |
+| Rules: topic name | 1 to 64 lowercase letters, digits, `_` |
+| Rules: parameter name pattern | 1 to 64 letters, digits, `_`, `*`, with at most 8 `*` |
+| Baseline: parameters | 65,536 |
+| Record (`verify`) | 512 MiB (536,870,912 bytes); JSON nesting 64 levels |
+
+The log itself has no size limit: it is read as a stream in one pass. One limit truncates instead of refusing: a rule's `detail` lists at most 1,000 lines, then one line `and N more; the events list every one`.
+
 ### B1.5 What is extracted from the log
 
 Supported: PX4 v1.14 through v1.17 ULog. Exact topic and field names per version come from `docs/DIAGNOSTIC.md` (Chunk 1), never from memory.
@@ -54,6 +79,7 @@ Supported: PX4 v1.14 through v1.17 ULog. Exact topic and field names per version
   - FAILSAFE_SET, FAILSAFE_CLEAR (flag name; from `failsafe_flags`): edges of `vehicle_status.failsafe`. Each edge names the `failsafe_flags` booleans (and `battery_warning` above 0) that are true at that moment and are either required by the current `nav_state` (the flag's `mode_req_*` bit is set) or were not true at the most recent ARM (the first `failsafe_flags` sample when no ARM precedes the edge); one event per named flag, or one event with flag `unattributed`. A log that starts in failsafe reports FAILSAFE_SET at its first sample, marked `initial`.
   - COMMAND (command id, source system and component, result from the matching `vehicle_command_ack`, or `NO_ACK`): the matching ack is the earliest unused ack with the same command id, a timestamp not before the command's and before the next identical command from the same source, and target system and component equal to the command's source; a final result is preferred over IN_PROGRESS.
   - VTOL_TRANSITION_START, VTOL_TRANSITION_END, VTOL_TRANSITION_ABORT (direction): from the VTOL state derived from `vehicle_status` (in transition to fixed wing, in transition to multicopter, fixed wing, multicopter). START when a transition state is entered; END on transition-to-fixed-wing then fixed wing, or transition-to-multicopter then multicopter; ABORT when a transition state is left any other way. A quadchute (fixed wing straight to multicopter) is not a transition; R4 reports it.
+  - QUADCHUTE (`vtol_fixed_wing_system_failure` true, false, or null when not logged): the VTOL state goes from fixed wing straight to multicopter without a transition state; the flag is the `failsafe_flags` value at that moment. R6 does not count it; R4 fails on it while armed.
   - PARAM_CHANGED_IN_FLIGHT (name, old, new): a data-section 'P' record whose value differs from the last known value of that parameter, between ARM and DISARM (ARM time < its time <= DISARM time, so the timeline shows it after ARM and before DISARM); its time is the last data timestamp before it. Firmware-written changes count like any other.
   - LOG_MESSAGE (flight stack messages at warning level or above): 'L' and 'C' records at levels 0 to 4 (emergency to warning), text kept verbatim. PX4 events (the `event` topic) are not decoded in v1.
   - LOG_DROPOUT (duration): an 'O' record, in milliseconds; its time is the last data timestamp before it.

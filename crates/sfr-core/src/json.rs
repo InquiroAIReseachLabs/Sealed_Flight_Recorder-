@@ -260,7 +260,7 @@ impl Parser<'_> {
 
     fn value(&mut self, depth: usize) -> Result<Value, ParseError> {
         if depth > MAX_DEPTH {
-            return self.err(format!("nested deeper than {MAX_DEPTH}"));
+            return self.err(crate::limit_exceeded("JSON nesting", MAX_DEPTH, "levels"));
         }
         self.ws();
         match self.peek() {
@@ -518,7 +518,7 @@ impl Scanner<'_> {
 
     fn value(&mut self, depth: usize) -> Result<(), ParseError> {
         if depth > MAX_DEPTH {
-            return self.err(format!("nested deeper than {MAX_DEPTH}"));
+            return self.err(crate::limit_exceeded("JSON nesting", MAX_DEPTH, "levels"));
         }
         match self.peek() {
             Some(b'{') => self.object(depth, false).map(|_| ()),
@@ -845,7 +845,19 @@ mod tests {
             assert_eq!(e.offset, *at, "{b}: {e}");
         }
         let deep = "[".repeat(MAX_DEPTH + 2);
-        assert!(parse(deep.as_bytes()).is_err());
+        let e = parse(deep.as_bytes()).expect_err("too deep");
+        assert!(
+            e.to_string()
+                .contains("JSON nesting exceeds the input limit of 64 levels"),
+            "{e}"
+        );
+        let deep_object = "{\"a\":".repeat(MAX_DEPTH + 2);
+        let e = scan_canonical(deep_object.as_bytes()).expect_err("too deep");
+        assert!(
+            e.to_string()
+                .contains("exceeds the input limit of 64 levels"),
+            "{e}"
+        );
         assert_eq!(
             first_non_canonical_offset(b"{ }", &Value::Object(BTreeMap::new())),
             Some(1)

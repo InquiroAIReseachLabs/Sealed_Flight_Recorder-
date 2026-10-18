@@ -124,6 +124,11 @@ const GOLDEN: &[(&str, &str, i32)] = &[
         0,
     ),
     (
+        "v1.17.0_vtol_quadchute",
+        "testdata/sitl/v1.17.0/vtol_quadchute.ulg",
+        1,
+    ),
+    (
         "v1.17.0_vtol_transition_abort",
         "testdata/sitl/v1.17.0/vtol_transition_abort.ulg",
         1,

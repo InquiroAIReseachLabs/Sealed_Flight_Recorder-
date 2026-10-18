@@ -198,7 +198,14 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, BaselineError> {
             return Err(err(n, format!("{name} appears twice")));
         }
         if params.len() > MAX_PARAMS {
-            return Err(err(n, format!("more than {MAX_PARAMS} parameters")));
+            return Err(err(
+                n,
+                crate::limit_exceeded(
+                    "the number of baseline parameters",
+                    MAX_PARAMS,
+                    "parameters",
+                ),
+            ));
         }
     }
     let end = text.lines().count() + 1;
@@ -266,6 +273,28 @@ mod tests {
     use super::*;
 
     const GOOD: &str = "# Onboard parameters for Vehicle 1\n#\n# Firmware: 1.17.0 D6F12AD\n#\n# Vehicle-Id Component-Id Name Value Type\n1\t1\tBAT_LOW_THR\t0.150000005960464478\t9\r\n1\t1\tCOM_DISARM_LAND\t2\t9\n1\t1\tNAV_DLL_ACT\t0\t6\n";
+
+    #[test]
+    fn baseline_parameter_limit_is_enforced_and_named() {
+        let baseline = |n: usize| {
+            let mut s = String::from("# Firmware: 1.17.0\n");
+            for i in 0..n {
+                s.push_str(&format!("1\t1\tP{i}\t1\t6\n"));
+            }
+            s
+        };
+        assert_eq!(
+            parse_baseline(&baseline(MAX_PARAMS)).map(|b| b.params.len()),
+            Ok(MAX_PARAMS)
+        );
+        let e = parse_baseline(&baseline(MAX_PARAMS + 1)).expect_err("over the limit");
+        assert!(
+            e.to_string().contains(
+                "the number of baseline parameters exceeds the input limit of 65536 parameters (SPEC B1.4)"
+            ),
+            "{e}"
+        );
+    }
 
     #[test]
     fn parses_qgc_export_with_firmware_line() {

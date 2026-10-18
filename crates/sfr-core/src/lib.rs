@@ -30,6 +30,11 @@ pub fn hex(bytes: &[u8]) -> String {
     s
 }
 
+/// The message for an input over one of the SPEC B1.4 input limits: it names the limit.
+pub fn limit_exceeded(subject: &str, limit: impl std::fmt::Display, unit: &str) -> String {
+    format!("{subject} exceeds the input limit of {limit} {unit} (SPEC B1.4)")
+}
+
 /// Name of the tool and of its binary (SPEC B1.1).
 pub const TOOL_NAME: &str = "sfr";
 
