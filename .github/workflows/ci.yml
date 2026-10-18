@@ -62,6 +62,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: cargo test --locked
         run: cargo test --workspace --locked
+      - name: README numbers script self-test
+        run: scripts/regen_readme_numbers.sh --self-test
       - name: Standalone verify of 10,000 events under 10 ms (SPEC B1.10 Performance, release build)
         run: |
           set -euo pipefail
@@ -70,6 +72,10 @@ jobs:
             echo "### Standalone verify, 10,000 events (SPEC B1.10)"
             echo
             grep -E '^perf: ' verify-perf.log | sed -e 's/^perf: /- /'
+            echo
+            echo "README block that scripts/regen_readme_numbers.sh writes from this run:"
+            echo
+            scripts/regen_readme_numbers.sh --print verify-perf.log "$GITHUB_RUN_ID" "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
 
   golden-oracle:

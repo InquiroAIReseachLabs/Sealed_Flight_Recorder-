@@ -36,6 +36,7 @@ run "deny-list check" scripts/check_deny_list.sh
 # 4. Language rules (SPEC B1.12).
 run "language self-test" scripts/check_language.sh --self-test
 run "language check" scripts/check_language.sh
+run "README numbers script self-test" scripts/regen_readme_numbers.sh --self-test
 
 # 4b. The shipped graph takes SHA-256 and Ed25519 only from the FIPS module (SPEC B1.10, "Crypto").
 check_crypto_graph() {
