@@ -114,6 +114,16 @@ const GOLDEN: &[(&str, &str, i32)] = &[
         1,
     ),
     (
+        "v1.17.0_gz_quadtailsitter_transition",
+        "testdata/sitl/v1.17.0/gz_quadtailsitter_transition.ulg",
+        0,
+    ),
+    (
+        "v1.17.0_gz_x500_vision_hover",
+        "testdata/sitl/v1.17.0/gz_x500_vision_hover.ulg",
+        0,
+    ),
+    (
         "v1.17.0_mc_flight_1",
         "testdata/sitl/v1.17.0/mc_flight_1.ulg",
         0,
@@ -122,6 +132,11 @@ const GOLDEN: &[(&str, &str, i32)] = &[
         "v1.17.0_mc_flight_2",
         "testdata/sitl/v1.17.0/mc_flight_2.ulg",
         0,
+    ),
+    (
+        "v1.17.0_payload_two_sources",
+        "testdata/sitl/v1.17.0/payload_two_sources.ulg",
+        1,
     ),
     (
         "v1.17.0_vtol_transition",
@@ -337,21 +352,38 @@ fn a_thousand_seeded_byte_flips_in_a_log_all_fail_verification() {
 /// Seals the shrunk failsafe_gps_loss seed with the default rules plus `[sealed_topics]`
 /// sealing battery_status, which no event and no default rule reads. Returns the record bytes,
 /// the log bytes, and the public key.
-fn sealed_battery_status() -> (Vec<u8>, Vec<u8>, [u8; 32]) {
+/// Sealed topics the flip tests cover, as (topic, golden flight, shrunk fuzz seed of that
+/// flight; fuzz/README.md): a PX4 topic in a SIH flight, and the external vision odometry of the
+/// Gazebo vision flight (Change Order 01 item 3c). The small seeds keep a thousand deep verifies
+/// quick; each case is its own test, so the cases run in parallel.
+const BATTERY_STATUS: (&str, &str, &str) = (
+    "battery_status",
+    "v1.17.0_failsafe_gps_loss",
+    "sitl_v1.17.0_failsafe_gps_loss_shrunk",
+);
+const VISUAL_ODOMETRY: (&str, &str, &str) = (
+    "vehicle_visual_odometry",
+    "v1.17.0_gz_x500_vision_hover",
+    "sitl_v1.17.0_gz_x500_vision_hover_shrunk",
+);
+
+/// Seals `topic` from the fuzz seed `seed` of golden flight `golden`.
+fn sealed_topic_record(topic: &str, golden: &str, seed: &str) -> (Vec<u8>, Vec<u8>, [u8; 32]) {
     let dir = scratch();
     let (key, public) = keygen(&dir.join("k"));
     let rules = dir.join("rules.toml");
     let rules_text = std::fs::read_to_string(root().join(RULES)).unwrap()
-        + "\n[sealed_topics]\ntopics = [\"battery_status\"]\n";
+        + &format!("\n[sealed_topics]\ntopics = [\"{topic}\"]\n");
     std::fs::write(&rules, rules_text).unwrap();
-    let log = "fuzz/seeds/ulog_ingest/sitl_v1.17.0_failsafe_gps_loss_shrunk.ulg";
+    let log = format!("fuzz/seeds/ulog_ingest/{seed}.ulg");
+    let baseline = format!("testdata/baselines/{golden}.params");
     let o = sfr(&[
         "seal",
-        log,
+        &log,
         "--rules",
         rules.to_str().unwrap(),
         "--baseline",
-        "testdata/baselines/v1.17.0_failsafe_gps_loss.params",
+        &baseline,
         "--key",
         &key,
         "--evaluation-only",
@@ -360,12 +392,12 @@ fn sealed_battery_status() -> (Vec<u8>, Vec<u8>, [u8; 32]) {
         "--seal-time",
         SEAL_TIME,
     ]);
-    let record = dir.join("sitl_v1.17.0_failsafe_gps_loss_shrunk.sfr");
+    let record = dir.join(format!("{seed}.sfr"));
     assert!(record.exists(), "{}", text(&o));
     let rec = std::fs::read(record).unwrap();
     assert!(
-        String::from_utf8_lossy(&rec).contains("\"sealed_topics\":[{\"data_sha256\":"),
-        "the record seals battery_status"
+        String::from_utf8_lossy(&rec).contains(&format!("\"multi_id\":0,\"topic\":\"{topic}\"")),
+        "the record seals {topic}"
     );
     (
         rec,
@@ -377,16 +409,25 @@ fn sealed_battery_status() -> (Vec<u8>, Vec<u8>, [u8; 32]) {
 /// 1,000 seeded single-byte flips inside sealed topic messages in the log (Change Order 01).
 #[test]
 fn a_thousand_flips_in_sealed_topic_messages_name_the_topic_and_instance() {
-    let (rec, ulg, pk) = sealed_battery_status();
+    flips_in_sealed_topic_messages(BATTERY_STATUS, 0x5eed_0003);
+}
+
+#[test]
+fn a_thousand_flips_in_vision_odometry_messages_name_the_topic_and_instance() {
+    flips_in_sealed_topic_messages(VISUAL_ODOMETRY, 0x5eed_0103);
+}
+
+fn flips_in_sealed_topic_messages((topic, golden, seed): (&str, &str, &str), rng_seed: u64) {
+    let (rec, ulg, pk) = sealed_topic_record(topic, golden, seed);
     let crypto = RustCrypto;
     assert!(verify(&rec, Some(&mut &ulg[..]), &crypto, &pk, false).is_ok());
     let spans: Vec<(usize, usize)> = data_records(&ulg)
         .into_iter()
-        .filter(|(_, _, t)| t == "battery_status")
+        .filter(|(_, _, t)| t == topic)
         .map(|(at, len, _)| (at, len))
         .collect();
     assert!(!spans.is_empty());
-    let mut rng = Rng(0x5eed_0003);
+    let mut rng = Rng(rng_seed);
     for i in 0..1000 {
         let (start, len) = spans[(rng.next() % spans.len() as u64) as usize];
         let at = start + (rng.next() % len as u64) as usize;
@@ -398,11 +439,13 @@ fn a_thousand_flips_in_sealed_topic_messages_name_the_topic_and_instance() {
                 let all: Vec<&String> = std::iter::once(&m.first).chain(&m.also).collect();
                 assert!(
                     all.iter()
-                        .any(|l| l.starts_with("sealed topic battery_status instance 0 ")),
-                    "flip {i} at byte {at} (xor {x:#04x}) did not name the sealed topic: {all:?}"
+                        .any(|l| l.starts_with(&format!("sealed topic {topic} instance 0 "))),
+                    "{topic} flip {i} at byte {at} (xor {x:#04x}) did not name the sealed topic: {all:?}"
                 );
             }
-            other => panic!("flip {i} at byte {at} (xor {x:#04x}) was not detected: {other:?}"),
+            other => {
+                panic!("{topic} flip {i} at byte {at} (xor {x:#04x}) was not detected: {other:?}")
+            }
         }
     }
 }
@@ -411,12 +454,21 @@ fn a_thousand_flips_in_sealed_topic_messages_name_the_topic_and_instance() {
 /// verify fails on every one; deep verify also names the sealed topic and instance.
 #[test]
 fn a_thousand_flips_in_a_sealed_topic_digest_fail_and_deep_verify_names_it() {
-    let (rec, ulg, pk) = sealed_battery_status();
+    flips_in_a_sealed_topic_digest(BATTERY_STATUS, 0x5eed_0004);
+}
+
+#[test]
+fn a_thousand_flips_in_a_vision_odometry_digest_fail_and_deep_verify_names_it() {
+    flips_in_a_sealed_topic_digest(VISUAL_ODOMETRY, 0x5eed_0104);
+}
+
+fn flips_in_a_sealed_topic_digest((topic, golden, seed): (&str, &str, &str), rng_seed: u64) {
+    let (rec, ulg, pk) = sealed_topic_record(topic, golden, seed);
     let crypto = RustCrypto;
     let text = String::from_utf8_lossy(&rec).into_owned();
     let start = text.find("\"sealed_topics\":[").unwrap();
     let end = start + text[start..].find(']').unwrap();
-    let mut rng = Rng(0x5eed_0004);
+    let mut rng = Rng(rng_seed);
     for i in 0..1000 {
         let at = start + (rng.next() % (end - start) as u64) as usize;
         let x = (rng.next() % 255 + 1) as u8;
@@ -425,7 +477,9 @@ fn a_thousand_flips_in_a_sealed_topic_digest_fail_and_deep_verify_names_it() {
         match verify(&t, None, &crypto, &pk, false) {
             Err(VerifyError::Mismatch(_)) => {}
             other => {
-                panic!("flip {i} at byte {at} (xor {x:#04x}) passed standalone verify: {other:?}")
+                panic!(
+                    "{topic} flip {i} at byte {at} (xor {x:#04x}) passed standalone verify: {other:?}"
+                )
             }
         }
         // A flip that leaves the record readable is named by deep verify.
@@ -436,7 +490,7 @@ fn a_thousand_flips_in_a_sealed_topic_digest_fail_and_deep_verify_names_it() {
                 let all: Vec<&String> = std::iter::once(&m.first).chain(&m.also).collect();
                 assert!(
                     all.iter().any(|l| l.starts_with("sealed topic ")),
-                    "flip {i} at byte {at} (xor {x:#04x}): {all:?}"
+                    "{topic} flip {i} at byte {at} (xor {x:#04x}): {all:?}"
                 );
             }
         }

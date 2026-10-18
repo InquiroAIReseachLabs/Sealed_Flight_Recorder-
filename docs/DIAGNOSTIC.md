@@ -9401,6 +9401,8 @@ Deliberately **not** on the default list, although PX4 marks them volatile: the 
 | VTOL_TRANSITION_ABORT | 1 followed by 3 without reaching 4 | VERIFIED |
 | VTOL_TRANSITION_ABORT | 2 followed by 1 (standard VTOL), or 2 followed by 4 (tiltrotor, tailsitter) | SOURCE-ONLY |
 
+Tailsitter (Change Order 01): START and END verified on `gz_quadtailsitter_transition.ulg`, ABORT and quadchute from the source; see item 12.4.
+
 **Signal choice.** `vtol_vehicle_status` is logged at 200 ms, so a short state can be missed. `vehicle_status.in_transition_mode` and `in_transition_to_fw` are logged on every change and mirror the states 8 to 12 ms later. Chunk 2 derives events from `vehicle_status` and cross-checks against `vtol_vehicle_status` when present. `vehicle_type` turns ROTARY_WING at the start of a back transition, not its end, so it is not used for END.
 
 **R6 N/A** is decided from `vehicle_status.is_vtol`, not from the presence of `vtol_vehicle_status`: the logger's excluded-topics list stops at 40 entries and can omit it.
@@ -13575,11 +13577,65 @@ The default list in `examples/rules.default.toml` is the twelve ids marked recom
 
 ### 12.4 Tailsitter transition semantics (SPEC B1.6 R6)
 
-Pending: verified on the tailsitter golden log (item 3) before the Change Order 01 gate.
+**Evidence.** `testdata/sitl/v1.17.0/gz_quadtailsitter_transition.ulg` (PX4 v1.17.0 SITL, airframe 4018 `gz_quadtailsitter`, `VT_TYPE` 0, `MAV_TYPE` 20, SHA-256 `6a3f297f4ae8a827625f22ee6e69640b12f0c48d4436b839f54c9d8a716ea26b`; `VT_F_TRANS_DUR` 1.5, `VT_B_TRANS_DUR` 5.0, `VT_ARSP_TRANS` 15.0, `VT_FW_QC_P` and `VT_FW_QC_R` 0): arm, takeoff, front transition, about 21 s in fixed wing, back transition, land, disarm. Every change of `vehicle_status` (`in_transition_mode`, `in_transition_to_fw`, `vehicle_type`, `is_vtol`, `is_vtol_tailsitter`) and `vtol_vehicle_status` (`vehicle_vtol_state`, `fixed_wing_system_failure`) was dumped with pyulog 1.2.4 by a script that shares no code with `sfr`, written for this check and not kept in the repository; the repository's own independent check is `scripts/testdata/oracle.py`, which agrees with `sfr` on every event of this log (`scripts/testdata/regenerate.sh compare`, 0 differences). Times are log timestamps in seconds.
+
+| t (s): vtol_vehicle_status / vehicle_status | vehicle_vtol_state | vehicle_status (in_transition_mode, in_transition_to_fw, vehicle_type) | Meaning |
+|---|---|---|---|
+| 4.564 / 5.104 | 3 MC | 0, 0, ROTARY_WING; `is_vtol` 1, `is_vtol_tailsitter` 1, `system_type` 20 for the whole log | initial |
+| 33.580 | | | `vehicle_command` 3000 param1 4 (to FW), no ack |
+| 33.584 / 33.596 | 1 TRANSITION_TO_FW | 1, 1, ROTARY_WING | front START |
+| 36.044 / 36.056 | 4 FW | 0, 0, FIXED_WING | front END after 2.460 s |
+| 57.136 | | | `vehicle_command` 3000 param1 3 (to MC), no ack |
+| 57.140 / 57.148 | 2 TRANSITION_TO_MC | 1, 0, ROTARY_WING | back START; `vehicle_type` is ROTARY_WING from here |
+| 61.532 / 61.540 | 3 MC | 0, 0, ROTARY_WING | back END after 4.392 s |
+
+`fixed_wing_system_failure`, `failsafe_flags.vtol_fixed_wing_system_failure` and `vehicle_status.failsafe` stay false, and no quadchute text is logged.
+
+**SPEC B1.5 by hand, compared with `sfr` (VERIFIED).** On consecutive `vehicle_status` samples in file order the definitions give START to_fw at boot_us 33596000 (`vehicle_status` index 62), END to_fw at 36056000 (67), START to_mc at 57148000 (110), END to_mc at 61540000 (119), and no ABORT or QUADCHUTE. `sfr` gives the same four events (kind, direction, boot_us, index; seq 9, 10, 14, 15) and R6 PASS, found "2 START, 2 END, 0 problem(s)", first detail line "VTOL type tailsitter (VT_TYPE 0)". No mismatch. That script also reproduces the `sfr` VTOL events of `vtol_transition`, `vtol_transition_abort` and `vtol_quadchute`.
+
+**What ends a tailsitter transition.**
+
+| Phase | End condition | Source | This log |
+|---|---|---|---|
+| Front (state 1) | `vehicle_attitude` Euler pitch <= -1.05 rad (-60 deg) and, when airspeed is used, calibrated airspeed >= `VT_ARSP_TRANS`; or disarmed or landed. The tailsitter overrides the base check, so `VT_TRANS_MIN_TM` does not gate it. `VT_F_TRANS_DUR` only sets the pitch setpoint rate (90 deg per `VT_F_TRANS_DUR` s) | v1.17.0 src/modules/vtol_att_control/tailsitter.cpp:115-123, :215, :337-354, src/modules/vtol_att_control/tailsitter.h:52, :93, src/modules/vtol_att_control/vtol_type.cpp:167-172. v1.14.4 src/modules/vtol_att_control/tailsitter.cpp:118-126, :218, :324-349: airspeed used only with `FW_ARSP_MODE` 0, and with altitude control off the threshold is minus `MPC_MAN_TILT_MAX` plus 5 deg (:332-337) | VERIFIED: pitch first <= -60.2 deg at 34.928 s; airspeed (sensor 1, `FW_USE_AIRSPD` 1) first >= 15 m/s at 36.044 s, the instant of state 4. Airspeed was the last condition met |
+| Front, failure | Timeout (`VT_TRANS_TIMEOUT` scaled by air density; v1.17.0 also airspeed below `VT_ARSP_BLEND` after `VT_F_TR_OL_TM`) raises a quadchute, and the tailsitter goes straight to MC | v1.17.0 src/modules/vtol_att_control/vtol_type.cpp:162, :327-342, src/modules/vtol_att_control/tailsitter.cpp:68-74; v1.14.4 src/modules/vtol_att_control/vtol_type.cpp:160, :337-349 (time only), src/modules/vtol_att_control/tailsitter.cpp:68-70 | SOURCE-ONLY (2.46 s against a 15.05 s timeout) |
+| Back (state 2) | Euler pitch >= -0.26 rad (-15 deg), or time > `VT_B_TRANS_DUR`. `VT_B_TRANS_DUR` also sets the pitch-up rate | v1.17.0 src/modules/vtol_att_control/tailsitter.cpp:92-100, :225, src/modules/vtol_att_control/tailsitter.h:55; v1.14.4 src/modules/vtol_att_control/tailsitter.cpp:88-103, :228, and with altitude control off the threshold is minus `MPC_MAN_TILT_MAX` minus 5 deg (:91-96) | VERIFIED: pitch first >= -14.9 deg at 61.528 s (4.388 s in), state 3 at 61.532 s, before `VT_B_TRANS_DUR` 5.0 s, so pitch ended it. A standard VTOL ends on speed or time instead (v1.17.0 src/modules/vtol_att_control/standard.cpp:98-115) |
+
+**`vehicle_status` in each phase (VERIFIED).** Commander derives the three fields from `vehicle_vtol_state` alone, with no VTOL type test: `vehicle_type` FIXED_WING only in state 4, `in_transition_mode` in states 1 and 2, `in_transition_to_fw` in state 1 (v1.17.0 src/modules/commander/Commander.cpp:2181-2214; v1.14.4 src/modules/commander/Commander.cpp:2032-2064). On this log, as on `vtol_transition.ulg`, `vehicle_type` stays ROTARY_WING through the front transition, becomes FIXED_WING at its END and ROTARY_WING again at the back START, and `vehicle_status` follows `vtol_vehicle_status` by 8 to 12 ms.
+
+**Abort and quadchute (SOURCE-ONLY for the tailsitter; this log has neither).**
+
+| Case | Tailsitter states | Standard VTOL states | SPEC B1.5 events |
+|---|---|---|---|
+| MC requested in front transition (RTL entered, or `DO_VTOL_TRANSITION` param1 3) | 1 then 3: v1.17.0 src/modules/vtol_att_control/tailsitter.cpp:87-90 (v1.14.4 :83-86). The RTL rule is common code: v1.17.0 src/modules/vtol_att_control/vtol_att_control_main.cpp:105-109 (v1.14.4 :124-128) | 1 then 3 (v1.17.0 and v1.14.4 src/modules/vtol_att_control/standard.cpp:92-96), VERIFIED in `vtol_transition_abort.ulg` | ABORT to_fw for both |
+| FW requested in back transition | 2 then 4: v1.17.0 src/modules/vtol_att_control/tailsitter.cpp:125-129 (v1.14.4 :128-131) | 2 then 1 (v1.17.0 and v1.14.4 src/modules/vtol_att_control/standard.cpp:120-125) | tailsitter: ABORT to_mc only; standard: ABORT to_mc, then START to_fw |
+| Quadchute in fixed wing | 4 then 3, flag set one cycle earlier: v1.17.0 src/modules/vtol_att_control/tailsitter.cpp:68-74 (v1.14.4 :68-70) | 4 then 3 (v1.17.0 src/modules/vtol_att_control/standard.cpp:74-77), VERIFIED in `vtol_quadchute.ulg` (flag 39.016 s, state 3 39.020 s) | QUADCHUTE, flag from `failsafe_flags` (v1.17.0 and v1.14.4 src/modules/commander/HealthAndArmingChecks/checks/vtolCheck.cpp:43) |
+| Quadchute in front transition (timeout or another reason) | 1 then 3 (v1.17.0 src/modules/vtol_att_control/tailsitter.cpp:68-74) | 1 then 3 (v1.17.0 src/modules/vtol_att_control/standard.cpp:74-77) | ABORT to_fw, not QUADCHUTE |
+| Quadchute in back transition | 2 then 3 (same lines) | 2 then 3 (same lines) | END to_mc, not QUADCHUTE |
+
+**Conclusion.** SPEC B1.5's START, END, ABORT and QUADCHUTE definitions hold for a tailsitter as written. START and END are verified on this log. ABORT and QUADCHUTE rest on the source and on the standard VTOL logs: the code that decides them (`vtol_att_control_main.cpp`, `vtol_type.cpp`, commander) is shared by all VTOL types, and the tailsitter state machine reaches the same states. Notes from the source:
+1. `VT_FW_QC_P` and `VT_FW_QC_R` compare Euler angles of the unrotated `vehicle_attitude` (v1.17.0 src/modules/vtol_att_control/vtol_type.cpp:299-325, v1.14.4 :309-335), also during transitions. On this log that pitch is -88.6 deg at FW entry (36.044 s), so on a tailsitter these limits act on the hover-frame angle. Both are 0 here.
+2. An external-command quadchute in FW (`DO_VTOL_TRANSITION` param1 3, param2 1) enters state 2 for one cycle, then 3 (v1.17.0 src/modules/vtol_att_control/tailsitter.cpp:82-85, src/modules/vtol_att_control/vtol_type.cpp:373-384, then src/modules/vtol_att_control/tailsitter.cpp:68-74; v1.17.0 src/modules/vtol_att_control/standard.cpp:87-90 likewise). Commander reads `vtol_vehicle_status` every 10 ms (v1.17.0 src/modules/commander/Commander.hpp:217), so `vehicle_status` may show START and END to_mc instead of QUADCHUTE. Not observed; it affects every VTOL type.
+3. `commander transition` sends FW whenever `vehicle_type` is ROTARY_WING (v1.17.0 src/modules/commander/Commander.cpp:355-362, v1.14.4 :353-360), which covers the whole front transition. A tailsitter abort log therefore needs RTL or a MAVLink `DO_VTOL_TRANSITION` param1 3; a second `commander transition` during the back transition flies the 2 then 4 case.
+4. Commander raises `vehicle_status.failsafe` for a quadchute only when the intended mode is AUTO_MISSION, AUTO_LOITER, AUTO_TAKEOFF or AUTO_VTOL_TAKEOFF (v1.17.0 src/modules/commander/failsafe/failsafe.cpp:520-526, v1.14.4 :371-377). In other modes a quadchute inside a back transition leaves only `failsafe_flags.vtol_fixed_wing_system_failure` true, with END to_mc and no R4 failure. Same for every VTOL type.
 
 ### 12.5 Correction: where `sfr` runs
 
 `sfr` runs on Linux companion computers only. Microcontroller flight controllers without Linux cannot run it, and that is out of scope.
+
+### 12.6 Two-rotor (duo) tailsitter in Gazebo Classic: skipped (Change Order 01 item 3b)
+
+Skipped: PX4 v1.17.0 has no two-rotor tailsitter model in Gazebo Classic, so there was nothing to build. Its Gazebo Classic `tailsitter` model has four rotors (links `rotor_0` to `rotor_3`, v1.17.0 `Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/tailsitter/tailsitter.sdf.jinja:104`, `:170`, `:236`, `:302`; submodule commit `6697ab169ceab512dc706acea63df4c882662c60`), and its airframe is a quad tailsitter (v1.17.0 `ROMFS/px4fmu_common/init.d-posix/airframes/1041_gazebo-classic_tailsitter:3` `@name Quadrotor + Tailsitter`, `:5` `@type VTOL Quad Tailsitter`, `:16` `CA_ROTOR_COUNT 4`). v1.14.4 is the same (same lines; submodule commit `2e3ed9bfb04d8865e59380afa575dd37b0d6c8e0`). Gazebo Harmonic in v1.17.0 has one tailsitter, `gz_quadtailsitter` (`4018_gz_quadtailsitter:20` `CA_ROTOR_COUNT 4`), which is the golden log of item 3a. The only two-rotor tailsitter in v1.17.0 is SIH's (`10042_sihsim_xvert:3` `@name SIH Tailsitter Duo`, `:47` `CA_ROTOR_COUNT 2`); it is not Gazebo Classic, so it was not flown under item 3b. It could be flown with the SIH setup the other SITL logs use.
+
+### 12.7 Change Order 01 golden logs
+
+| File | Simulator and airframe | Size (bytes) | SHA-256 | Scenario (Change Order 01 item) |
+|---|---|---|---|---|
+| `testdata/sitl/v1.17.0/gz_quadtailsitter_transition.ulg` | Gazebo Harmonic (gz-sim 8.10.0), `4018_gz_quadtailsitter` | 34095400 | `6a3f297f4ae8a827625f22ee6e69640b12f0c48d4436b839f54c9d8a716ea26b` | Quad tailsitter, `VT_TYPE` 0: arm, takeoff to 20 m, loiter, front transition, about 21 s in fixed wing, back transition, land, disarm (3a) |
+| `testdata/sitl/v1.17.0/gz_x500_vision_hover.ulg` | Gazebo Harmonic (gz-sim 8.10.0), `4005_gz_x500_vision` | 15797162 | `56524cc22d68b3125648386600b3dfa0811a08c65d3912613279be91c96f46a1` | Multicopter with external vision odometry: arm, takeoff, 30 s loiter, land, disarm; `vehicle_visual_odometry` logged (3c) |
+| `testdata/sitl/v1.17.0/payload_two_sources.ulg` | SIH, `10040_sihsim_quadx`, PX4 instance 5 (system 6) | 15572427 | `d7cbd9eb7e438583574c1bb799637f0d92bb03f290f427da6ea61f177d1650df` | Multicopter: arm, takeoff and land from a ground station (255/190); actuator from the ground station and gripper, image capture and winch from a second source (42/191) (3e) |
+
+Each has a `.provenance.md` beside it with the build, the exact commands, and the timeline. Item 3d, the synthetic custom topic, is `testdata/synthetic/custom_detection.ulg`.
 
 ## Appendix A. Item 11 test programs
 

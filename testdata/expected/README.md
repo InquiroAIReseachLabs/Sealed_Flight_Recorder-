@@ -48,16 +48,20 @@ shares no code with `sfr` and was written without reading `crates/`.
 It does not compare the version-dependent names (`old_name`, `new_name`, `reason_name`), `utc_us`,
 FAILSAFE_SET `initial`, the log digests and size, R2, R3, or result wording. An independent
 pyulog check during the Chunk 2 verification compared those fields on the 8 files then in `testdata/`
-(all but `v1.17.0_vtol_quadchute`, `synthetic_r4_quadchute_on_disarm` and `synthetic_custom_detection`) and found no difference; it is not part of CI.
+(`pyulog_sample`, `v1.14.4_mc_flight`, and the `v1.17.0` flights `mc_flight_1`, `mc_flight_2`,
+`vtol_transition`, `vtol_transition_abort`, `failsafe_gps_loss` and `failsafe_battery_empty`) and
+found no difference; it is not part of CI.
 
 The result wording left out includes the R6 detail line that states the `vtol_type` and the R7
 detail lines: the oracle lists the sequence numbers of unauthorized events in `r7_unauthorized`,
 but only R7's status is compared. What the golden files exercise: `vtol_type` is `standard` (2) on
-the three `v1.17.0_vtol_*` logs, value null and name `unknown` on
-`synthetic_r4_quadchute_on_disarm` (a VTOL log with no `VT_TYPE`), and null on the others; COMMAND
-events of both categories occur; no golden rules file has `[authorized_sources]`, so R7 is N/A on
-every golden file and its PASS and FAIL paths are not compared against `sfr`; only
-`synthetic_custom_detection` has sealed topics (three instances, one with no data record).
+the three `v1.17.0_vtol_*` logs, `tailsitter` (0) on `v1.17.0_gz_quadtailsitter_transition`, value
+null and name `unknown` on `synthetic_r4_quadchute_on_disarm` (a VTOL log with no `VT_TYPE`), and
+null on the others; COMMAND events of both categories occur; R7 is FAIL on
+`v1.17.0_payload_two_sources`, whose rules file lists two of its three command sources, and N/A on
+every other golden file (R7's PASS path is covered by `seal_dry_run.rs`, not by a golden file);
+sealed topics are `vehicle_visual_odometry` on `v1.17.0_gz_x500_vision_hover` (one instance) and
+`custom_detection` on `synthetic_custom_detection` (three instances, one with no data record).
 
 A file counts as reviewed only while that comparison reports 0 differences. CI runs it on every
 push (job `golden-oracle`).

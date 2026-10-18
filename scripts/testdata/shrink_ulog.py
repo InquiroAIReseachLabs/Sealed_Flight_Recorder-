@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Write a small but complete ULog from a large one, for fuzz seeds.
 
-Usage: python3 -I shrink_ulog.py <in.ulg> <out.ulg> [--every N] [--no-multi-info]
+Usage: python3 -I shrink_ulog.py <in.ulg> <out.ulg> [--every N] [--no-multi-info] [--keep TOPIC]...
 
 Copies the 16-byte header and every record unchanged, except data ('D') records: all rows of
 the topics the events read (vehicle_status, failsafe_flags, vehicle_command,
 vehicle_command_ack) are kept, every Nth row (default 20) of the topics the optional rules
-read, and no rows of any other topic. With --no-multi-info, 'M' records (perf counters and
-other blobs) are dropped too. The output parses to the end, so a fuzzer starting from it
+read and of each topic named with --keep, and no rows of any other topic. With
+--no-multi-info, 'M' records (perf counters and other blobs) are dropped too. The output
+parses to the end, so a fuzzer starting from it
 reaches the event and rule code instead of stopping at a truncated record. Logs with
 appended data (flag bits) are refused, because dropping records would move the offsets.
 Standard library only.
@@ -25,6 +26,11 @@ def main():
     every = 20
     no_multi = "--no-multi-info" in args
     args = [a for a in args if a != "--no-multi-info"]
+    keep_some = set(KEEP_SOME)
+    while "--keep" in args:
+        i = args.index("--keep")
+        keep_some.add(args[i + 1])
+        del args[i:i + 2]
     if "--every" in args:
         i = args.index("--every")
         every = int(args[i + 1])
@@ -56,7 +62,7 @@ def main():
             topic = topics.get(msg_id)
             n = counts.get(msg_id, 0)
             counts[msg_id] = n + 1
-            keep = topic in KEEP_ALL or (topic in KEEP_SOME and n % every == 0)
+            keep = topic in KEEP_ALL or (topic in keep_some and n % every == 0)
         elif ty == ord("M") and no_multi:
             keep = False
         if keep:
