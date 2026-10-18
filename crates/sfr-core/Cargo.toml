@@ -14,16 +14,14 @@ path = "src/lib.rs"
 # and `sfr-wasm` enables crypto-portable in Chunk 3; until then cargo-deny and the deny-list
 # check (both run with --all-features) gate this graph.
 [features]
-crypto-fips = ["dep:aws-lc-rs", "dep:aws-lc-fips-sys", "dep:rustls-webpki", "dep:rustls-pki-types", "dep:zeroize"]
+crypto-fips = ["dep:aws-lc-rs", "dep:aws-lc-fips-sys", "dep:zeroize"]
 crypto-portable = ["dep:sha2", "dep:ed25519-dalek", "dep:zeroize"]
 
 [dependencies]
-# FIPS module boundary: SHA-256, Ed25519 keygen/sign/verify, certificate checks.
+# FIPS module boundary: SHA-256, Ed25519 keygen, signing and verification.
 aws-lc-rs = { workspace = true, optional = true }
 # Held directly only to pin the module version (Cargo.lock records it).
 aws-lc-fips-sys = { workspace = true, optional = true }
-rustls-webpki = { workspace = true, optional = true }
-rustls-pki-types = { workspace = true, optional = true }
 # Portable backend for the wasm32 sandbox only; not validated.
 sha2 = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true, optional = true }

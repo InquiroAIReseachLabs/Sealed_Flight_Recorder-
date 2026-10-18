@@ -24,11 +24,17 @@ jobs:
       - name: Run each target 10 minutes from its committed seeds
         run: |
           set -euo pipefail
+          echo "| Target | libFuzzer summary |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           for t in ulog_ingest sfr_verify; do
             mkdir -p fuzz/corpus/$t
             cp fuzz/seeds/$t/* fuzz/corpus/$t/
             cargo +nightly-2026-10-18 fuzz run $t fuzz/corpus/$t -- \
-              -max_total_time=600 -rss_limit_mb=2048 -timeout=10 -max_len=1048576
+              -max_total_time=600 -rss_limit_mb=2048 -timeout=10 -max_len=1048576 \
+              2>&1 | tee fuzz-$t.log
+            done_line="$(grep -E '^Done [0-9]+ runs' fuzz-$t.log | tail -1)"
+            echo "$t: $done_line"
+            echo "| $t | $done_line |" >> "$GITHUB_STEP_SUMMARY"
           done
       - name: Keep any finding
         if: failure()

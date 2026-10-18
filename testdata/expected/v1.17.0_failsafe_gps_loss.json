@@ -2178,10 +2178,10 @@
     },
     {
       "detail": [
-        "failsafe while armed at boot_us 37936000: global_position_invalid, global_position_invalid_relaxed, local_position_invalid, local_position_invalid_relaxed, local_velocity_invalid"
+        "failsafe in flight at boot_us 37936000: global_position_invalid, global_position_invalid_relaxed, local_position_invalid, local_position_invalid_relaxed, local_velocity_invalid"
       ],
       "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight",
-      "found": "true while armed 1 time(s)",
+      "found": "true in flight 1 time(s)",
       "id": "R4",
       "name": "no failsafe in flight",
       "status": "FAIL"

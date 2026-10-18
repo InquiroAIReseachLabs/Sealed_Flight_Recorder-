@@ -133,6 +133,11 @@ const GOLDEN: &[(&str, &str, i32)] = &[
         "testdata/sitl/v1.17.0/vtol_transition_abort.ulg",
         1,
     ),
+    (
+        "synthetic_r4_quadchute_on_disarm",
+        "testdata/synthetic/r4_quadchute_on_disarm.ulg",
+        1,
+    ),
 ];
 
 #[test]
@@ -364,6 +369,25 @@ fn mismatches_are_named_precisely() {
     );
     let o = sfr(&["verify", bad.to_str().unwrap(), "--pubkey", &public]);
     assert_eq!(o.status.code(), Some(1));
+    // The record declares an evaluation key: the warning comes first even when it fails.
+    assert!(
+        String::from_utf8_lossy(&o.stdout)
+            .starts_with("EVALUATION KEY: not for operational use\nFAILED: Merkle root mismatch"),
+        "{}",
+        text(&o)
+    );
+    let j = sfr(&[
+        "verify",
+        bad.to_str().unwrap(),
+        "--pubkey",
+        &public,
+        "--json",
+    ]);
+    assert!(
+        String::from_utf8_lossy(&j.stdout).contains("\"key_custody\": \"file-evaluation\""),
+        "{}",
+        text(&j)
+    );
     assert!(
         text(&o).contains("FAILED: Merkle root mismatch"),
         "{}",

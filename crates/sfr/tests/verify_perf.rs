@@ -86,8 +86,10 @@ fn standalone_verify_of_10000_events_is_under_10_ms() {
     let pk =
         parse_public_key_pem(&std::fs::read_to_string(dir.join("k/sfr.pub")).unwrap()).unwrap();
     let crypto = Fips::new().unwrap();
+    // SPEC B1.10: the gate is in-process verification, the median of RUNS runs.
+    const RUNS: usize = 101;
     let mut times: Vec<Duration> = Vec::new();
-    for _ in 0..30 {
+    for _ in 0..RUNS {
         let t0 = Instant::now();
         let v = verify(&record, None, &crypto, &pk, false).unwrap();
         times.push(t0.elapsed());
@@ -95,13 +97,37 @@ fn standalone_verify_of_10000_events_is_under_10_ms() {
     }
     times.sort();
     let median = times[times.len() / 2];
+    // Reported beside it, not gated: the whole `sfr verify` command, which adds process start,
+    // the FIPS module's power-on self-tests, and reading the record and the public key.
+    let mut cli: Vec<Duration> = Vec::new();
+    for _ in 0..RUNS {
+        let t0 = Instant::now();
+        let o = Command::new(bin)
+            .arg("verify")
+            .arg(dir.join("perf.sfr"))
+            .arg("--pubkey")
+            .arg(dir.join("k/sfr.pub"))
+            .output()
+            .unwrap();
+        cli.push(t0.elapsed());
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stdout));
+    }
+    cli.sort();
+    let ms = |d: Duration| format!("{:.2} ms", d.as_secs_f64() * 1000.0);
     println!(
-        "standalone verify, 10,000 events, {} byte record: min {:?}, median {:?}, max {:?} over {} runs",
+        "perf: in-process verify (gated, under 10 ms): 10,000 events, {} byte record, median {}, min {}, max {}, {} runs",
         record.len(),
-        times[0],
-        median,
-        times[times.len() - 1],
+        ms(median),
+        ms(times[0]),
+        ms(times[times.len() - 1]),
         times.len()
+    );
+    println!(
+        "perf: end-to-end sfr verify (not gated): same record, median {}, min {}, max {}, {} runs",
+        ms(cli[cli.len() / 2]),
+        ms(cli[0]),
+        ms(cli[cli.len() - 1]),
+        cli.len()
     );
     if cfg!(debug_assertions) {
         println!("debug build: the 10 ms gate applies to release builds only");

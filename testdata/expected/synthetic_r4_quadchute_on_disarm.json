@@ -1,0 +1,219 @@
+{
+  "baseline": {
+    "firmware": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+    "ignore": [
+      "COM_FLIGHT_UUID",
+      "LND_FLIGHT_T_HI",
+      "LND_FLIGHT_T_LO",
+      "EKF2_MAG_DECL",
+      "CAL_BARO*_OFF",
+      "ASPD_SCALE_*",
+      "COM_MODE*_HASH"
+    ],
+    "parameters": {
+      "COM_DISARM_LAND": "i32:2",
+      "SYS_AUTOSTART": "i32:10043"
+    }
+  },
+  "config": {
+    "firmware": "1.17.0",
+    "parameters": {
+      "COM_DISARM_LAND": "i32:2",
+      "SYS_AUTOSTART": "i32:10043"
+    }
+  },
+  "event_count": 11,
+  "events": [
+    {
+      "boot_us": "1000000",
+      "index": 0,
+      "instance": 0,
+      "kind": "NAV_STATE_CHANGE",
+      "new": 4,
+      "new_name": "AUTO_LOITER",
+      "old": null,
+      "old_name": null,
+      "seq": 0,
+      "topic": "vehicle_status",
+      "utc_us": null
+    },
+    {
+      "boot_us": "2000000",
+      "index": 1,
+      "initial": false,
+      "instance": 0,
+      "kind": "ARM",
+      "reason": 3,
+      "reason_name": "command_internal",
+      "seq": 1,
+      "topic": "vehicle_status",
+      "utc_us": null
+    },
+    {
+      "boot_us": "3000000",
+      "direction": "to_fw",
+      "index": 2,
+      "instance": 0,
+      "kind": "VTOL_TRANSITION_START",
+      "seq": 2,
+      "topic": "vehicle_status",
+      "utc_us": null
+    },
+    {
+      "boot_us": "4000000",
+      "direction": "to_fw",
+      "index": 3,
+      "instance": 0,
+      "kind": "VTOL_TRANSITION_END",
+      "seq": 3,
+      "topic": "vehicle_status",
+      "utc_us": null
+    },
+    {
+      "boot_us": "5000000",
+      "index": 4,
+      "instance": 0,
+      "kind": "DISARM",
+      "reason": 6,
+      "reason_name": "auto_disarm_land",
+      "seq": 4,
+      "topic": "vehicle_status",
+      "utc_us": null
+    },
+    {
+      "boot_us": "5000000",
+      "index": 4,
+      "instance": 0,
+      "kind": "QUADCHUTE",
+      "seq": 5,
+      "topic": "vehicle_status",
+      "utc_us": null,
+      "vtol_fixed_wing_system_failure": false
+    },
+    {
+      "boot_us": "7000000",
+      "index": 6,
+      "initial": false,
+      "instance": 0,
+      "kind": "ARM",
+      "reason": 3,
+      "reason_name": "command_internal",
+      "seq": 6,
+      "topic": "vehicle_status",
+      "utc_us": null
+    },
+    {
+      "boot_us": "8000000",
+      "direction": "to_fw",
+      "index": 7,
+      "instance": 0,
+      "kind": "VTOL_TRANSITION_START",
+      "seq": 7,
+      "topic": "vehicle_status",
+      "utc_us": null
+    },
+    {
+      "boot_us": "9000000",
+      "direction": "to_fw",
+      "index": 8,
+      "instance": 0,
+      "kind": "VTOL_TRANSITION_END",
+      "seq": 8,
+      "topic": "vehicle_status",
+      "utc_us": null
+    },
+    {
+      "boot_us": "10000000",
+      "index": 9,
+      "instance": 0,
+      "kind": "DISARM",
+      "reason": 6,
+      "reason_name": "auto_disarm_land",
+      "seq": 9,
+      "topic": "vehicle_status",
+      "utc_us": null
+    },
+    {
+      "boot_us": "11000000",
+      "index": 10,
+      "instance": 0,
+      "kind": "QUADCHUTE",
+      "seq": 10,
+      "topic": "vehicle_status",
+      "utc_us": null,
+      "vtol_fixed_wing_system_failure": false
+    }
+  ],
+  "log": {
+    "blake3": "37740f2f5fcb080d972f5970f12a223f8a00d6cae791b4d8b5595171daa858a3",
+    "file_name": "r4_quadchute_on_disarm.ulg",
+    "firmware": {
+      "git": "d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+      "ver_sw_release": "0x011100ff",
+      "version": "1.17.0"
+    },
+    "sha256": "29a263a9f582d66b912c69c74915f40b03c9e7bd054641cd5af1b62219813604",
+    "size": "1020",
+    "vehicle": {
+      "is_vtol": true,
+      "system_type": 22
+    }
+  },
+  "results": [
+    {
+      "detail": [],
+      "expected": "data records for vehicle_status, failsafe_flags, and the fields the core rules read",
+      "found": "all present",
+      "id": "R1",
+      "name": "required topics present",
+      "status": "PASS"
+    },
+    {
+      "detail": [],
+      "expected": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+      "found": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+      "id": "R2",
+      "name": "firmware matches baseline",
+      "status": "PASS"
+    },
+    {
+      "detail": [],
+      "expected": "every parameter in the baseline or the log equal, 0 ignored by pattern",
+      "found": "no differences",
+      "id": "R3",
+      "name": "parameters match baseline",
+      "status": "PASS"
+    },
+    {
+      "detail": [
+        "quadchute in flight at boot_us 5000000: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure false"
+      ],
+      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight",
+      "found": "true in flight 0 time(s), quadchute 1 time(s)",
+      "id": "R4",
+      "name": "no failsafe in flight",
+      "status": "FAIL"
+    },
+    {
+      "detail": [],
+      "expected": "every ARM followed by a DISARM; log does not end armed",
+      "found": "2 ARM, 2 DISARM",
+      "id": "R5",
+      "name": "arm and disarm consistent",
+      "status": "PASS"
+    },
+    {
+      "detail": [],
+      "expected": "every VTOL transition START has an END; none aborted",
+      "found": "2 START, 2 END, 0 problem(s)",
+      "id": "R6",
+      "name": "VTOL transitions completed",
+      "status": "PASS"
+    }
+  ],
+  "rules": {
+    "sha256": "ac82040893f341f697885f7fecb8dfdd13e1925ca1f24f944628e5ff2dedcd65",
+    "text": "# sfr rules file: core rules R1 to R6 only.\n# Format reference: docs/SPEC.md B1.6. Unknown keys are rejected.\nformat = \"sfr-rules/1\"\n\n[required_topics]\n# R1 also checks the vehicle_status and failsafe_flags fields that R4 to R6 read.\ntopics = [\"vehicle_status\", \"failsafe_flags\"]\n\n[parameters]\n# \"all\": a parameter present only in the baseline or only in the log is a difference.\n# \"baseline\": compare only the parameters the baseline lists.\ncompare = \"all\"\n\n# R3 skips parameters matching these patterns. \"*\" matches any run of characters.\n# Default list from docs/DIAGNOSTIC.md item 5 (two-flight experiment plus PX4 source).\nignore = [\n  \"COM_FLIGHT_UUID\",   # per-flight identifier\n  \"LND_FLIGHT_T_HI\",   # flight-time accumulator\n  \"LND_FLIGHT_T_LO\",   # flight-time accumulator\n  \"EKF2_MAG_DECL\",     # learned from position each flight\n  \"CAL_BARO*_OFF\",     # rewritten by GNSS baro auto-calibration (v1.17)\n  \"ASPD_SCALE_*\",      # airspeed scale learned in flight\n  \"COM_MODE*_HASH\",    # external mode registration hashes (v1.15 and later)\n]\n"
+  },
+  "status": "FAIL"
+}

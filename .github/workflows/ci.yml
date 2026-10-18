@@ -43,12 +43,16 @@ jobs:
           go version
           perl -e 'print "perl $^V\n"'
           cc --version | head -1
-      - name: cargo tree -p sfr has neither sha2 nor ed25519-dalek (SPEC B1.10 Crypto)
+      - name: cargo tree -p sfr has no sha2, ed25519-dalek, or aws-lc-sys (SPEC B1.10 Crypto)
         run: |
           set -euo pipefail
           tree="$(cargo tree -p sfr --locked --prefix none)"
           if grep -E '^(sha2|ed25519-dalek) ' <<<"$tree"; then
             echo "sfr's dependency graph contains a SHA-256 or Ed25519 crate outside the FIPS module"
+            exit 1
+          fi
+          if grep -E '^aws-lc-sys ' <<<"$tree"; then
+            echo "sfr's dependency graph contains the non-FIPS AWS-LC (aws-lc-sys)"
             exit 1
           fi
           grep -m1 -E '^aws-lc-fips-sys v' <<<"$tree"
@@ -59,7 +63,14 @@ jobs:
       - name: cargo test --locked
         run: cargo test --workspace --locked
       - name: Standalone verify of 10,000 events under 10 ms (SPEC B1.10 Performance, release build)
-        run: cargo test --release --locked -p sfr --test verify_perf -- --ignored --nocapture
+        run: |
+          set -euo pipefail
+          cargo test --release --locked -p sfr --test verify_perf -- --ignored --nocapture 2>&1 | tee verify-perf.log
+          {
+            echo "### Standalone verify, 10,000 events (SPEC B1.10)"
+            echo
+            grep -E '^perf: ' verify-perf.log | sed -e 's/^perf: /- /'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   golden-oracle:
     name: golden files agree with the independent pyulog oracle
@@ -85,11 +96,17 @@ jobs:
       - name: Run each target 60 seconds from its committed seeds
         run: |
           set -euo pipefail
+          echo "| Target | libFuzzer summary |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           for t in ulog_ingest sfr_verify; do
             mkdir -p fuzz/corpus/$t
             cp fuzz/seeds/$t/* fuzz/corpus/$t/
             cargo +nightly-2026-10-18 fuzz run $t fuzz/corpus/$t -- \
-              -max_total_time=60 -rss_limit_mb=2048 -timeout=10 -max_len=1048576
+              -max_total_time=60 -rss_limit_mb=2048 -timeout=10 -max_len=1048576 \
+              2>&1 | tee fuzz-$t.log
+            done_line="$(grep -E '^Done [0-9]+ runs' fuzz-$t.log | tail -1)"
+            echo "$t: $done_line"
+            echo "| $t | $done_line |" >> "$GITHUB_STEP_SUMMARY"
           done
       - name: Keep any finding
         if: failure()

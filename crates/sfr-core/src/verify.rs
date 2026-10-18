@@ -57,6 +57,9 @@ pub struct Mismatch {
     pub first: String,
     /// Further mismatches.
     pub also: Vec<String>,
+    /// The key custody the record declares, when it could be read. The record did not
+    /// verify, so this is only what it claims; `verify` still warns on an evaluation key.
+    pub custody: Option<Custody>,
 }
 
 /// A verification outcome other than success.
@@ -82,10 +85,22 @@ pub fn check_record_size(len: usize) -> Result<(), String> {
     }
 }
 
+/// The sort key of a rule id: its letter, then its number (`R2` < `R10` < `X1`).
+fn rule_id_key(id: &str) -> Option<(char, u32)> {
+    let mut chars = id.chars();
+    let letter = chars.next().filter(char::is_ascii_uppercase)?;
+    let digits = chars.as_str();
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) || digits.starts_with('0') {
+        return None;
+    }
+    digits.parse().ok().map(|n| (letter, n))
+}
+
 fn fail(first: impl Into<String>) -> Mismatch {
     Mismatch {
         first: first.into(),
         also: Vec::new(),
+        custody: None,
     }
 }
 
@@ -236,6 +251,43 @@ fn standalone(
     let results = array(record, "results")?;
 
     let mut problems = Vec::new();
+
+    // Leaf order (SPEC B1.7): results by rule id, events by sequence number.
+    let mut last_id: Option<(char, u32)> = None;
+    for r in results {
+        let id = match r {
+            Value::Object(m) => match m.get("id") {
+                Some(Value::Str(s)) => s.as_str(),
+                _ => "",
+            },
+            _ => "",
+        };
+        let Some(key) = rule_id_key(id) else {
+            problems.push(format!("result id `{id}` is not a rule id"));
+            break;
+        };
+        if last_id.is_some_and(|l| l >= key) {
+            problems.push(format!(
+                "results are not in rule-id order: {id} comes too late"
+            ));
+            break;
+        }
+        last_id = Some(key);
+    }
+    if let Some(m) = find("events") {
+        for (i, seq) in m.seqs.iter().enumerate() {
+            let text = seq.clone().map(&slice);
+            if text != Some(i.to_string().as_bytes()) {
+                let found = text.map_or("none".to_string(), |t| {
+                    String::from_utf8_lossy(t).into_owned()
+                });
+                problems.push(format!(
+                    "events are not in sequence order: the event at position {i} has seq {found}"
+                ));
+                break;
+            }
+        }
+    }
 
     // Merkle root over the leaves.
     if merkle_obj
@@ -429,8 +481,17 @@ fn compare(record: &Map, derived: &Map) -> Vec<String> {
             ));
         }
     }
+    let show_any = |v: Option<&Value>| match v {
+        Some(Value::Str(s)) => s.clone(),
+        Some(other) => canonical(other),
+        None => "absent".into(),
+    };
     if rc.get("firmware") != dc.get("firmware") {
-        out.push("config firmware differs".to_string());
+        out.push(format!(
+            "config firmware: sealed {}, found {}",
+            show_any(rc.get("firmware")),
+            show_any(dc.get("firmware"))
+        ));
     }
     // Events, by sequence number.
     let arr = |m: &Map, k: &str| match m.get(k) {
@@ -480,7 +541,11 @@ fn compare(record: &Map, derived: &Map) -> Vec<String> {
     }
     for k in ["firmware", "vehicle"] {
         if rl.get(k) != dl.get(k) {
-            out.push(format!("log {k} differs"));
+            out.push(format!(
+                "log {k}: sealed {}, found {}",
+                show_any(rl.get(k)),
+                show_any(dl.get(k))
+            ));
         }
     }
     out
@@ -496,12 +561,30 @@ pub fn verify(
 ) -> Result<Verified, VerifyError> {
     let parsed = standalone(record_bytes, crypto, public_key, require_hardware_key)
         .map_err(VerifyError::Mismatch)?;
+    let custody = parsed.verified.custody;
+    verify_parsed(parsed, record_bytes, log, crypto).map_err(|e| match e {
+        VerifyError::Mismatch(mut m) => {
+            m.custody.get_or_insert(custody);
+            VerifyError::Mismatch(m)
+        }
+        other => other,
+    })
+}
+
+/// Everything after the standalone checks: their verdict, or the deep comparison with `log`.
+fn verify_parsed(
+    parsed: Parsed,
+    record_bytes: &[u8],
+    log: Option<&mut dyn Read>,
+    crypto: &dyn CryptoBackend,
+) -> Result<Verified, VerifyError> {
     let Some(log) = log else {
         return match parsed.problems.split_first() {
             None => Ok(parsed.verified),
             Some((first, rest)) => Err(VerifyError::Mismatch(Mismatch {
                 first: first.clone(),
                 also: rest.to_vec(),
+                custody: None,
             })),
         };
     };
@@ -573,6 +656,7 @@ pub fn verify(
         Some((first, rest)) => Err(VerifyError::Mismatch(Mismatch {
             first: first.clone(),
             also: rest.to_vec(),
+            custody: None,
         })),
     }
 }
@@ -583,6 +667,7 @@ mod tests {
     use super::*;
     use crate::crypto::Signer;
     use crate::crypto::test_backend::{TestBackend, TestKey};
+    use crate::json::Obj;
     use crate::seal::{SealParams, seal};
 
     #[test]
@@ -591,6 +676,152 @@ mod tests {
         assert_eq!(
             check_record_size(MAX_RECORD_BYTES + 1),
             Err("the record exceeds the input limit of 536870912 bytes (SPEC B1.4)".to_string())
+        );
+    }
+
+    /// Seals the shrunk mc_flight_1 seed with a test key; returns the log, record and key.
+    fn sealed_seed() -> (Vec<u8>, Vec<u8>, TestKey) {
+        let log = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fuzz/seeds/ulog_ingest/sitl_v1.17.0_mc_flight_1_shrunk.ulg"
+        ))
+        .unwrap();
+        let ing = Px4Ingestor
+            .ingest("x.ulg", &mut &log[..], &TestBackend)
+            .unwrap();
+        let rules = parse_rules(include_str!("../../../examples/rules.default.toml")).unwrap();
+        let baseline = crate::params::parse_baseline("# Firmware: 1.17.0\n").unwrap();
+        let eval = evaluate(&ing, &rules, &baseline);
+        let key = TestKey::new(7);
+        let params = SealParams {
+            time_utc: "2026-10-18T15:00:00Z".into(),
+            token_cmvp_certificate: None,
+        };
+        let sealed = seal(&ing, &eval, &rules, &baseline, &params, &TestBackend, &key).unwrap();
+        (log, sealed.bytes, key)
+    }
+
+    /// Applies `edit` to a record and signs it again, as the key holder could.
+    #[allow(clippy::panic)]
+    fn resigned(bytes: &[u8], key: &TestKey, edit: impl FnOnce(&mut Map)) -> Vec<u8> {
+        let Value::Object(mut r) = parse(bytes).unwrap() else {
+            panic!("record is an object")
+        };
+        edit(&mut r);
+        let (root, n) = crate::seal::merkle_root(&TestBackend, &r).unwrap();
+        let sig = key
+            .sign(&crate::seal::signed_payload(SCHEMA_VERSION, &root))
+            .unwrap();
+        let merkle = Obj::new()
+            .field("algorithm", Value::str(merkle::ALGORITHM))
+            .field("leaf_count", Value::count(n as u64))
+            .field("root", Value::str(hex(&root)))
+            .build();
+        r.insert("merkle".into(), merkle);
+        let signature = Obj::new()
+            .field("algorithm", Value::str("ed25519"))
+            .field("value", Value::str(hex(&sig)))
+            .build();
+        r.insert("signature".into(), signature);
+        canonical(&Value::Object(r)).into_bytes()
+    }
+
+    #[allow(clippy::panic)]
+    fn mismatch(r: Result<Verified, VerifyError>) -> Mismatch {
+        match r {
+            Err(VerifyError::Mismatch(m)) => m,
+            other => panic!("expected a mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn leaves_must_be_in_rule_id_and_sequence_order() {
+        let (_, bytes, key) = sealed_seed();
+        let pk = key.public_key();
+        // Signing again without a change still verifies, so the edits below are what fail.
+        let same = resigned(&bytes, &key, |_| {});
+        assert_eq!(same, bytes);
+        let reverse = |k: &'static str| {
+            move |r: &mut Map| {
+                if let Some(Value::Array(a)) = r.get_mut(k) {
+                    a.reverse();
+                }
+            }
+        };
+        let m = mismatch(verify(
+            &resigned(&bytes, &key, reverse("events")),
+            None,
+            &TestBackend,
+            &pk,
+            false,
+        ));
+        assert!(
+            m.first
+                .starts_with("events are not in sequence order: the event at position 0 has seq "),
+            "{m:?}"
+        );
+        let m = mismatch(verify(
+            &resigned(&bytes, &key, reverse("results")),
+            None,
+            &TestBackend,
+            &pk,
+            false,
+        ));
+        assert_eq!(
+            m.first,
+            "results are not in rule-id order: R5 comes too late"
+        );
+        // The record still declares an evaluation key, so verify can still warn.
+        assert_eq!(m.custody, Some(Custody::FileEvaluation));
+        // Rule ids sort by letter, then number.
+        assert!(rule_id_key("R2") < rule_id_key("R10"));
+        assert!(rule_id_key("R10") < rule_id_key("X1"));
+        assert_eq!(rule_id_key("R01"), None);
+        assert_eq!(rule_id_key("r1"), None);
+        // A record that cannot be read declares nothing.
+        assert_eq!(
+            mismatch(verify(b"{}", None, &TestBackend, &pk, false)).custody,
+            None
+        );
+    }
+
+    #[test]
+    fn firmware_mismatches_name_both_values() {
+        let (log, bytes, key) = sealed_seed();
+        let pk = key.public_key();
+        let edited = resigned(&bytes, &key, |r| {
+            if let Some(Value::Object(c)) = r.get_mut("config") {
+                c.insert("firmware".into(), Value::str("1.16.0"));
+            }
+        });
+        let m = mismatch(verify(
+            &edited,
+            Some(&mut &log[..]),
+            &TestBackend,
+            &pk,
+            false,
+        ));
+        assert_eq!(m.first, "config firmware: sealed 1.16.0, found 1.17.0");
+        let edited = resigned(&bytes, &key, |r| {
+            if let Some(Value::Object(l)) = r.get_mut("log")
+                && let Some(Value::Object(f)) = l.get_mut("firmware")
+            {
+                f.insert("version".into(), Value::str("1.16.0"));
+            }
+        });
+        let m = mismatch(verify(
+            &edited,
+            Some(&mut &log[..]),
+            &TestBackend,
+            &pk,
+            false,
+        ));
+        assert!(
+            m.first.starts_with("log firmware: sealed {")
+                && m.first.contains("\"version\":\"1.16.0\"")
+                && m.first.contains("found {")
+                && m.first.contains("\"version\":\"1.17.0\""),
+            "{m:?}"
         );
     }
 

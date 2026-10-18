@@ -624,6 +624,10 @@ fn verify_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<
                         .field("verified", Value::Bool(false))
                         .field("record", Value::str(record_path.clone()))
                         .field("deep", Value::Bool(deep))
+                        .field(
+                            "key_custody",
+                            m.custody.map_or(Value::Null, |c| Value::str(c.as_str())),
+                        )
                         .field("first_mismatch", Value::str(m.first.clone()))
                         .field(
                             "other_mismatches",
@@ -638,7 +642,14 @@ fn verify_cmd(args: &[String], crypto: &Fips, stdout: &mut dyn Write) -> Result<
                         .build(),
                 )
             } else {
-                let mut t = format!("FAILED: {}\n", m.first);
+                // SPEC B1.3: a record sealed with an evaluation key says so first, verified or
+                // not (the custody of a record that fails is only what it claims).
+                let mut t = String::new();
+                if m.custody == Some(Custody::FileEvaluation) {
+                    t.push_str(EVALUATION_LINE);
+                    t.push('\n');
+                }
+                t.push_str(&format!("FAILED: {}\n", m.first));
                 for other in m.also.iter().take(20) {
                     t.push_str(&format!("  also: {other}\n"));
                 }

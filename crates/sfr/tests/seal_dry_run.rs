@@ -99,6 +99,11 @@ const GOLDEN: &[(&str, &str, i32)] = &[
         "testdata/sitl/v1.17.0/vtol_transition_abort.ulg",
         1,
     ),
+    (
+        "synthetic_r4_quadchute_on_disarm",
+        "testdata/synthetic/r4_quadchute_on_disarm.ulg",
+        1,
+    ),
 ];
 
 #[test]
@@ -109,6 +114,7 @@ fn golden_logs_match_reviewed_expected_files() {
         "testdata/pyulog",
         "testdata/sitl/v1.14.4",
         "testdata/sitl/v1.17.0",
+        "testdata/synthetic",
     ] {
         for e in std::fs::read_dir(root().join(dir)).unwrap() {
             let p = e.unwrap().path();
@@ -383,7 +389,7 @@ fn failsafe_log_fails_r4_with_flag_and_time() {
     assert_eq!(out.status.code(), Some(1));
     let s = stdout(&out);
     assert!(s.contains("R4    FAIL"), "{s}");
-    assert!(s.contains("- failsafe while armed at boot_us 37936000: global_position_invalid, global_position_invalid_relaxed, local_position_invalid, local_position_invalid_relaxed, local_velocity_invalid"), "{s}");
+    assert!(s.contains("- failsafe in flight at boot_us 37936000: global_position_invalid, global_position_invalid_relaxed, local_position_invalid, local_position_invalid_relaxed, local_velocity_invalid"), "{s}");
     let out = dry_run(
         "testdata/sitl/v1.17.0/failsafe_battery_empty.ulg",
         RULES,
@@ -391,7 +397,7 @@ fn failsafe_log_fails_r4_with_flag_and_time() {
         false,
     );
     assert!(
-        stdout(&out).contains("- failsafe while armed at boot_us 23120000: battery_warning"),
+        stdout(&out).contains("- failsafe in flight at boot_us 23120000: battery_warning"),
         "{}",
         stdout(&out)
     );

@@ -471,6 +471,9 @@ pub struct MemberSpan {
     pub value: std::ops::Range<usize>,
     /// For an array value, each element's bytes.
     pub elements: Vec<std::ops::Range<usize>>,
+    /// For an array value, the bytes of each element's top-level `seq` member, if it is an
+    /// object that has one (SPEC B1.7: events are leaves in sequence order).
+    pub seqs: Vec<Option<std::ops::Range<usize>>>,
 }
 
 /// Checks in one pass, without building values, that `bytes` are an object in exactly the
@@ -479,7 +482,11 @@ pub struct MemberSpan {
 /// the byte ranges of its members. In canonical text each value's bytes are its own canonical
 /// form, so a Merkle leaf can be hashed straight from the input.
 pub fn scan_canonical(bytes: &[u8]) -> Result<Vec<MemberSpan>, ParseError> {
-    let mut sc = Scanner { b: bytes, pos: 0 };
+    let mut sc = Scanner {
+        b: bytes,
+        pos: 0,
+        seq: None,
+    };
     if sc.peek() != Some(b'{') {
         return sc.err("expected `{`");
     }
@@ -490,9 +497,17 @@ pub fn scan_canonical(bytes: &[u8]) -> Result<Vec<MemberSpan>, ParseError> {
     Ok(members)
 }
 
+/// Where a top-level array's scan puts each element's span and its `seq` member's span.
+type ElementSpans<'v> = (
+    &'v mut Vec<std::ops::Range<usize>>,
+    &'v mut Vec<Option<std::ops::Range<usize>>>,
+);
+
 struct Scanner<'a> {
     b: &'a [u8],
     pos: usize,
+    /// The value span of the last `seq` key read in an object directly inside a top-level array.
+    seq: Option<std::ops::Range<usize>>,
 }
 
 impl Scanner<'_> {
@@ -665,7 +680,7 @@ impl Scanner<'_> {
     fn array(
         &mut self,
         depth: usize,
-        mut spans: Option<&mut Vec<std::ops::Range<usize>>>,
+        mut spans: Option<ElementSpans<'_>>,
     ) -> Result<(), ParseError> {
         self.eat(b'[')?;
         if self.peek() == Some(b']') {
@@ -674,9 +689,11 @@ impl Scanner<'_> {
         }
         loop {
             let start = self.pos;
+            self.seq = None;
             self.value(depth + 1)?;
-            if let Some(s) = spans.as_deref_mut() {
+            if let Some((s, q)) = spans.as_mut() {
                 s.push(start..self.pos);
+                q.push(self.seq.take());
             }
             match self.peek() {
                 Some(b',') => self.pos += 1,
@@ -725,16 +742,22 @@ impl Scanner<'_> {
             self.eat(b':')?;
             let vstart = self.pos;
             let mut elements = Vec::new();
+            let mut seqs = Vec::new();
             if top && self.peek() == Some(b'[') {
-                self.array(depth + 1, Some(&mut elements))?;
+                self.array(depth + 1, Some((&mut elements, &mut seqs)))?;
             } else {
                 self.value(depth + 1)?;
+            }
+            // An object directly inside a top-level array sits at depth 2.
+            if depth == 2 && !escaped && self.b.get(k.clone()) == Some(&b"seq"[..]) {
+                self.seq = Some(vstart..self.pos);
             }
             if top {
                 members.push(MemberSpan {
                     key: self.key_text(&k, escaped)?,
                     value: vstart..self.pos,
                     elements,
+                    seqs,
                 });
             }
             prev = Some((k, escaped));

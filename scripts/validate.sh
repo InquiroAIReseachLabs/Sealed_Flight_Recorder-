@@ -46,8 +46,12 @@ check_crypto_graph() {
     return 1
   fi
   grep -qE '^aws-lc-fips-sys v' <<<"$tree" || { echo "  aws-lc-fips-sys missing from sfr's graph"; return 1; }
+  if grep -E '^aws-lc-sys ' <<<"$tree"; then
+    echo "  sfr's dependency graph contains the non-FIPS AWS-LC (aws-lc-sys)"
+    return 1
+  fi
 }
-run "cargo tree -p sfr: no sha2 or ed25519-dalek" check_crypto_graph
+run "cargo tree -p sfr: no sha2, ed25519-dalek, or aws-lc-sys" check_crypto_graph
 
 # 5. Supply chain: licenses, advisories, bans, sources (SPEC B1.10, "Supply chain").
 # A missing tool is a failure, never a skip: validate.sh must stay a superset of CI.
