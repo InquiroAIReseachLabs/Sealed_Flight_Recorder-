@@ -33,6 +33,8 @@ head -c 16 testdata/sitl/v1.17.0/mc_flight_1.ulg > $d/header_only_16_bytes.ulg
 : > $d/empty.ulg
 ```
 
+Two seeds exercise appended data (the 'B' record's flag bits and offsets), which the SITL logs do not use: `sitl_v1.17.0_mc_flight_1_shrunk_appended.ulg` is the shrunk log with the appended-data bit set and its first offset at a record boundary in the data section, and `appended_offset_past_end.ulg` (59 bytes) announces an offset one byte past the end of the file, which must be reported as truncated (it once made the reader loop forever). Both were written by setting those bytes in the files above; the byte layout is the 'B' record in the ULog specification.
+
 `scripts/testdata/shrink_ulog.py` keeps every record except most data rows: all rows of `vehicle_status`, `failsafe_flags`, `vehicle_command` and `vehicle_command_ack`, every 50th row of the topics the optional rules read, and none of the rest; `--no-multi-info` also drops the 'M' blobs. The shrunk logs still arm, disarm, fail safe, and transition, so R1 to R6 and X1 to X5 all run on them. `pyulog_sample` is cut at a record boundary (byte 65,516), so it parses to the end; it comes from a BSD-3-Clause file whose license and notice are in `testdata/pyulog/`.
 
 ## Runs
@@ -47,13 +49,13 @@ cp fuzz/seeds/ulog_ingest/* fuzz/corpus/ulog_ingest/
 CI run (60 seconds):
 
 ```sh
-cargo +nightly-2026-10-18 fuzz run ulog_ingest fuzz/corpus/ulog_ingest -- -max_total_time=60 -rss_limit_mb=2048 -max_len=1048576
+cargo +nightly-2026-10-18 fuzz run ulog_ingest fuzz/corpus/ulog_ingest -- -max_total_time=60 -rss_limit_mb=2048 -timeout=10 -max_len=1048576
 ```
 
 Nightly run (10 minutes):
 
 ```sh
-cargo +nightly-2026-10-18 fuzz run ulog_ingest fuzz/corpus/ulog_ingest -- -max_total_time=600 -rss_limit_mb=2048 -max_len=1048576
+cargo +nightly-2026-10-18 fuzz run ulog_ingest fuzz/corpus/ulog_ingest -- -max_total_time=600 -rss_limit_mb=2048 -timeout=10 -max_len=1048576
 ```
 
 A clean run exits with status 0, and its last line reads `Done <runs> runs in <seconds> second(s)`. On a finding, libFuzzer stops with a non-zero status, prints the panic message or error report with a stack trace, and writes the input to `fuzz/artifacts/ulog_ingest/` as `crash-*`, `timeout-*`, `oom-*` or `leak-*`.

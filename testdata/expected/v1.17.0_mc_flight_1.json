@@ -2147,7 +2147,7 @@
     },
     {
       "detail": [],
-      "expected": "vehicle_status.failsafe false whenever armed",
+      "expected": "vehicle_status.failsafe false whenever armed, and no quadchute (fixed wing straight to multicopter) while armed",
       "found": "never true while armed",
       "id": "R4",
       "name": "no failsafe in flight",
@@ -2171,7 +2171,8 @@
     }
   ],
   "rules": {
-    "sha256": "ac82040893f341f697885f7fecb8dfdd13e1925ca1f24f944628e5ff2dedcd65"
+    "sha256": "ac82040893f341f697885f7fecb8dfdd13e1925ca1f24f944628e5ff2dedcd65",
+    "text": "# sfr rules file: core rules R1 to R6 only.\n# Format reference: docs/SPEC.md B1.6. Unknown keys are rejected.\nformat = \"sfr-rules/1\"\n\n[required_topics]\n# R1 also checks the vehicle_status and failsafe_flags fields that R4 to R6 read.\ntopics = [\"vehicle_status\", \"failsafe_flags\"]\n\n[parameters]\n# \"all\": a parameter present only in the baseline or only in the log is a difference.\n# \"baseline\": compare only the parameters the baseline lists.\ncompare = \"all\"\n\n# R3 skips parameters matching these patterns. \"*\" matches any run of characters.\n# Default list from docs/DIAGNOSTIC.md item 5 (two-flight experiment plus PX4 source).\nignore = [\n  \"COM_FLIGHT_UUID\",   # per-flight identifier\n  \"LND_FLIGHT_T_HI\",   # flight-time accumulator\n  \"LND_FLIGHT_T_LO\",   # flight-time accumulator\n  \"EKF2_MAG_DECL\",     # learned from position each flight\n  \"CAL_BARO*_OFF\",     # rewritten by GNSS baro auto-calibration (v1.17)\n  \"ASPD_SCALE_*\",      # airspeed scale learned in flight\n  \"COM_MODE*_HASH\",    # external mode registration hashes (v1.15 and later)\n]\n"
   },
   "status": "PASS"
 }

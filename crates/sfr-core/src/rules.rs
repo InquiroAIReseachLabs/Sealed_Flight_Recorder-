@@ -23,6 +23,10 @@ use toml::de::{DeTable, DeValue};
 /// The only rules format this version reads.
 pub const RULES_FORMAT: &str = "sfr-rules/1";
 
+/// Most entries in `required_topics.topics`, and most in `parameters.ignore`. Real rules files
+/// list a handful; the caps keep evaluation time bounded on any file.
+pub const MAX_LIST_ENTRIES: usize = 256;
+
 /// Topics R1 always requires, because the core rules read them.
 pub const CORE_TOPICS: [&str; 2] = ["vehicle_status", "failsafe_flags"];
 
@@ -293,8 +297,10 @@ fn valid_topic(t: &str) -> bool {
 
 /// Parses and validates a rules file.
 pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
-    let ctx = Ctx { text };
-    let doc = DeTable::parse(text).map_err(|e| {
+    // The record embeds `text` unchanged; only parsing skips a UTF-8 byte order mark.
+    let body = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let ctx = Ctx { text: body };
+    let doc = DeTable::parse(body).map_err(|e| {
         let line = e.span().map_or(0, |s| ctx.line(s.start));
         let msg = e.message().trim().to_string();
         RulesError {
@@ -321,6 +327,25 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
             format!("format `{f}` is not `{RULES_FORMAT}`"),
         ));
     }
+    // SPEC B1.6: the file starts with the format line, so a reader knows the format before
+    // anything else; no key or table may come before it.
+    let format_at = root
+        .keys()
+        .find(|k| k.get_ref().as_ref() == "format")
+        .map_or(0, |k| k.span().start);
+    if let Some(first) = root
+        .keys()
+        .filter(|k| k.span().start < format_at)
+        .min_by_key(|k| k.span().start)
+    {
+        return Err(ctx.err(
+            first.span().start,
+            format!(
+                "`{}` comes before `format = \"{RULES_FORMAT}\"`, which must come first",
+                first.get_ref()
+            ),
+        ));
+    }
 
     let rt = get(root, "required_topics").ok_or_else(|| RulesError {
         line: 0,
@@ -330,12 +355,16 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
     check_keys(&ctx, rt_table, "required_topics", &["topics"])?;
     let topics_v = require(&ctx, rt_table, rt.span().start, "required_topics", "topics")?;
     let mut required_topics = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
     for (t, at) in as_str_list(&ctx, topics_v, "required_topics.topics")? {
         if !valid_topic(&t) {
             return Err(ctx.err(at, format!("`{t}` is not a topic name")));
         }
-        if required_topics.contains(&t) {
+        if !seen.insert(t.clone()) {
             return Err(ctx.err(at, format!("topic `{t}` listed twice")));
+        }
+        if seen.len() > MAX_LIST_ENTRIES {
+            return Err(ctx.err(at, format!("more than {MAX_LIST_ENTRIES} required topics")));
         }
         required_topics.push(t);
     }
@@ -358,12 +387,22 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
             };
         }
         if let Some(list) = get(pt, "ignore") {
+            let mut seen = std::collections::BTreeSet::new();
             for (pat, at) in as_str_list(&ctx, list, "parameters.ignore")? {
+                if !seen.insert(pat.clone()) {
+                    return Err(ctx.err(at, format!("pattern `{pat}` listed twice")));
+                }
+                if seen.len() > MAX_LIST_ENTRIES {
+                    return Err(
+                        ctx.err(at, format!("more than {MAX_LIST_ENTRIES} ignore patterns"))
+                    );
+                }
                 let parsed = Pattern::new(&pat).ok_or_else(|| {
                     ctx.err(
                         at,
                         format!(
-                            "`{pat}` is not a parameter name pattern (letters, digits, `_`, `*`)"
+                            "`{pat}` is not a parameter name pattern (letters, digits, `_`, at most {} `*`)",
+                            crate::params::MAX_PATTERN_STARS
                         ),
                     )
                 })?;
@@ -493,6 +532,13 @@ mod tests {
         "format = \"sfr-rules/1\"\n[required_topics]\ntopics = [\"vehicle_status\"]\n";
 
     #[test]
+    fn comments_and_a_byte_order_mark_may_precede_format() {
+        let text = format!("\u{feff}# rules for the test rig\n\n{MIN}");
+        let r = parse_rules(&text).expect("valid");
+        assert_eq!(r.text, text, "the embedded text keeps the byte order mark");
+    }
+
+    #[test]
     fn minimal_file_adds_core_topics() {
         let r = parse_rules(MIN).expect("valid");
         assert_eq!(r.r1_topics(), ["vehicle_status", "failsafe_flags"]);
@@ -590,6 +636,21 @@ mod tests {
                 "format = \"sfr-rules/1\"\n[required_topics\n",
                 2,
                 "not valid TOML",
+            ),
+            (
+                "[required_topics]\ntopics = []\n[parameters]\nformat = 1\n",
+                0,
+                "missing `format",
+            ),
+            (
+                "[required_topics]\ntopics = []\n\nformat = \"sfr-rules/1\"\n",
+                0,
+                "missing `format",
+            ),
+            (
+                "extended.dropouts.max_total_ms = 1\nformat = \"sfr-rules/1\"\n[required_topics]\ntopics = []\n",
+                1,
+                "comes before `format",
             ),
         ];
         for (text, line, needle) in cases {

@@ -236,9 +236,20 @@ fn run(args: &[String], stdout: &mut dyn Write) -> Result<i32, Failure> {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // args() panics on an argument that is not valid UTF-8; that is a usage error (exit 4).
+    let args: Result<Vec<String>, _> = std::env::args_os()
+        .skip(1)
+        .map(|a| a.into_string())
+        .collect();
     let mut stdout = io::stdout().lock();
-    let code = match run(&args, &mut stdout) {
+    let result = match args {
+        Ok(args) => run(&args, &mut stdout),
+        Err(bad) => Err(fail(
+            exit_code::USAGE,
+            format!("argument {} is not valid UTF-8", bad.to_string_lossy()),
+        )),
+    };
+    let code = match result {
         Ok(code) => code,
         Err(f) => {
             // A failed write to stderr changes nothing: the exit code carries the result.

@@ -467,6 +467,16 @@ const MODE_REQUIREMENTS: &[(&str, &str)] = &[
     ("offboard_control_signal_lost", "mode_req_offboard_signal"),
     ("home_position_invalid", "mode_req_home_position"),
     ("manual_control_signal_lost", "mode_req_manual_control"),
+    // HealthAndArmingChecks modeCheck.cpp clears the can-run bits of
+    // mode_req_wind_and_flight_time_compliance when either flag is set.
+    (
+        "wind_limit_exceeded",
+        "mode_req_wind_and_flight_time_compliance",
+    ),
+    (
+        "flight_time_limit_exceeded",
+        "mode_req_wind_and_flight_time_compliance",
+    ),
 ];
 
 fn failsafe_schema(layout: &Layout) -> Vec<FlagDef> {
@@ -586,7 +596,17 @@ impl Visitor for Collector {
         self.param_index = self.param_index.saturating_add(1);
         match section {
             Section::Definitions => {
-                self.params.insert(name.to_string(), value);
+                if self.params.len() >= crate::params::MAX_PARAMS && !self.params.contains_key(name)
+                {
+                    self.limit.get_or_insert_with(|| {
+                        format!(
+                            "more than {} parameters at log start",
+                            crate::params::MAX_PARAMS
+                        )
+                    });
+                } else {
+                    self.params.insert(name.to_string(), value);
+                }
             }
             Section::Data => self.flight.param_records.push(ParamRecord {
                 name: name.to_string(),
@@ -885,13 +905,27 @@ impl Collector {
         let mut flight = std::mem::take(&mut self.flight);
         flight.start_timestamp = self.header.map_or(0, |h| h.timestamp);
         flight.summary = summary;
-        if let Some((_, (fields, rows))) = std::mem::take(&mut self.vs).into_iter().next() {
+        // The lowest instance that has rows, else the lowest subscribed one (whose fields R1
+        // still reports): R1 counts rows of any instance, so the core rules must read one.
+        let mut vs = std::mem::take(&mut self.vs);
+        let vs_pick = vs
+            .iter()
+            .find(|(_, (_, r))| !r.is_empty())
+            .or(vs.iter().next())
+            .map(|(k, _)| *k);
+        if let Some((fields, rows)) = vs_pick.and_then(|k| vs.remove(&k)) {
             flight.vehicle_status_fields = fields;
             flight.vehicle_status = rows;
         }
-        if let Some((_, (fields, fs))) = std::mem::take(&mut self.fs).into_iter().next() {
+        let mut fs = std::mem::take(&mut self.fs);
+        let fs_pick = fs
+            .iter()
+            .find(|(_, (_, f))| !f.rows.is_empty())
+            .or(fs.iter().next())
+            .map(|(k, _)| *k);
+        if let Some((fields, flags)) = fs_pick.and_then(|k| fs.remove(&k)) {
             flight.failsafe_flags_fields = fields;
-            flight.failsafe_flags = fs;
+            flight.failsafe_flags = flags;
         }
         let release = self.ver_sw_release;
         let firmware = Firmware {
@@ -1003,6 +1037,75 @@ mod tests {
         assert_eq!(
             crate::hex(&h.sha.finish()),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn core_rules_read_the_lowest_instance_that_has_rows() {
+        use crate::ulog::tests::Builder;
+        let row = |ts: u64, arming: u8| {
+            let mut p = ts.to_le_bytes().to_vec();
+            p.push(arming);
+            p
+        };
+        let log = Builder::new(0)
+            .flags(&[])
+            .format("vehicle_status:uint64_t timestamp;uint8_t arming_state;")
+            .sub(0, 0, "vehicle_status")
+            .sub(1, 1, "vehicle_status")
+            .data(1, &row(5, 2))
+            .data(1, &row(9, 1));
+        let ing = Px4Ingestor
+            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
+            .unwrap();
+        assert_eq!(ing.flight.vehicle_status.len(), 2);
+        assert!(ing.flight.vehicle_status.iter().all(|r| r.id.instance == 1));
+        assert_eq!(ing.events.len(), 2, "ARM and DISARM from instance 1");
+    }
+
+    #[test]
+    fn wind_and_flight_time_flags_carry_their_mode_requirement() {
+        use crate::ulog::tests::Builder;
+        let log = Builder::new(0).flags(&[]).format(
+            "failsafe_flags:uint64_t timestamp;uint32_t mode_req_wind_and_flight_time_compliance;bool wind_limit_exceeded;bool flight_time_limit_exceeded;bool gcs_connection_lost;",
+        ).sub(0, 0, "failsafe_flags");
+        let mut payload = 7u64.to_le_bytes().to_vec();
+        payload.extend_from_slice(&(1u32 << 4).to_le_bytes());
+        payload.extend_from_slice(&[1, 0, 1]);
+        let log = log.data(0, &payload);
+        let ing = Px4Ingestor
+            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
+            .unwrap();
+        let fs = &ing.flight.failsafe_flags;
+        let names: Vec<&str> = fs.flags.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "flight_time_limit_exceeded",
+                "gcs_connection_lost",
+                "wind_limit_exceeded"
+            ]
+        );
+        assert_eq!(fs.rows[0].mode_req, [1 << 4, 0, 1 << 4]);
+        assert_eq!(fs.rows[0].active, [false, true, true]);
+    }
+
+    #[test]
+    fn too_many_parameters_at_log_start_are_refused() {
+        use crate::ulog::tests::Builder;
+        let mut log = Builder::new(0).flags(&[]);
+        for i in 0..=crate::params::MAX_PARAMS {
+            log = log.param_f(&format!("P{i}"), 1.0);
+        }
+        let err = Px4Ingestor
+            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            IngestError::Limit(format!(
+                "more than {} parameters at log start",
+                crate::params::MAX_PARAMS
+            ))
         );
     }
 

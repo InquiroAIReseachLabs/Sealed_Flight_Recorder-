@@ -51,10 +51,10 @@ Supported: PX4 v1.14 through v1.17 ULog. Exact topic and field names per version
 - **Events (the timeline), each with a sequence number, boot-time microseconds, UTC microseconds when GPS time is available, and its source (topic, instance, message index):** UTC comes only from the first GPS sample (`vehicle_gps_position`, else `sensor_gps` instance 0) with `fix_type` of at least 2 and a nonzero `time_utc_usec`, never from `boot_time_utc_us` or a host clock.
   - ARM, DISARM: edges of `vehicle_status.arming_state == 2`, with the reason decoded from PX4's events enum. A log that starts armed reports ARM at its first sample, marked `initial`.
   - NAV_STATE_CHANGE (old, new): edges of `vehicle_status.nav_state`, with per-version names; the first sample is reported with `old` null.
-  - FAILSAFE_SET, FAILSAFE_CLEAR (flag name; from `failsafe_flags`): edges of `vehicle_status.failsafe`. Each edge names the `failsafe_flags` booleans (and `battery_warning` above 0) that are true at that moment and are either required by the current `nav_state` (the flag's `mode_req_*` bit is set) or were not true at the most recent ARM; one event per named flag, or one event with flag `unattributed`.
+  - FAILSAFE_SET, FAILSAFE_CLEAR (flag name; from `failsafe_flags`): edges of `vehicle_status.failsafe`. Each edge names the `failsafe_flags` booleans (and `battery_warning` above 0) that are true at that moment and are either required by the current `nav_state` (the flag's `mode_req_*` bit is set) or were not true at the most recent ARM (the first `failsafe_flags` sample when no ARM precedes the edge); one event per named flag, or one event with flag `unattributed`. A log that starts in failsafe reports FAILSAFE_SET at its first sample, marked `initial`.
   - COMMAND (command id, source system and component, result from the matching `vehicle_command_ack`, or `NO_ACK`): the matching ack is the earliest unused ack with the same command id, a timestamp not before the command's and before the next identical command from the same source, and target system and component equal to the command's source; a final result is preferred over IN_PROGRESS.
   - VTOL_TRANSITION_START, VTOL_TRANSITION_END, VTOL_TRANSITION_ABORT (direction): from the VTOL state derived from `vehicle_status` (in transition to fixed wing, in transition to multicopter, fixed wing, multicopter). START when a transition state is entered; END on transition-to-fixed-wing then fixed wing, or transition-to-multicopter then multicopter; ABORT when a transition state is left any other way. A quadchute (fixed wing straight to multicopter) is not a transition; R4 reports it.
-  - PARAM_CHANGED_IN_FLIGHT (name, old, new): a data-section 'P' record whose value differs from the last known value of that parameter, between ARM and DISARM; its time is the last data timestamp before it. Firmware-written changes count like any other.
+  - PARAM_CHANGED_IN_FLIGHT (name, old, new): a data-section 'P' record whose value differs from the last known value of that parameter, between ARM and DISARM (ARM time < its time <= DISARM time, so the timeline shows it after ARM and before DISARM); its time is the last data timestamp before it. Firmware-written changes count like any other.
   - LOG_MESSAGE (flight stack messages at warning level or above): 'L' and 'C' records at levels 0 to 4 (emergency to warning), text kept verbatim. PX4 events (the `event` topic) are not decoded in v1.
   - LOG_DROPOUT (duration): an 'O' record, in milliseconds; its time is the last data timestamp before it.
 - **Event ordering** is deterministic: boot time, then topic name, then instance id, then message index. Records without a topic use the names `ulog.logging`, `ulog.parameter`, and `ulog.dropout`. Several events from one source message keep a fixed order. Sequence numbers start at 0.
@@ -70,7 +70,7 @@ Rules file format: TOML (Rust TOML tooling is actively maintained; the common Ru
 | R1 | Required topics present (the rules file lists them), each with at least one data record, plus the `vehicle_status` and `failsafe_flags` fields the core rules read | FAIL names each missing topic or `topic.field`; exit 2 |
 | R2 | Firmware matches baseline | FAIL shows expected and found |
 | R3 | Parameters match baseline, excluding the ignore list | FAIL lists every differing parameter with baseline and flown values |
-| R4 | No failsafe raised during flight: `vehicle_status.failsafe` never true between ARM and DISARM | FAIL lists each flag and time |
+| R4 | No failsafe raised during flight: `vehicle_status.failsafe` never true between ARM and DISARM, and no quadchute (fixed wing straight to multicopter, B1.5) while armed | FAIL lists each flag and time, and each quadchute |
 | R5 | Arm and disarm consistency: every ARM has a DISARM, log does not end armed | FAIL names the unmatched event |
 | R6 | VTOL transitions completed: every start has an end, none aborted | N/A if the vehicle is not VTOL |
 
@@ -80,7 +80,7 @@ Rules file format: TOML (Rust TOML tooling is actively maintained; the common Ru
 
 No rule threshold is presented as correct for any aircraft.
 
-A rule whose input data is missing is FAIL, never N/A; N/A means only that the rule does not apply (R6 on a vehicle that is not VTOL). The rules file starts with `format = "sfr-rules/1"`, and unknown keys are rejected. The baseline file is a QGroundControl `.params` export (tab-separated vehicle id, component id, name, value, type 6 int32 or 9 float32) plus one line `# Firmware: <version> [<git hash prefix>]`; float values compare after rounding to float32.
+A rule whose input data is missing is FAIL, never N/A; N/A means only that the rule does not apply (R6 on a vehicle that is not VTOL). The rules file starts with `format = "sfr-rules/1"`, and unknown keys are rejected. The baseline file is a QGroundControl `.params` export (tab-separated vehicle id, component id, name, value, type 6 int32 or 9 float32) plus one line `# Firmware: <version> [<git hash prefix>]`; float values compare after rounding to float32, as numbers (-0 equals 0, and any NaN, written `nan`, equals any NaN).
 
 ### B1.7 Record format (`.sfr`)
 

@@ -529,6 +529,24 @@ fn usage_and_io_errors_exit_4() {
         stderr(&out)
     );
 
+    // A path that is not valid UTF-8 is a usage error, not a panic.
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let bad = std::ffi::OsStr::from_bytes(b"bad\xff.ulg");
+        let out = Command::new(env!("CARGO_BIN_EXE_sfr"))
+            .current_dir(root())
+            .args(["seal".as_ref(), bad, "--dry-run".as_ref()])
+            .output()
+            .expect("sfr binary runs");
+        assert_eq!(out.status.code(), Some(4), "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains("is not valid UTF-8"),
+            "{}",
+            stderr(&out)
+        );
+    }
+
     assert_eq!(sfr(&["verify"]).status.code(), Some(4));
     assert_eq!(sfr(&["--help"]).status.code(), Some(0));
 }

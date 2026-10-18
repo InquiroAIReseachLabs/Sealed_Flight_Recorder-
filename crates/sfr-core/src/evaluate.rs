@@ -3,7 +3,8 @@
 //! correct for any aircraft: the optional rules take every threshold from the rules file.
 
 use crate::events::{
-    ArmedInterval, Event, EventKind, armed_intervals, armed_sample, attribute_failsafe,
+    ArmedInterval, Event, EventKind, VtolState, armed_intervals, armed_sample, attribute_failsafe,
+    flag_at, vtol_state,
 };
 use crate::exit_code;
 use crate::ingest::{FlightLog, Ingested};
@@ -318,7 +319,7 @@ impl Lines {
 }
 
 fn r4(f: &FlightLog) -> RuleResult {
-    let expected = "vehicle_status.failsafe false whenever armed";
+    let expected = "vehicle_status.failsafe false whenever armed, and no quadchute (fixed wing straight to multicopter) while armed";
     let missing = missing_fields(f, &["arming_state", "failsafe"]);
     if !missing.is_empty() {
         return fail_missing("R4", "no failsafe in flight", expected, missing);
@@ -327,9 +328,11 @@ fn r4(f: &FlightLog) -> RuleResult {
     let mut rows = fs.rows.clone();
     rows.sort_by_key(|r| (r.id.ts, r.id.index));
     let mut detail = Lines::new();
+    let (mut failsafes, mut quadchutes) = (0usize, 0usize);
     let mut active = false;
     let mut last_arm = None;
     let mut was_armed = false;
+    let mut prev_vtol: Option<VtolState> = None;
     for r in &f.vehicle_status {
         let armed = r.arming_state == Some(2);
         if armed && !was_armed {
@@ -338,6 +341,7 @@ fn r4(f: &FlightLog) -> RuleResult {
         was_armed = armed;
         let now = armed && r.failsafe == Some(true);
         if now && !active {
+            failsafes += 1;
             detail.push(|| {
                 let flags = attribute_failsafe(fs, &rows, r.id.ts, r.nav_state, last_arm);
                 format!(
@@ -348,6 +352,26 @@ fn r4(f: &FlightLog) -> RuleResult {
             });
         }
         active = now;
+        // SPEC B1.5: a quadchute is not a transition; R4 reports it. PX4 raises the quadchute
+        // failsafe only in some modes (failsafe.cpp), so the state change itself is the signal.
+        let vtol = vtol_state(r);
+        if armed && prev_vtol == Some(VtolState::Fw) && vtol == Some(VtolState::Mc) {
+            quadchutes += 1;
+            detail.push(|| {
+                let flag = match flag_at(fs, &rows, "vtol_fixed_wing_system_failure", r.id.ts) {
+                    Some(true) => "true",
+                    Some(false) => "false",
+                    None => "not logged",
+                };
+                format!(
+                    "quadchute while armed at boot_us {}: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure {flag}",
+                    r.id.ts
+                )
+            });
+        }
+        if vtol.is_some() {
+            prev_vtol = vtol;
+        }
     }
     if detail.total == 0 {
         RuleResult::new(
@@ -359,7 +383,10 @@ fn r4(f: &FlightLog) -> RuleResult {
             vec![],
         )
     } else {
-        let found = format!("true while armed {} time(s)", detail.total);
+        let found = match quadchutes {
+            0 => format!("true while armed {failsafes} time(s)"),
+            q => format!("true while armed {failsafes} time(s), quadchute {q} time(s)"),
+        };
         let detail = detail.finish();
         RuleResult::new(
             "R4",
@@ -844,6 +871,69 @@ pub fn evaluate(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Evaluatio
 mod tests {
     use super::*;
     use crate::ingest::{RowId, VehicleStatusRow};
+
+    fn vtol_row(i: u64, arming: u8, trans: bool, to_fw: bool, vtype: u8) -> VehicleStatusRow {
+        VehicleStatusRow {
+            id: RowId {
+                ts: i * 10,
+                instance: 0,
+                index: i,
+            },
+            arming_state: Some(arming),
+            nav_state: Some(0),
+            failsafe: Some(false),
+            is_vtol: Some(true),
+            in_transition_mode: Some(trans),
+            in_transition_to_fw: Some(to_fw),
+            vehicle_type: Some(vtype),
+            system_type: Some(22),
+            latest_arming_reason: None,
+            latest_disarming_reason: None,
+        }
+    }
+
+    #[test]
+    fn r4_reports_a_quadchute_even_without_vehicle_status_failsafe() {
+        let fields: Vec<String> = VEHICLE_STATUS_FIELDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // MC, to FW, FW, straight back to MC (quadchute), all armed, failsafe never set.
+        let rows = vec![
+            vtol_row(0, 2, false, false, 1),
+            vtol_row(1, 2, true, true, 1),
+            vtol_row(2, 2, false, false, 2),
+            vtol_row(3, 2, false, false, 1),
+        ];
+        let flight = FlightLog {
+            vehicle_status: rows,
+            vehicle_status_fields: fields.clone(),
+            ..FlightLog::default()
+        };
+        let r = r4(&flight);
+        assert_eq!(r.status, Status::Fail);
+        assert_eq!(r.found, "true while armed 0 time(s), quadchute 1 time(s)");
+        assert_eq!(
+            r.detail,
+            [
+                "quadchute while armed at boot_us 30: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure not logged"
+            ]
+        );
+        // A completed back transition (FW, to MC, MC) is not a quadchute, nor is one while disarmed.
+        let rows = vec![
+            vtol_row(0, 2, false, false, 2),
+            vtol_row(1, 2, true, false, 1),
+            vtol_row(2, 2, false, false, 1),
+            vtol_row(3, 1, false, false, 2),
+            vtol_row(4, 1, false, false, 1),
+        ];
+        let flight = FlightLog {
+            vehicle_status: rows,
+            vehicle_status_fields: fields,
+            ..FlightLog::default()
+        };
+        assert_eq!(r4(&flight).status, Status::Pass);
+    }
 
     #[test]
     fn r4_lists_at_most_the_detail_cap_and_counts_the_rest() {

@@ -95,6 +95,8 @@ pub enum EventKind {
     },
     /// `vehicle_status.failsafe` became true; one event per named flag.
     FailsafeSet {
+        /// The log starts in failsafe: this is the first sample, not an observed edge.
+        initial: bool,
         /// Flag name, or `unattributed`.
         flag: String,
     },
@@ -330,21 +332,31 @@ pub fn nav_state_name(state: u8, fw: &Firmware) -> Option<&'static str> {
         28 if !v114 => "EXTERNAL6",
         29 if !v114 => "EXTERNAL7",
         30 if !v114 => "EXTERNAL8",
+        31 if !v114 => "MAX",
         _ => return None,
     })
 }
 
+/// The VTOL state that commander mirrors into `vehicle_status` (DIAGNOSTIC 4.4.1, item 6).
+/// PX4 commander sets `vehicle_type`, `in_transition_mode` and `in_transition_to_fw` together
+/// from one `vtol_vehicle_status` message (`Commander::vtolStatusUpdate`, v1.14.4 and v1.17.0),
+/// so consecutive rows never show a state that the vehicle was not in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VtolState {
+pub enum VtolState {
+    /// In transition to fixed wing.
     TransitionToFw,
+    /// In transition to multicopter.
     TransitionToMc,
+    /// Multicopter.
     Mc,
+    /// Fixed wing.
     Fw,
+    /// Neither (a `vehicle_type` other than 1 or 2).
     Other,
 }
 
-/// The VTOL state that commander mirrors into `vehicle_status` (DIAGNOSTIC 4.4.1, item 6).
-fn vtol_state(r: &VehicleStatusRow) -> Option<VtolState> {
+/// The VTOL state of one `vehicle_status` row, or `None` if a field it needs is not logged.
+pub fn vtol_state(r: &VehicleStatusRow) -> Option<VtolState> {
     let in_transition = r.in_transition_mode?;
     Some(if in_transition {
         if r.in_transition_to_fw? {
@@ -365,6 +377,13 @@ fn vtol_state(r: &VehicleStatusRow) -> Option<VtolState> {
 fn flags_at(rows: &[FailsafeRow], t: u64) -> Option<&FailsafeRow> {
     let n = rows.partition_point(|r| r.id.ts <= t);
     n.checked_sub(1).and_then(|i| rows.get(i))
+}
+
+/// The value of the `failsafe_flags` flag `name` at `t`, from rows sorted by time; `None` if
+/// the log has no such flag or no row at or before `t`.
+pub fn flag_at(fs: &FailsafeFlags, sorted: &[FailsafeRow], name: &str, t: u64) -> Option<bool> {
+    let i = fs.flags.iter().position(|d| d.name == name)?;
+    flags_at(sorted, t).and_then(|r| r.active.get(i).copied())
 }
 
 /// SPEC B1.5 failsafe attribution: flags active at `t` that the current `nav_state` requires
@@ -515,9 +534,10 @@ fn vehicle_status_events(b: &mut Builder, flight: &FlightLog) {
         if let Some(on) = r.failsafe {
             let was_on = prev.and_then(|p| p.failsafe).unwrap_or(false);
             if on != was_on {
+                let initial = prev.is_none();
                 for flag in attribute_failsafe(fs, &flag_rows, ts, r.nav_state, last_arm) {
                     let kind = if on {
-                        EventKind::FailsafeSet { flag }
+                        EventKind::FailsafeSet { initial, flag }
                     } else {
                         EventKind::FailsafeClear { flag }
                     };
@@ -789,7 +809,11 @@ pub fn event_json(e: &Event, fw: &Firmware) -> Value {
             o.set("new", Value::Int(i64::from(*new)));
             o.set("new_name", Value::opt_str(nav_state_name(*new, fw)));
         }
-        EventKind::FailsafeSet { flag } | EventKind::FailsafeClear { flag } => {
+        EventKind::FailsafeSet { initial, flag } => {
+            o.set("initial", Value::Bool(*initial));
+            o.set("flag", Value::str(flag.clone()));
+        }
+        EventKind::FailsafeClear { flag } => {
             o.set("flag", Value::str(flag.clone()));
         }
         EventKind::Command {

@@ -94,6 +94,7 @@ pub fn dry_run_json(
         .field(
             "rules",
             Obj::new()
+                .field("text", Value::str(rules.text.clone()))
                 .field("sha256", Value::str(hex(rules_sha256)))
                 .build(),
         )

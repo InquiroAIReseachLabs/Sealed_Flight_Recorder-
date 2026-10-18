@@ -9,8 +9,12 @@ use crate::ulog::ParamValue;
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Most parameters a baseline may hold (PX4 has about 1,200).
-pub const MAX_BASELINE_PARAMS: usize = 100_000;
+/// Most parameters a baseline or a log's configuration may hold (PX4 v1.14 to v1.17 logs hold
+/// about 900 to 1,200). The cap bounds the R3 comparison time on any input.
+pub const MAX_PARAMS: usize = 65_536;
+
+/// Most `*` in one ignore pattern. Real patterns use one or two.
+pub const MAX_PATTERN_STARS: usize = 8;
 
 /// Firmware expectation from the baseline's `# Firmware:` line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +121,8 @@ fn parse_firmware(rest: &str, line: usize) -> Result<FirmwareSpec, BaselineError
 pub fn parse_baseline(text: &str) -> Result<Baseline, BaselineError> {
     let mut firmware: Option<FirmwareSpec> = None;
     let mut params = BTreeMap::new();
+    // A UTF-8 byte order mark, as some editors on Windows write, is not part of line 1.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     for (i, raw) in text.lines().enumerate() {
         let n = i + 1;
         let line = raw.strip_suffix('\r').unwrap_or(raw);
@@ -152,8 +158,13 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, BaselineError> {
                 let v = value
                     .parse::<f32>()
                     .map_err(|_| err(n, format!("{name}: `{value}` is not a number")))?;
-                if !v.is_finite() {
-                    return Err(err(n, format!("{name}: `{value}` is not a finite float32")));
+                // A logged parameter can be NaN (the record prints it `f32:NaN`), so a baseline
+                // may say so too; infinities cannot be set from a ground station and are refused.
+                if v.is_infinite() {
+                    return Err(err(
+                        n,
+                        format!("{name}: `{value}` is not a finite float32 or NaN"),
+                    ));
                 }
                 ParamValue::F32(v)
             }
@@ -167,11 +178,8 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, BaselineError> {
         if params.insert(name.to_string(), value).is_some() {
             return Err(err(n, format!("{name} appears twice")));
         }
-        if params.len() > MAX_BASELINE_PARAMS {
-            return Err(err(
-                n,
-                format!("more than {MAX_BASELINE_PARAMS} parameters"),
-            ));
+        if params.len() > MAX_PARAMS {
+            return Err(err(n, format!("more than {MAX_PARAMS} parameters")));
         }
     }
     let firmware =
@@ -180,42 +188,51 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, BaselineError> {
 }
 
 /// A parameter name pattern: `*` matches any run of characters, everything else literally.
+/// The pieces between `*` are split once, when the pattern is made.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Pattern(String);
+pub struct Pattern {
+    text: String,
+    parts: Vec<String>,
+}
 
 impl Pattern {
-    /// Validates a pattern: 1 to 64 of `A-Z`, `a-z`, `0-9`, `_`, `*`.
+    /// Validates a pattern: 1 to 64 of `A-Z`, `a-z`, `0-9`, `_`, `*`, with at most
+    /// [`MAX_PATTERN_STARS`] `*`.
     pub fn new(p: &str) -> Option<Pattern> {
         let ok = !p.is_empty()
             && p.len() <= 64
+            && p.bytes().filter(|&b| b == b'*').count() <= MAX_PATTERN_STARS
             && p.bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'*');
-        ok.then(|| Pattern(p.to_string()))
+        ok.then(|| Pattern {
+            text: p.to_string(),
+            parts: p.split('*').map(str::to_string).collect(),
+        })
     }
 
     /// The pattern text.
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.text
     }
 
     /// Whether `name` matches the whole pattern.
     pub fn matches(&self, name: &str) -> bool {
-        let mut parts = self.0.split('*');
-        let first = parts.next().unwrap_or("");
-        let Some(mut rest) = name.strip_prefix(first) else {
+        let Some((first, tail)) = self.parts.split_first() else {
             return false;
         };
-        let tail: Vec<&str> = parts.collect();
+        let Some(mut rest) = name.strip_prefix(first.as_str()) else {
+            return false;
+        };
         let Some((last, middle)) = tail.split_last() else {
             return rest.is_empty();
         };
         for part in middle {
-            match rest.find(part) {
+            match rest.find(part.as_str()) {
                 Some(at) => rest = rest.get(at + part.len()..).unwrap_or(""),
                 None => return false,
             }
         }
-        rest.len() >= last.len() && rest.ends_with(last)
+        rest.len() >= last.len() && rest.ends_with(last.as_str())
     }
 }
 
@@ -256,6 +273,7 @@ mod tests {
             ("# Firmware: 1.17.0\n1\t1\tA\t1\n", 2, "5 tab-separated"),
             ("# Firmware: 1.17.0\n1\t1\tA\t1.5\t6\n", 2, "not an int32"),
             ("# Firmware: 1.17.0\n1\t1\tA\tinf\t9\n", 2, "finite"),
+            ("# Firmware: 1.17.0\n1\t1\tA\t-infinity\t9\n", 2, "finite"),
             ("# Firmware: 1.17.0\n1\t1\tA\t1\t7\n", 2, "type `7`"),
             (
                 "# Firmware: 1.17.0\n1\t1\tA\t1\t6\n1\t1\tA\t2\t6\n",
@@ -273,6 +291,22 @@ mod tests {
             assert_eq!(e.line, *line, "{text:?}: {e}");
             assert!(e.reason.contains(needle), "{text:?}: {e}");
         }
+    }
+
+    #[test]
+    fn byte_order_mark_crlf_and_nan_are_accepted() {
+        let b =
+            parse_baseline("\u{feff}# Firmware: 1.17.0\r\n1\t1\tX\tnan\t9\r\n1\t1\tY\t-0\t9\r\n")
+                .expect("valid");
+        assert_eq!(
+            b.params.get("X").map(|v| v.to_string()),
+            Some("f32:NaN".into())
+        );
+        assert_eq!(
+            b.params.get("Y").map(|v| v.to_string()),
+            Some("f32:-0".into())
+        );
+        assert_eq!(b.firmware.version, "1.17.0");
     }
 
     #[test]
@@ -300,5 +334,7 @@ mod tests {
         assert!(p("*X*").matches("AXB"));
         assert!(Pattern::new("BAD-NAME").is_none());
         assert!(Pattern::new("").is_none());
+        assert!(Pattern::new("A*B*C*D*E*F*G*H*I").is_some());
+        assert!(Pattern::new("A*B*C*D*E*F*G*H*I*J").is_none(), "nine stars");
     }
 }

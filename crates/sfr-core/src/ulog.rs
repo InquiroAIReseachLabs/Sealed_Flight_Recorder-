@@ -23,6 +23,9 @@ pub const MAX_LAYOUT_SIZE: usize = 65_535;
 /// thousands; the cap stops a small crafted file from subscribing thousands of times to a
 /// format with 65,535 fields and exhausting memory and time.
 pub const MAX_TOTAL_FIELDS: usize = 1_000_000;
+/// Longest flattened field name or subscribed topic name, in bytes. PX4 names are under 64
+/// bytes; the cap bounds memory per field, which [`MAX_TOTAL_FIELDS`] alone does not.
+pub const MAX_NAME_LEN: usize = 255;
 
 const MAGIC: &[u8; 7] = b"ULog\x01\x12\x35";
 const INCOMPAT_DATA_APPENDED: u8 = 0x01;
@@ -53,7 +56,7 @@ pub enum UlogError {
 impl fmt::Display for UlogError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            UlogError::NotUlog => write!(f, "not a ULog file (bad magic bytes)"),
+            UlogError::NotUlog => write!(f, "not a ULog file (bad magic bytes at byte offset 0)"),
             UlogError::Truncated { offset, what } => {
                 write!(f, "truncated at byte offset {offset}: incomplete {what}")
             }
@@ -231,15 +234,13 @@ pub enum ParamValue {
 }
 
 impl ParamValue {
-    /// Identity of the typed value as the record prints it: the same type and the same float32
-    /// bits, except that every NaN equals every other NaN (all print as `f32:NaN`) and -0 does
-    /// not equal 0. Used both for change detection and for R3 comparison.
+    /// Equality of typed values (SPEC B1.6): the same type and, for float32, the same number,
+    /// so -0 equals 0 and any NaN equals any NaN (every NaN prints as `f32:NaN`). Used both
+    /// for change detection and for R3 comparison.
     pub fn same_as(&self, other: &ParamValue) -> bool {
         match (self, other) {
             (ParamValue::I32(a), ParamValue::I32(b)) => a == b,
-            (ParamValue::F32(a), ParamValue::F32(b)) => {
-                (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
-            }
+            (ParamValue::F32(a), ParamValue::F32(b)) => (a.is_nan() && b.is_nan()) || a == b,
             _ => false,
         }
     }
@@ -593,6 +594,13 @@ impl Flattener<'_> {
         for def in defs {
             let count = def.array.unwrap_or(1);
             for i in 0..count {
+                // "[65535]" adds at most 7 bytes to the name.
+                if prefix.len() + def.name.len() + 7 > MAX_NAME_LEN {
+                    return Err(malformed(
+                        self.offset,
+                        format!("flattened field name longer than {MAX_NAME_LEN} bytes"),
+                    ));
+                }
                 let name = match def.array {
                     Some(_) => format!("{prefix}{}[{i}]", def.name),
                     None => format!("{prefix}{}", def.name),
@@ -689,6 +697,19 @@ struct Sub {
     ts: FlatField,
 }
 
+/// Skips to an appended-data offset. A file that ends first is truncated: without this check
+/// the reader would retry the same skip forever.
+fn skip_to_offset<R: Read>(src: &mut Src<R>, start: u64, off: u64) -> Result<(), UlogError> {
+    src.skip_to(off)?;
+    if src.pos < off {
+        return Err(UlogError::Truncated {
+            offset: start,
+            what: "data before an appended-data offset",
+        });
+    }
+    Ok(())
+}
+
 /// Reads a whole ULog stream, calling `visitor` for each record in file order.
 pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, UlogError> {
     let mut src = Src {
@@ -739,7 +760,7 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
         if let Some(&off) = pending.first()
             && start.saturating_add(3) > off
         {
-            src.skip_to(off)?;
+            skip_to_offset(&mut src, start, off)?;
             continue;
         }
         let mut mh = [0u8; 3];
@@ -759,7 +780,7 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
             && start.saturating_add(3).saturating_add(size as u64) > off
         {
             // A record crossing an appended-data offset is dropped (pyulog behaviour).
-            src.skip_to(off)?;
+            skip_to_offset(&mut src, start, off)?;
             continue;
         }
         body.resize(size, 0);
@@ -850,6 +871,12 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                 let multi_id = c.u8("subscription multi id")?;
                 let msg_id = c.u16("subscription message id")?;
                 let topic = ascii(c.rest(), start, "subscription name")?.to_string();
+                if topic.len() > MAX_NAME_LEN {
+                    return Err(malformed(
+                        start,
+                        format!("subscription name longer than {MAX_NAME_LEN} bytes"),
+                    ));
+                }
                 if subs.contains_key(&msg_id) {
                     return Err(malformed(
                         start,
@@ -1140,6 +1167,41 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_appended_offset_past_the_end_is_truncation_not_a_hang() {
+        // Header (16) + 'B' record (3 + 40) = 59 bytes; the offset points 1 byte past the end.
+        let b = Builder::new(0).flags(&[60]);
+        assert_eq!(b.bytes.len(), 59);
+        let err = read(&b.bytes[..], &mut Collect::default()).expect_err("truncated");
+        assert!(matches!(err, UlogError::Truncated { .. }), "{err}");
+        let b = Builder::new(0).flags(&[59]);
+        read(&b.bytes[..], &mut Collect::default()).expect("offset at the end is fine");
+    }
+
+    #[test]
+    fn long_names_are_refused() {
+        let long = "n".repeat(MAX_NAME_LEN);
+        let b = Builder::new(0)
+            .flags(&[])
+            .format(&format!("t:uint64_t timestamp;uint8_t[2] {long};"))
+            .sub(0, 0, "t");
+        let err = read(&b.bytes[..], &mut Collect::default()).expect_err("long field name");
+        assert!(
+            err.to_string().contains("flattened field name longer than"),
+            "{err}"
+        );
+        let topic = "t".repeat(MAX_NAME_LEN + 1);
+        let b = Builder::new(0)
+            .flags(&[])
+            .format(&format!("{topic}:uint64_t timestamp;"))
+            .sub(0, 0, &topic);
+        let err = read(&b.bytes[..], &mut Collect::default()).expect_err("long topic name");
+        assert!(
+            err.to_string().contains("subscription name longer than"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn total_flattened_fields_are_capped() {
         // One format with 60,001 fields, subscribed 20 times: 1.2 million fields in all.
         let mut b = Builder::new(0)
@@ -1185,7 +1247,9 @@ pub(crate) mod tests {
         assert_eq!(ParamValue::F32(1.0).to_string(), "f32:1");
         assert_eq!(ParamValue::F32(f32::NAN).to_string(), "f32:NaN");
         assert_eq!(ParamValue::I32(-3).to_string(), "i32:-3");
-        assert!(!ParamValue::F32(0.0).same_as(&ParamValue::F32(-0.0)));
+        assert!(ParamValue::F32(0.0).same_as(&ParamValue::F32(-0.0)));
+        assert!(ParamValue::F32(f32::NAN).same_as(&ParamValue::F32(f32::from_bits(0x7fc0_0001))));
+        assert!(!ParamValue::F32(f32::NAN).same_as(&ParamValue::F32(0.0)));
         assert!(!ParamValue::F32(1.0).same_as(&ParamValue::I32(1)));
     }
 }
