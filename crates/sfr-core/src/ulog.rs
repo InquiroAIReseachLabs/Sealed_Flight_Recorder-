@@ -398,6 +398,9 @@ pub trait Visitor {
     fn header(&mut self, _header: &Header) {}
     /// An 'I' record; `key_type` is the C type, for example `char[40]` or `uint32_t`.
     fn info(&mut self, _key_type: &str, _key: &str, _value: &[u8]) {}
+    /// An 'F' record that parsed: the format's name and the record's payload exactly as
+    /// stored (`<name>:<fields>`).
+    fn format_definition(&mut self, _name: &str, _definition: &[u8]) {}
     /// A 'P' record. `last_timestamp` is the largest data timestamp seen so far (pyulog's rule).
     fn parameter(
         &mut self,
@@ -923,6 +926,7 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
             }
             b'F' => {
                 let (name, defs) = parse_format(&body, start)?;
+                visitor.format_definition(&name, &body);
                 // A format with no fields still costs a definition.
                 format_fields = format_fields.saturating_add(defs.len().max(1));
                 if format_fields > MAX_TOTAL_FIELDS {
@@ -1173,6 +1177,13 @@ pub(crate) mod tests {
         }
         pub fn param_f(self, name: &str, v: f32) -> Self {
             let key = format!("float {name}");
+            let mut b = vec![key.len() as u8];
+            b.extend_from_slice(key.as_bytes());
+            b.extend_from_slice(&v.to_le_bytes());
+            self.rec(b'P', &b)
+        }
+        pub fn param_i(self, name: &str, v: i32) -> Self {
+            let key = format!("int32_t {name}");
             let mut b = vec![key.len() as u8];
             b.extend_from_slice(key.as_bytes());
             b.extend_from_slice(&v.to_le_bytes());

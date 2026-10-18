@@ -39,7 +39,7 @@ impl Status {
 /// One rule result (SPEC B1.7 `results`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleResult {
-    /// R1 to R6, X1 to X5.
+    /// R1 to R7, X1 to X5.
     pub id: &'static str,
     /// Short name.
     pub name: &'static str,
@@ -91,7 +91,7 @@ impl RuleResult {
 /// All results plus the overall status and exit code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Evaluation {
-    /// In rule-id order: R1 to R6, then the enabled X rules.
+    /// In rule-id order: R1 to R7, then the enabled X rules.
     pub results: Vec<RuleResult>,
     /// PASS when no rule is FAIL.
     pub status: Status,
@@ -483,7 +483,8 @@ fn r5(f: &FlightLog, events: &[Event]) -> RuleResult {
     }
 }
 
-fn r6(f: &FlightLog, events: &[Event]) -> RuleResult {
+/// R6. On a VTOL vehicle its first detail line states the VTOL type (Change Order 01).
+fn r6(f: &FlightLog, events: &[Event], vtol: Option<&crate::ingest::VtolType>) -> RuleResult {
     let expected = "every VTOL transition START has an END; none aborted";
     let missing = missing_fields(f, &["is_vtol"]);
     if !missing.is_empty() {
@@ -551,13 +552,18 @@ fn r6(f: &FlightLog, events: &[Event]) -> RuleResult {
     } else {
         Status::Fail
     };
+    let mut lines = detail.finish();
+    if let Some(t) = vtol {
+        let value = t.value.map_or(String::new(), |v| format!(" (VT_TYPE {v})"));
+        lines.insert(0, format!("VTOL type {}{value}", t.name));
+    }
     RuleResult::new(
         "R6",
         "VTOL transitions completed",
         status,
         expected,
         found,
-        detail.finish(),
+        lines,
     )
 }
 
@@ -594,6 +600,80 @@ fn need_armed(
         ));
     }
     None
+}
+
+/// R7, authorized command sources: every COMMAND event (of the configured category, if any)
+/// came from a listed MAVLink source. N/A without `[authorized_sources]`.
+fn r7(events: &[Event], rules: &Rules) -> RuleResult {
+    const NAME: &str = "authorized command sources";
+    let Some(auth) = &rules.authorized_sources else {
+        return RuleResult::new(
+            "R7",
+            NAME,
+            Status::NotApplicable,
+            "every COMMAND event from a source in [authorized_sources]",
+            "no [authorized_sources] in the rules file",
+            vec![],
+        );
+    };
+    let listed: Vec<String> = auth
+        .sources
+        .iter()
+        .map(|s| format!("{}/{}", s.system, s.component))
+        .collect();
+    let scope = auth
+        .category
+        .map_or("every COMMAND event".to_string(), |c| {
+            format!("every {} COMMAND event", c.as_str())
+        });
+    let expected = format!(
+        "{scope} from an authorized source (system/component {})",
+        listed.join(", ")
+    );
+    let mut detail = Lines::new();
+    let mut checked = 0usize;
+    for e in events {
+        let EventKind::Command {
+            command,
+            source_system,
+            source_component,
+            ..
+        } = &e.kind
+        else {
+            continue;
+        };
+        let category = rules.category(*command);
+        if auth.category.is_some_and(|c| c != category) {
+            continue;
+        }
+        checked += 1;
+        let ok = auth.sources.iter().any(|s| {
+            u64::from(s.system) == *source_system && u64::from(s.component) == *source_component
+        });
+        if !ok {
+            detail.push(|| {
+                format!(
+                    "event seq {}: command {command} ({}) from system {source_system} component {source_component} at boot_us {}",
+                    e.seq,
+                    category.as_str(),
+                    e.boot_us
+                )
+            });
+        }
+    }
+    let bad = detail.total;
+    let (status, found) = if bad == 0 {
+        (
+            Status::Pass,
+            format!("{checked} command(s) checked, all from authorized sources"),
+        )
+    } else {
+        (
+            Status::Fail,
+            format!("{bad} of {checked} command(s) from unauthorized sources"),
+        )
+    };
+    RuleResult::new("R7", NAME, status, expected, found, detail.finish())
 }
 
 fn x1(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::MinBattery) -> RuleResult {
@@ -878,7 +958,8 @@ pub fn evaluate(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Evaluatio
         r3(ing, rules, baseline),
         r4(f),
         r5(f, &ing.events),
-        r6(f, &ing.events),
+        r6(f, &ing.events, ing.identity.vehicle.vtol_type.as_ref()),
+        r7(&ing.events, rules),
     ];
     let x = &rules.extended;
     if let Some(t) = &x.min_battery {
@@ -1204,5 +1285,74 @@ mod tests {
             r.detail.last().map(String::as_str),
             Some("and 500 more; the events list every one")
         );
+    }
+
+    #[test]
+    fn r7_checks_command_sources_against_the_list_and_its_category() {
+        use crate::ingest::{FlightLogIngestor, Px4Ingestor};
+        use crate::ulog::tests::Builder;
+        let cmd = |ts: u64, id: u32, sys: u8, comp: u16| {
+            [
+                &ts.to_le_bytes()[..],
+                &id.to_le_bytes(),
+                &[sys],
+                &comp.to_le_bytes(),
+            ]
+            .concat()
+        };
+        let log = Builder::new(0)
+            .flags(&[])
+            .format("vehicle_command:uint64_t timestamp;uint32_t command;uint8_t source_system;uint16_t source_component;")
+            .sub(0, 1, "vehicle_command")
+            .data(1, &cmd(10, 176, 1, 1))
+            .data(1, &cmd(20, 211, 2, 7))
+            .data(1, &cmd(30, 187, 255, 190));
+        let ing = Px4Ingestor
+            .ingest(
+                "x.ulg",
+                &mut &log.bytes[..],
+                &crate::crypto::test_backend::TestBackend,
+            )
+            .unwrap();
+        let rules = |extra: &str| {
+            crate::rules::parse_rules(&format!(
+                "format = \"sfr-rules/1\"\n[required_topics]\ntopics = []\n[payload_commands]\nids = [187, 211]\n{extra}"
+            ))
+            .unwrap()
+        };
+        let na = r7(&ing.events, &rules(""));
+        assert_eq!(na.status, Status::NotApplicable);
+        let all = r7(
+            &ing.events,
+            &rules(
+                "[authorized_sources]\nsources = [{ system = 1, component = 1 }, { system = 255, component = 190 }]\n",
+            ),
+        );
+        assert_eq!(all.status, Status::Fail);
+        assert_eq!(all.found, "1 of 3 command(s) from unauthorized sources");
+        assert_eq!(
+            all.detail,
+            ["event seq 1: command 211 (PAYLOAD) from system 2 component 7 at boot_us 20"]
+        );
+        // Scoped to GENERAL, the payload commands are not checked.
+        let general = r7(
+            &ing.events,
+            &rules(
+                "[authorized_sources]\ncategory = \"GENERAL\"\nsources = [{ system = 1, component = 1 }]\n",
+            ),
+        );
+        assert_eq!(general.status, Status::Pass);
+        assert_eq!(
+            general.found,
+            "1 command(s) checked, all from authorized sources"
+        );
+        let payload = r7(
+            &ing.events,
+            &rules(
+                "[authorized_sources]\ncategory = \"PAYLOAD\"\nsources = [{ system = 2, component = 7 }]\n",
+            ),
+        );
+        assert_eq!(payload.status, Status::Fail);
+        assert_eq!(payload.found, "1 of 2 command(s) from unauthorized sources");
     }
 }

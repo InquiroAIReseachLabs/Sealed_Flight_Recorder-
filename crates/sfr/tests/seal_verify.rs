@@ -310,6 +310,115 @@ fn a_thousand_seeded_byte_flips_in_a_log_all_fail_verification() {
     }
 }
 
+/// Seals the shrunk failsafe_gps_loss seed with the default rules plus `[sealed_topics]`
+/// sealing battery_status, which no event and no default rule reads. Returns the record bytes,
+/// the log bytes, and the public key.
+fn sealed_battery_status() -> (Vec<u8>, Vec<u8>, [u8; 32]) {
+    let dir = scratch();
+    let (key, public) = keygen(&dir.join("k"));
+    let rules = dir.join("rules.toml");
+    let rules_text = std::fs::read_to_string(root().join(RULES)).unwrap()
+        + "\n[sealed_topics]\ntopics = [\"battery_status\"]\n";
+    std::fs::write(&rules, rules_text).unwrap();
+    let log = "fuzz/seeds/ulog_ingest/sitl_v1.17.0_failsafe_gps_loss_shrunk.ulg";
+    let o = sfr(&[
+        "seal",
+        log,
+        "--rules",
+        rules.to_str().unwrap(),
+        "--baseline",
+        "testdata/baselines/v1.17.0_failsafe_gps_loss.params",
+        "--key",
+        &key,
+        "--evaluation-only",
+        "--out",
+        dir.to_str().unwrap(),
+        "--seal-time",
+        SEAL_TIME,
+    ]);
+    let record = dir.join("sitl_v1.17.0_failsafe_gps_loss_shrunk.sfr");
+    assert!(record.exists(), "{}", text(&o));
+    let rec = std::fs::read(record).unwrap();
+    assert!(
+        String::from_utf8_lossy(&rec).contains("\"sealed_topics\":[{\"data_sha256\":"),
+        "the record seals battery_status"
+    );
+    (
+        rec,
+        std::fs::read(root().join(log)).unwrap(),
+        pubkey(&public),
+    )
+}
+
+/// 1,000 seeded single-byte flips inside sealed topic messages in the log (Change Order 01).
+#[test]
+fn a_thousand_flips_in_sealed_topic_messages_name_the_topic_and_instance() {
+    let (rec, ulg, pk) = sealed_battery_status();
+    let crypto = RustCrypto;
+    assert!(verify(&rec, Some(&mut &ulg[..]), &crypto, &pk, false).is_ok());
+    let spans: Vec<(usize, usize)> = data_records(&ulg)
+        .into_iter()
+        .filter(|(_, _, t)| t == "battery_status")
+        .map(|(at, len, _)| (at, len))
+        .collect();
+    assert!(!spans.is_empty());
+    let mut rng = Rng(0x5eed_0003);
+    for i in 0..1000 {
+        let (start, len) = spans[(rng.next() % spans.len() as u64) as usize];
+        let at = start + (rng.next() % len as u64) as usize;
+        let x = (rng.next() % 255 + 1) as u8;
+        let mut t = ulg.clone();
+        t[at] ^= x;
+        match verify(&rec, Some(&mut &t[..]), &crypto, &pk, false) {
+            Err(VerifyError::Mismatch(m)) => {
+                let all: Vec<&String> = std::iter::once(&m.first).chain(&m.also).collect();
+                assert!(
+                    all.iter()
+                        .any(|l| l.starts_with("sealed topic battery_status instance 0 ")),
+                    "flip {i} at byte {at} (xor {x:#04x}) did not name the sealed topic: {all:?}"
+                );
+            }
+            other => panic!("flip {i} at byte {at} (xor {x:#04x}) was not detected: {other:?}"),
+        }
+    }
+}
+
+/// 1,000 seeded single-byte flips inside the sealed topic digest in the record. Standalone
+/// verify fails on every one; deep verify also names the sealed topic and instance.
+#[test]
+fn a_thousand_flips_in_a_sealed_topic_digest_fail_and_deep_verify_names_it() {
+    let (rec, ulg, pk) = sealed_battery_status();
+    let crypto = RustCrypto;
+    let text = String::from_utf8_lossy(&rec).into_owned();
+    let start = text.find("\"sealed_topics\":[").unwrap();
+    let end = start + text[start..].find(']').unwrap();
+    let mut rng = Rng(0x5eed_0004);
+    for i in 0..1000 {
+        let at = start + (rng.next() % (end - start) as u64) as usize;
+        let x = (rng.next() % 255 + 1) as u8;
+        let mut t = rec.clone();
+        t[at] ^= x;
+        match verify(&t, None, &crypto, &pk, false) {
+            Err(VerifyError::Mismatch(_)) => {}
+            other => {
+                panic!("flip {i} at byte {at} (xor {x:#04x}) passed standalone verify: {other:?}")
+            }
+        }
+        // A flip that leaves the record readable is named by deep verify.
+        if let Err(VerifyError::Mismatch(m)) = verify(&t, Some(&mut &ulg[..]), &crypto, &pk, false)
+        {
+            let readable = sfr_core::json::parse(&t).is_ok() && !m.first.contains("canonical");
+            if readable && !m.first.starts_with("field ") && !m.first.starts_with("unknown field") {
+                let all: Vec<&String> = std::iter::once(&m.first).chain(&m.also).collect();
+                assert!(
+                    all.iter().any(|l| l.starts_with("sealed topic ")),
+                    "flip {i} at byte {at} (xor {x:#04x}): {all:?}"
+                );
+            }
+        }
+    }
+}
+
 /// Offsets of the data payloads of every 'D' record, with their topic names.
 fn data_records(log: &[u8]) -> Vec<(usize, usize, String)> {
     let mut topics = std::collections::BTreeMap::new();

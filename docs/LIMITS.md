@@ -16,7 +16,7 @@ A message for a name, version, or length rule ends with a parenthesis that state
 | Command | Input | Exit code |
 |---|---|---|
 | `seal` | log, rules file, baseline; a log whose record would be over the record limit (`--dry-run` writes no record and does not apply that limit) | 3 |
-| `seal` | key file | 4 |
+| `seal` | key file; a rules file with more than 64 sealed topics (a usage error, Change Order 01) | 4 |
 | `verify` | public key | 4 |
 | `verify` | record, or the log given with `--ulog` | 1 (verification failed) |
 
@@ -39,7 +39,10 @@ A message for a name, version, or length rule ends with a parenthesis that state
 | `failsafe_flags` flag fields | 256 | Each failsafe edge gives one event per named flag and R4 lists the flags, so the count bounds the events per edge, each R4 line, and each kept `failsafe_flags` row. | `ingest.rs` `MAX_FAILSAFE_FLAGS` |
 | Events | 100,000 | A log built so that a failsafe toggles on every row could otherwise build a timeline and a record that exhaust memory. It is well above the 10,000 events at which SPEC B1.10 measures standalone verify. | `events.rs` `MAX_EVENTS` |
 | Rules file, baseline, key file, public key | 16 MiB each | These are small text files; the cap stops `sfr` reading an unbounded file into memory. | `sfr/src/main.rs` `MAX_TEXT_BYTES` |
-| `required_topics.topics`, `parameters.ignore` | 256 entries each | Bounds the work done per log. | `rules.rs` `MAX_LIST_ENTRIES` |
+| `required_topics.topics`, `parameters.ignore`, `watched_parameters.names`, `payload_commands.ids`, `authorized_sources.sources` | 256 entries each | Bounds the work done per log. | `rules.rs` `MAX_LIST_ENTRIES` |
+| `sealed_topics.topics` | 64 entries; more is a usage error, exit 4 | Each sealed topic instance keeps one running digest while the log streams; Change Order 01 sets the cap and the exit code. | `rules.rs` `MAX_SEALED_TOPICS` |
+| Watched parameter name | 1 to 64 letters, digits, `_` | The same bound as a parameter name pattern, without `*`. | `rules.rs` `valid_param_name` |
+| Payload command id; MAVLink system and component id | 0 to 4,294,967,295; 0 to 255 each | `vehicle_command.command` is 32 bits; MAVLink ids are 8 bits. | `rules.rs` `parse_payload_commands`, `parse_authorized_sources` |
 | Topic name | 1 to 64 lowercase letters, digits, `_` | The uORB topic name rule. | `rules.rs` `valid_topic` |
 | Parameter name pattern | 1 to 64 characters, at most 8 `*` | Wildcard matching cost grows with the number of `*`; the cap keeps it small. | `params.rs` `MAX_PATTERN_STARS` |
 | TOML nesting and dotted keys | 80 levels | The `toml` parser's own limit; `sfr` reports it as an input limit. The parser gives a line for nested arrays and inline tables but not for a dotted key or table header, which name the file only. | `rules.rs` `TOML_MAX_DEPTH` |
@@ -84,6 +87,8 @@ Each test below crosses the limit by one and checks the message, unless the row 
 | Events | `events.rs` `a_timeline_of_exactly_the_event_cap_is_accepted`, and at (100,000 and 100,001); `a_timeline_over_the_event_cap_is_refused` (a failsafe toggling on 8,000 rows with 256 flags: far over, not by one) |
 | `required_topics.topics`, `parameters.ignore`, `*` per pattern | `rules.rs` `list_and_pattern_limits_are_enforced_and_named`, and at (256 and 257 entries; 8 and 9 `*`) |
 | Topic name | same test (65 bytes refused) |
+| `sealed_topics.topics` | `rules.rs` `change_order_01_sections_reject_bad_input`, and at (64 accepted; 65 refused as a usage error) |
+| Watched parameter name, payload command id, MAVLink ids, the new sections' other rules | same test (a bad name, an id over 32 bits, a system id of 256, duplicates, an empty source list, a watched name the ignore list matches) |
 | Parameter name pattern length | `rules.rs` `pattern_length_and_toml_depth_limits_are_named`, and at (64 and 65) |
 | TOML nesting and dotted keys | same test (81 nested arrays and a 100-part dotted key refused) |
 | Baseline parameters | `params.rs` `baseline_parameter_limit_is_enforced_and_named`, and at (65,536 and 65,537) |

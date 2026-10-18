@@ -78,13 +78,65 @@ pub fn version_string(release: u32) -> Option<String> {
     Some(format!("{major}.{minor}.{patch}{suffix}"))
 }
 
-/// Vehicle identity from the first `vehicle_status` sample.
+/// Vehicle identity from the first `vehicle_status` sample, and the VTOL subtype.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Vehicle {
     /// `vehicle_status.system_type` (MAVLink MAV_TYPE).
     pub system_type: Option<u8>,
     /// `vehicle_status.is_vtol`.
     pub is_vtol: Option<bool>,
+    /// The VTOL subtype from parameter `VT_TYPE`, when `is_vtol` is true on some sample.
+    pub vtol_type: Option<VtolType>,
+}
+
+/// SPEC B1.5 `vtol_type`: parameter `VT_TYPE` and its PX4 name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VtolType {
+    /// The raw integer, or `None` when the log has no int32 `VT_TYPE`.
+    pub value: Option<i32>,
+    /// `tailsitter`, `tiltrotor`, `standard`, `unknown(<n>)`, or `unknown` without a value.
+    pub name: String,
+}
+
+impl VtolType {
+    /// From the parameter set at log start (docs/DIAGNOSTIC.md item 12 cites PX4's mapping).
+    pub fn from_params(params: &BTreeMap<String, ParamValue>) -> VtolType {
+        match params.get("VT_TYPE") {
+            Some(ParamValue::I32(n)) => VtolType {
+                value: Some(*n),
+                name: match n {
+                    0 => "tailsitter".to_string(),
+                    1 => "tiltrotor".to_string(),
+                    2 => "standard".to_string(),
+                    other => format!("unknown({other})"),
+                },
+            },
+            _ => VtolType {
+                value: None,
+                name: "unknown".to_string(),
+            },
+        }
+    }
+}
+
+/// SPEC B1.5 sealed topic digest: one instance of a topic the rules file seals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedTopicDigest {
+    /// Topic name.
+    pub topic: String,
+    /// uORB instance.
+    pub multi_id: u8,
+    /// SHA-256 of the topic's 'F' record payload exactly as stored (`<name>:<fields>`).
+    pub format_sha256: [u8; 32],
+    /// Data records of this instance.
+    pub message_count: u64,
+    /// The timestamp field of the first data record in file order.
+    pub first_timestamp_us: Option<u64>,
+    /// The timestamp field of the last data record in file order.
+    pub last_timestamp_us: Option<u64>,
+    /// SHA-256 over the data records in file order, each as its payload length (8 bytes,
+    /// little-endian) followed by the payload without the message id.
+    pub data_sha256: [u8; 32],
 }
 
 /// SPEC B1.5 log identity.
@@ -335,19 +387,31 @@ pub struct Ingested {
     pub flight: FlightLog,
     /// The ordered event timeline.
     pub events: Vec<Event>,
+    /// Digests of the sealed topics' instances, sorted by topic, then instance.
+    pub sealed_topics: Vec<SealedTopicDigest>,
 }
 
 /// A flight log format `sfr` can read (SPEC B1.2).
 pub trait FlightLogIngestor {
     /// Format name for messages.
     fn format(&self) -> &'static str;
-    /// Reads and hashes the whole stream.
+    /// Reads and hashes the whole stream, and digests every instance of `sealed_topics`.
+    fn ingest_sealing(
+        &self,
+        file_name: &str,
+        input: &mut dyn Read,
+        crypto: &dyn CryptoBackend,
+        sealed_topics: &[String],
+    ) -> Result<Ingested, IngestError>;
+    /// Reads and hashes the whole stream; seals no topic.
     fn ingest(
         &self,
         file_name: &str,
         input: &mut dyn Read,
         crypto: &dyn CryptoBackend,
-    ) -> Result<Ingested, IngestError>;
+    ) -> Result<Ingested, IngestError> {
+        self.ingest_sealing(file_name, input, crypto, &[])
+    }
 }
 
 /// PX4 ULog, v1.14 through v1.17.
@@ -378,11 +442,12 @@ impl FlightLogIngestor for Px4Ingestor {
         "PX4 ULog"
     }
 
-    fn ingest(
+    fn ingest_sealing(
         &self,
         file_name: &str,
         input: &mut dyn Read,
         crypto: &dyn CryptoBackend,
+        sealed_topics: &[String],
     ) -> Result<Ingested, IngestError> {
         let mut hashing = Hashing {
             inner: input,
@@ -390,7 +455,14 @@ impl FlightLogIngestor for Px4Ingestor {
             b3: blake3::Hasher::new(),
             size: 0,
         };
-        let mut collector = Collector::default();
+        let mut collector = Collector {
+            sealing: Sealing {
+                crypto: Some(crypto),
+                names: sealed_topics.iter().cloned().collect(),
+                ..Sealing::default()
+            },
+            ..Collector::default()
+        };
         let summary = {
             let mut buffered = BufReader::with_capacity(1 << 16, &mut hashing);
             let summary = ulog::read(&mut buffered, &mut collector).map_err(|e| match e {
@@ -556,6 +628,28 @@ struct Sub {
     topic: String,
     multi_id: u8,
     decoder: Decoder,
+    /// Index into `Sealing::open` when the rules seal this topic.
+    sealed: Option<usize>,
+}
+
+/// One sealed topic instance while reading.
+struct SealAcc {
+    format_sha256: [u8; 32],
+    count: u64,
+    first: Option<u64>,
+    last: Option<u64>,
+    sha: Box<dyn Sha256Stream>,
+}
+
+/// Sealed topic digests, computed while streaming; no data record is kept.
+#[derive(Default)]
+struct Sealing<'c> {
+    crypto: Option<&'c dyn CryptoBackend>,
+    names: std::collections::BTreeSet<String>,
+    /// SHA-256 of the latest 'F' record of each sealed topic's format.
+    formats: BTreeMap<String, [u8; 32]>,
+    index: BTreeMap<(String, u8), usize>,
+    open: Vec<SealAcc>,
 }
 
 /// One `failsafe_flags` instance while reading: its first subscription's layout and schema.
@@ -566,7 +660,8 @@ struct FsInstance {
 }
 
 #[derive(Default)]
-struct Collector {
+struct Collector<'c> {
+    sealing: Sealing<'c>,
     header: Option<Header>,
     ver_sw: Option<String>,
     ver_sw_release: Option<u32>,
@@ -587,9 +682,17 @@ struct Collector {
     limit: Option<String>,
 }
 
-impl Visitor for Collector {
+impl Visitor for Collector<'_> {
     fn header(&mut self, header: &Header) {
         self.header = Some(*header);
+    }
+
+    fn format_definition(&mut self, name: &str, definition: &[u8]) {
+        if let (true, Some(crypto)) = (self.sealing.names.contains(name), self.sealing.crypto) {
+            self.sealing
+                .formats
+                .insert(name.to_string(), crypto.sha256(definition));
+        }
     }
 
     fn info(&mut self, key_type: &str, key: &str, value: &[u8]) {
@@ -725,12 +828,36 @@ impl Visitor for Collector {
             },
             _ => Decoder::Count,
         };
+        let sealed = match (self.sealing.names.contains(topic), self.sealing.crypto) {
+            (true, Some(crypto)) => {
+                let key = (topic.to_string(), multi_id);
+                let next = self.sealing.open.len();
+                let i = *self.sealing.index.entry(key).or_insert(next);
+                if i == next {
+                    self.sealing.open.push(SealAcc {
+                        format_sha256: self
+                            .sealing
+                            .formats
+                            .get(topic)
+                            .copied()
+                            .unwrap_or_else(|| crypto.sha256(&[])),
+                        count: 0,
+                        first: None,
+                        last: None,
+                        sha: crypto.sha256_stream(),
+                    });
+                }
+                Some(i)
+            }
+            _ => None,
+        };
         self.subs.insert(
             msg_id,
             Sub {
                 topic: topic.to_string(),
                 multi_id,
                 decoder,
+                sealed,
             },
         );
     }
@@ -739,6 +866,13 @@ impl Visitor for Collector {
         let Some(sub) = self.subs.get(&msg_id) else {
             return;
         };
+        if let Some(acc) = sub.sealed.and_then(|i| self.sealing.open.get_mut(i)) {
+            acc.count = acc.count.saturating_add(1);
+            acc.first.get_or_insert(timestamp);
+            acc.last = Some(timestamp);
+            acc.sha.update(&(p.len() as u64).to_le_bytes());
+            acc.sha.update(p);
+        }
         let counter = self
             .row_index
             .entry((sub.topic.clone(), sub.multi_id))
@@ -915,7 +1049,7 @@ impl Visitor for Collector {
     }
 }
 
-impl Collector {
+impl Collector<'_> {
     fn finish(
         mut self,
         file_name: String,
@@ -971,9 +1105,14 @@ impl Collector {
             git: self.ver_sw.clone(),
         };
         let first = flight.vehicle_status.first();
+        let vtol = flight
+            .vehicle_status
+            .iter()
+            .any(|r| r.is_vtol == Some(true));
         let vehicle = Vehicle {
             system_type: first.and_then(|r| r.system_type),
             is_vtol: first.and_then(|r| r.is_vtol),
+            vtol_type: vtol.then(|| VtolType::from_params(&self.params)),
         };
         let identity = LogIdentity {
             file_name,
@@ -988,11 +1127,29 @@ impl Collector {
             params: std::mem::take(&mut self.params),
         };
         let events = events::build(&flight, &config).map_err(IngestError::Limit)?;
+        let Sealing { index, open, .. } = std::mem::take(&mut self.sealing);
+        let mut open: Vec<Option<SealAcc>> = open.into_iter().map(Some).collect();
+        let sealed_topics = index
+            .into_iter()
+            .filter_map(|((topic, multi_id), i)| {
+                let acc = open.get_mut(i)?.take()?;
+                Some(SealedTopicDigest {
+                    topic,
+                    multi_id,
+                    format_sha256: acc.format_sha256,
+                    message_count: acc.count,
+                    first_timestamp_us: acc.first,
+                    last_timestamp_us: acc.last,
+                    data_sha256: acc.sha.finish(),
+                })
+            })
+            .collect();
         Ok(Ingested {
             identity,
             config,
             flight,
             events,
+            sealed_topics,
         })
     }
 }
@@ -1259,7 +1416,8 @@ mod tests {
             ing.identity.vehicle,
             Vehicle {
                 system_type: Some(2),
-                is_vtol: Some(false)
+                is_vtol: Some(false),
+                vtol_type: None
             }
         );
         assert_eq!(ing.events.len(), 22);
@@ -1274,5 +1432,118 @@ mod tests {
         assert_eq!(version_string(0x010F_0040).as_deref(), Some("1.15.0-alpha"));
         assert_eq!(version_string(0x010F_0000).as_deref(), Some("1.15.0-dev"));
         assert_eq!(version_string(0), None);
+    }
+
+    #[test]
+    fn sealed_topics_are_digested_per_instance_while_streaming() {
+        use crate::ulog::tests::Builder;
+        use sha2::Digest;
+        let format = "custom_detection:uint64_t timestamp;uint8_t[4] box;";
+        let payload = |ts: u64, b: [u8; 4]| [&ts.to_le_bytes()[..], &b[..]].concat();
+        let (a, b) = (payload(10, [1, 2, 3, 4]), payload(20, [5, 6, 7, 8]));
+        let log = Builder::new(0)
+            .flags(&[])
+            .format(format)
+            .format("other:uint64_t timestamp;")
+            .sub(0, 1, "custom_detection")
+            .sub(1, 2, "custom_detection")
+            .sub(0, 3, "other")
+            .data(1, &a)
+            .data(3, &5u64.to_le_bytes())
+            .data(1, &b);
+        let sealed = ["custom_detection".to_string()];
+        let ing = Px4Ingestor
+            .ingest_sealing("x.ulg", &mut &log.bytes[..], &TestBackend, &sealed)
+            .unwrap();
+        let mut h = sha2::Sha256::new();
+        for p in [&a, &b] {
+            h.update((p.len() as u64).to_le_bytes());
+            h.update(p);
+        }
+        let empty: [u8; 32] = sha2::Sha256::digest(b"").into();
+        let format_sha256: [u8; 32] = sha2::Sha256::digest(format.as_bytes()).into();
+        assert_eq!(
+            ing.sealed_topics,
+            [
+                SealedTopicDigest {
+                    topic: "custom_detection".into(),
+                    multi_id: 0,
+                    format_sha256,
+                    message_count: 2,
+                    first_timestamp_us: Some(10),
+                    last_timestamp_us: Some(20),
+                    data_sha256: h.finalize().into(),
+                },
+                SealedTopicDigest {
+                    topic: "custom_detection".into(),
+                    multi_id: 1,
+                    format_sha256,
+                    message_count: 0,
+                    first_timestamp_us: None,
+                    last_timestamp_us: None,
+                    data_sha256: empty,
+                },
+            ]
+        );
+        // The values docs/RECORD_FORMAT.md gives for this example.
+        assert_eq!(
+            crate::hex(&format_sha256),
+            "c05f82794614bc08b65ab3dbf5920fb43e7ffbda890061d06e79cfa5364d6143"
+        );
+        assert_eq!(
+            ing.sealed_topics
+                .first()
+                .map(|d| crate::hex(&d.data_sha256)),
+            Some("a933532016ce84d3fa02c2b0e1f09bab760869b1320c9450571b2f62c4eab43c".into())
+        );
+        assert_eq!(
+            (crate::hex(&a), crate::hex(&b)),
+            (
+                "0a0000000000000001020304".into(),
+                "140000000000000005060708".into()
+            )
+        );
+        assert_eq!(
+            crate::hex(&empty),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        // Without sealing, nothing is digested.
+        let plain = Px4Ingestor
+            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
+            .unwrap();
+        assert!(plain.sealed_topics.is_empty());
+    }
+
+    #[test]
+    fn vtol_type_comes_from_vt_type_only_on_a_vtol_vehicle() {
+        use crate::ulog::tests::Builder;
+        let row = |ts: u64, vtol: u8| [&ts.to_le_bytes()[..], &[vtol][..]].concat();
+        let log = |vt: Option<i32>, vtol: u8| {
+            let b = Builder::new(0).flags(&[]);
+            let b = match vt {
+                Some(v) => b.param_i("VT_TYPE", v),
+                None => b,
+            };
+            b.format("vehicle_status:uint64_t timestamp;bool is_vtol;")
+                .sub(0, 0, "vehicle_status")
+                .data(0, &row(1, 0))
+                .data(0, &row(2, vtol))
+        };
+        let vtol_type = |vt: Option<i32>, vtol: u8| {
+            Px4Ingestor
+                .ingest("x.ulg", &mut &log(vt, vtol).bytes[..], &TestBackend)
+                .unwrap()
+                .identity
+                .vehicle
+                .vtol_type
+                .map(|t| (t.value, t.name))
+        };
+        assert_eq!(vtol_type(Some(0), 1), Some((Some(0), "tailsitter".into())));
+        assert_eq!(vtol_type(Some(1), 1), Some((Some(1), "tiltrotor".into())));
+        assert_eq!(vtol_type(Some(2), 1), Some((Some(2), "standard".into())));
+        assert_eq!(vtol_type(Some(7), 1), Some((Some(7), "unknown(7)".into())));
+        assert_eq!(vtol_type(None, 1), Some((None, "unknown".into())));
+        // is_vtol true on a later sample is enough; never true means no vtol_type.
+        assert_eq!(vtol_type(Some(0), 0), None);
     }
 }

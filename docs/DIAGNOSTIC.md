@@ -17,6 +17,7 @@
 9. Corrections to the build plan and to SPEC
 10. Decisions the founder must approve before Chunk 2
 11. Cryptographic module boundary and key custody (security audit)
+12. Change Order 01: VTOL subtype, watched parameters, payload commands
 
 Appendix A. Item 11 test programs
 
@@ -13485,6 +13486,100 @@ AWS_LC_FIPS_SYS_STATIC=1 CC_<target_underscored>=<musl-gcc for that target> \
 
 **On crates.io**, only aws-lc-fips-sys 0.13.11 vendors 3.1.0, and it is not the policy's file set: `go.mod` altered, 7654 files removed including `tool/`, built with a symbol prefix. aws-lc-rs 1.17.4 requires `^0.13.17` regardless. System-library mode is the only route that meets section 11.1.
 
+
+## 12. Change Order 01: VTOL subtype, watched parameters, payload commands
+
+Sources are the PX4 trees `v1.14.4` and `v1.17.0` used for the golden logs (item 3); paths are relative to each tree. Each fact was read in the source, and an independent check re-read the cited lines.
+
+### 12.1 `VT_TYPE` mapping (SPEC B1.5 `vtol_type`)
+
+| Value | Label v1.14.4 | Label v1.17.0 | Source |
+|---|---|---|---|
+| 0 | Tailsitter (default) | Tailsitter (default) | v1.14.4 src/modules/vtol_att_control/vtol_att_control_params.c:45, :53; v1.17.0 src/modules/vtol_att_control/vtol_att_control_params.c:45, :53; enum vtol_type::TAILSITTER = 0 at v1.14.4 src/modules/vtol_att_control/vtol_type.h:64 and v1.17.0 src/modules/vtol_att_control/vtol_type.h:64 |
+| 1 | Tiltrotor | Tiltrotor | v1.14.4 src/modules/vtol_att_control/vtol_att_control_params.c:46; v1.17.0 src/modules/vtol_att_control/vtol_att_control_params.c:46; enum vtol_type::TILTROTOR (implicit 1) at v1.14.4 src/modules/vtol_att_control/vtol_type.h:65 and v1.17.0 src/modules/vtol_att_control/vtol_type.h:65 |
+| 2 | Standard | Standard | v1.14.4 src/modules/vtol_att_control/vtol_att_control_params.c:47; v1.17.0 src/modules/vtol_att_control/vtol_att_control_params.c:47; enum vtol_type::STANDARD (implicit 2) at v1.14.4 src/modules/vtol_att_control/vtol_type.h:66 and v1.17.0 src/modules/vtol_att_control/vtol_type.h:66 |
+| other | not allowed (@min 0, @max 2); module exits | not allowed (@min 0, @max 2); module exits | v1.14.4 src/modules/vtol_att_control/vtol_att_control_params.c:48-49 and src/modules/vtol_att_control/vtol_att_control_main.cpp:76-77; v1.17.0 src/modules/vtol_att_control/vtol_att_control_params.c:48-49 and src/modules/vtol_att_control/vtol_att_control_main.cpp:76-77 |
+
+Change Order 01 mapping (0 = tailsitter, 1 = tiltrotor, 2 = standard): CONFIRMED for v1.14.4 and v1.17.0.
+
+Logged fields carrying VTOL type besides the VT_TYPE parameter:
+
+| Topic.field | v1.14.4 | v1.17.0 | Derived from | Source |
+|---|---|---|---|---|
+| vtol_vehicle_status (any field) | no type field (only vehicle_vtol_state, fixed_wing_system_failure) | no type field (same) | n/a | v1.14.4 msg/VtolVehicleStatus.msg:8-12; v1.17.0 msg/versioned/VtolVehicleStatus.msg:11-15 |
+| vehicle_status.is_vtol | present, logged | present, logged | MAV_TYPE in {19,20,21,22,23} | v1.14.4 msg/VehicleStatus.msg:95, src/modules/commander/Commander.cpp:1609, src/modules/commander/commander_helper.cpp:99-105, src/modules/logger/logged_topics.cpp:129; v1.17.0 msg/versioned/VehicleStatus.msg:111, src/modules/commander/Commander.cpp:1765, src/modules/commander/commander_helper.cpp:99-105, src/modules/logger/logged_topics.cpp:150 |
+| vehicle_status.is_vtol_tailsitter | present, logged | present, logged | MAV_TYPE in {19,20,23} | v1.14.4 msg/VehicleStatus.msg:96, src/modules/commander/Commander.cpp:1610, src/modules/commander/commander_helper.cpp:108-112; v1.17.0 msg/versioned/VehicleStatus.msg:112, src/modules/commander/Commander.cpp:1766, src/modules/commander/commander_helper.cpp:108-112 |
+| vehicle_status.system_type | present, logged (19/20/23 tailsitter, 21 tiltrotor, 22 standard) | present, logged (same) | MAV_TYPE param copied verbatim | v1.14.4 msg/VehicleStatus.msg:101, src/modules/commander/Commander.cpp:1582-1585, src/modules/mavlink/mavlink_params.c:93-97; v1.17.0 msg/versioned/VehicleStatus.msg:117, src/modules/commander/Commander.cpp:1741-1744, src/modules/mavlink/mavlink_params.c:92-96 |
+
+The mapping is the same in both versions, and it is the one Change Order 01 gives. No uORB topic carries the `VT_TYPE` value; `vehicle_status.is_vtol`, `is_vtol_tailsitter`, and `system_type` come from the MAVLink `MAV_TYPE` parameter in commander (MAV_TYPE 19, 20, or 23 tailsitter, 21 tiltrotor, 22 standard), so `sfr` reads `VT_TYPE` from the parameters at log start and never maps `system_type` through it. `VT_TYPE` is written to a log only when the build includes `vtol_att_control` (the logger skips parameters no module uses), so a VTOL log without it records `vtol_type` name `unknown`. `CA_AIRFRAME` (control allocation) is a third, unrelated numbering.
+
+### 12.2 Watched parameters (SPEC B1.6 `[watched_parameters]`)
+
+| Name | v1.14.4 | v1.17.0 | Type and default | Kept or dropped |
+|---|---|---|---|---|
+| VT_F_TRANS_DUR | present, v1.14.4/src/modules/vtol_att_control/vtol_att_control_params.c:77 ("Duration of a front transition", :66) | present, v1.17.0/src/modules/vtol_att_control/vtol_att_control_params.c:77 (:66) | FLOAT, s, 5.0 (min 0.1, max 20.00) | Kept |
+| VT_B_TRANS_DUR | present, v1.14.4/src/modules/vtol_att_control/vtol_att_control_params.c:92 ("Maximum duration of a back transition", :80) | present, v1.17.0/src/modules/vtol_att_control/vtol_att_control_params.c:91 (:80) | FLOAT, s, 10.0 (min 0.1, max 20.00) | Kept |
+| VT_TRANS_MIN_TM | present, v1.14.4/src/modules/vtol_att_control/vtol_att_control_params.c:179 ("Front transition minimum time", :168) | present, v1.17.0/src/modules/vtol_att_control/vtol_att_control_params.c:173 (:162) | FLOAT, s, 2.0 (min 0.0, max 20.0) | Kept |
+| VT_TRANS_TIMEOUT | present, v1.14.4/src/modules/vtol_att_control/vtol_att_control_params.c:165 ("Front transition timeout", :154) | present, v1.17.0/src/modules/vtol_att_control/vtol_att_control_params.c:159 (:148) | FLOAT, s, 15.0 (min 0.1, max 30.00) | Kept |
+| VT_ARSP_TRANS | present, v1.14.4/src/modules/vtol_att_control/vtol_att_control_params.c:151 ("Transition airspeed", :140) | present, v1.17.0/src/modules/vtol_att_control/vtol_att_control_params.c:145 (:134) | FLOAT, m/s, 10.0 (min 0.00, max 30.00) | Kept |
+| VT_PITCH_MIN | present, v1.14.4/src/modules/vtol_att_control/vtol_att_control_params.c:387 ("Minimum pitch angle during hover.", :374) | present, v1.17.0/src/modules/vtol_att_control/vtol_att_control_params.c:368 (:356) | FLOAT, deg, -5.0 (min -10.0, max 45.0) | Kept |
+| VT_FW_DIFTHR_EN | present, v1.14.4/src/modules/vtol_att_control/vtol_att_control_params.c:306 ("Differential thrust in forwards flight.", :293) | present, v1.17.0/src/modules/vtol_att_control/vtol_att_control_params.c:302 (:289) | INT32 bitmask (0 Yaw, 1 Roll, 2 Pitch), no unit, 0 (min 0, max 7) | Kept |
+| VT_FW_DIFTHR_S_R | present, v1.14.4/src/modules/vtol_att_control/vtol_att_control_params.c:319 ("Roll differential thrust factor in forward flight", :309) | present, v1.17.0/src/modules/vtol_att_control/vtol_att_control_params.c:315 (:305) | FLOAT, no unit, 1.0 (min 0.0, max 2.0) | Kept |
+| VT_FW_DIFTHR_S_P | present, v1.14.4/src/modules/vtol_att_control/vtol_att_control_params.c:332 ("Pitch differential thrust factor in forward flight", :322) | present, v1.17.0/src/modules/vtol_att_control/vtol_att_control_params.c:328 (:318) | FLOAT, no unit, 1.0 (min 0.0, max 2.0) | Kept |
+| VT_FW_DIFTHR_S_Y | present, v1.14.4/src/modules/vtol_att_control/vtol_att_control_params.c:345 ("Yaw differential thrust factor in forward flight", :335) | present, v1.17.0/src/modules/vtol_att_control/vtol_att_control_params.c:341 (:331) | FLOAT, no unit, 0.1 (min 0.0, max 2.0) | Kept |
+
+Generated metadata (px4_sitl_default) agrees for all 10: v1.14.4/build/px4_sitl_default/parameters.xml:13566-13833 and v1.17.0/build/px4_sitl_default/parameters.xml:15884-16175. None of the 10 names matches the R3 ignore list in examples/rules.default.toml:16-24.
+
+All ten names Change Order 01 proposes exist in both versions, with the same type, unit, default, and range, so none is dropped. Older names `VT_PTCH_MIN` and `VT_FW_DIFTHR_SC` (v1.14.4 `src/lib/parameters/param_translation.cpp`) are earlier names, not successors, and are not watched. None of the ten matches the default ignore list.
+
+### 12.3 Payload command ids (SPEC B1.5 command category, B1.6 `[payload_commands]`)
+
+| Id | Name | v1.14.4 | v1.17.0 | Category | Source |
+|---|---|---|---|---|---|
+| 184 | VEHICLE_CMD_DO_REPEAT_SERVO | 184 | 184 | PAYLOAD: servo (recommended) | v1.14.4/msg/VehicleCommand.msg:39; v1.17.0/msg/versioned/VehicleCommand.msg:42 |
+| 187 | VEHICLE_CMD_DO_SET_ACTUATOR | 187 | 187 | PAYLOAD: actuator (recommended) | v1.14.4/msg/VehicleCommand.msg:42; v1.17.0/msg/versioned/VehicleCommand.msg:45 |
+| 203 | VEHICLE_CMD_DO_DIGICAM_CONTROL | 203 | 203 | PAYLOAD: camera trigger (recommended; no .msg comment) | v1.14.4/msg/VehicleCommand.msg:52; v1.17.0/msg/versioned/VehicleCommand.msg:55 |
+| 206 | VEHICLE_CMD_DO_SET_CAM_TRIGG_DIST | 206 | 206 | PAYLOAD: camera trigger (recommended) | v1.14.4/msg/VehicleCommand.msg:55; v1.17.0/msg/versioned/VehicleCommand.msg:58 |
+| 211 | VEHICLE_CMD_DO_GRIPPER | 211 | 211 | PAYLOAD: gripper (recommended) | v1.14.4/msg/VehicleCommand.msg:60; v1.17.0/msg/versioned/VehicleCommand.msg:63 |
+| 214 | VEHICLE_CMD_DO_SET_CAM_TRIGG_INTERVAL | 214 | 214 | PAYLOAD: camera trigger (recommended) | v1.14.4/msg/VehicleCommand.msg:61; v1.17.0/msg/versioned/VehicleCommand.msg:64 |
+| 260 | VEHICLE_CMD_OBLIQUE_SURVEY | 260 | 260 | PAYLOAD: camera trigger (recommended, judgment call; also pivots mount) | v1.14.4/msg/VehicleCommand.msg:72; v1.17.0/msg/versioned/VehicleCommand.msg:75 |
+| 2000 | VEHICLE_CMD_IMAGE_START_CAPTURE | 2000 | 2000 | PAYLOAD: image capture (recommended) | v1.14.4/msg/VehicleCommand.msg:88; v1.17.0/msg/versioned/VehicleCommand.msg:94 |
+| 2003 | VEHICLE_CMD_DO_TRIGGER_CONTROL | 2003 | 2003 | PAYLOAD: camera trigger (recommended) | v1.14.4/msg/VehicleCommand.msg:89; v1.17.0/msg/versioned/VehicleCommand.msg:95 |
+| 30001 | VEHICLE_CMD_PAYLOAD_PREPARE_DEPLOY | 30001 | 30001 | PAYLOAD: payload deploy (recommended) | v1.14.4/msg/VehicleCommand.msg:97; v1.17.0/msg/versioned/VehicleCommand.msg:103 |
+| 30002 | VEHICLE_CMD_PAYLOAD_CONTROL_DEPLOY | 30002 | 30002 | PAYLOAD: payload deploy (recommended) | v1.14.4/msg/VehicleCommand.msg:98; v1.17.0/msg/versioned/VehicleCommand.msg:104 |
+| 42600 | VEHICLE_CMD_DO_WINCH | 42600 | 42600 | PAYLOAD: winch (recommended) | v1.14.4/msg/VehicleCommand.msg:100; v1.17.0/msg/versioned/VehicleCommand.msg:106 |
+| 183 | (MAV_CMD_DO_SET_SERVO; no VEHICLE_CMD constant) | absent | absent | servo; optional raw id, not in .msg | v1.14.4/src/modules/mavlink/mavlink/message_definitions/v1.0/common.xml:1456; v1.17.0/src/modules/mavlink/mavlink/message_definitions/v1.0/common.xml:1455 |
+| 2001 | (NAV_CMD_IMAGE_STOP_CAPTURE; no VEHICLE_CMD constant) | absent | absent | image capture; optional raw id, not in .msg, reaches topic via navigator | v1.14.4/src/modules/navigator/navigation.h:97; v1.17.0/src/modules/navigator/navigation.h:87 |
+| 202 | (MAV_CMD_DO_DIGICAM_CONFIGURE; no VEHICLE_CMD constant) | absent | absent | camera config; left out | v1.14.4/src/modules/mavlink/mavlink/message_definitions/v1.0/common.xml:1633; v1.17.0/src/modules/mavlink/mavlink/message_definitions/v1.0/common.xml:1659 |
+| 181 | VEHICLE_CMD_DO_SET_RELAY | 181 | 181 | relay; left out (generic switch) | v1.14.4/msg/VehicleCommand.msg:37; v1.17.0/msg/versioned/VehicleCommand.msg:40 |
+| 182 | VEHICLE_CMD_DO_REPEAT_RELAY | 182 | 182 | relay; left out (generic switch) | v1.14.4/msg/VehicleCommand.msg:38; v1.17.0/msg/versioned/VehicleCommand.msg:41 |
+| 204 | VEHICLE_CMD_DO_MOUNT_CONFIGURE | 204 | 204 | mount; left out (pointing) | v1.14.4/msg/VehicleCommand.msg:53; v1.17.0/msg/versioned/VehicleCommand.msg:56 |
+| 205 | VEHICLE_CMD_DO_MOUNT_CONTROL | 205 | 205 | mount; left out (pointing) | v1.14.4/msg/VehicleCommand.msg:54; v1.17.0/msg/versioned/VehicleCommand.msg:57 |
+| 220 | VEHICLE_CMD_DO_MOUNT_CONTROL_QUAT | 220 | 220 | mount; left out (pointing) | v1.14.4/msg/VehicleCommand.msg:62; v1.17.0/msg/versioned/VehicleCommand.msg:65 |
+| 283 | VEHICLE_CMD_GIMBAL_DEVICE_INFORMATION | 283 | 283 | gimbal; left out (info request) | v1.14.4/msg/VehicleCommand.msg:73; v1.17.0/msg/versioned/VehicleCommand.msg:77 |
+| 1000 | VEHICLE_CMD_DO_GIMBAL_MANAGER_PITCHYAW | 1000 | 1000 | gimbal; left out (pointing) | v1.14.4/msg/VehicleCommand.msg:86; v1.17.0/msg/versioned/VehicleCommand.msg:92 |
+| 1001 | VEHICLE_CMD_DO_GIMBAL_MANAGER_CONFIGURE | 1001 | 1001 | gimbal; left out (control arbitration) | v1.14.4/msg/VehicleCommand.msg:87; v1.17.0/msg/versioned/VehicleCommand.msg:93 |
+| 200 | VEHICLE_CMD_DO_CONTROL_VIDEO | 200 | 200 | video; left out | v1.14.4/msg/VehicleCommand.msg:50; v1.17.0/msg/versioned/VehicleCommand.msg:53 |
+| 2500 | VEHICLE_CMD_VIDEO_START_CAPTURE | 2500 | 2500 | video; left out | v1.14.4/msg/VehicleCommand.msg:90; v1.17.0/msg/versioned/VehicleCommand.msg:96 |
+| 2501 | VEHICLE_CMD_VIDEO_STOP_CAPTURE | 2501 | 2501 | video; left out | v1.14.4/msg/VehicleCommand.msg:91; v1.17.0/msg/versioned/VehicleCommand.msg:97 |
+| 530 | VEHICLE_CMD_SET_CAMERA_MODE | 530 | 530 | camera config; left out | v1.14.4/msg/VehicleCommand.msg:83; v1.17.0/msg/versioned/VehicleCommand.msg:88 |
+| 531 | VEHICLE_CMD_SET_CAMERA_ZOOM | 531 | 531 | camera config; left out | v1.14.4/msg/VehicleCommand.msg:84; v1.17.0/msg/versioned/VehicleCommand.msg:89 |
+| 532 | VEHICLE_CMD_SET_CAMERA_FOCUS | 532 | 532 | camera config; left out | v1.14.4/msg/VehicleCommand.msg:85; v1.17.0/msg/versioned/VehicleCommand.msg:90 |
+| 521 | VEHICLE_CMD_REQUEST_CAMERA_INFORMATION | absent | 521 | camera info; left out; v1.17.0 only | v1.17.0/msg/versioned/VehicleCommand.msg:87 |
+| 310 | VEHICLE_CMD_ACTUATOR_TEST | 310 | 310 | test; left out (stays GENERAL) | v1.14.4/msg/VehicleCommand.msg:76; v1.17.0/msg/versioned/VehicleCommand.msg:80 |
+| 311 | VEHICLE_CMD_CONFIGURE_ACTUATOR | 311 | 311 | config; left out (stays GENERAL) | v1.14.4/msg/VehicleCommand.msg:77; v1.17.0/msg/versioned/VehicleCommand.msg:81 |
+| 185 | VEHICLE_CMD_DO_FLIGHTTERMINATION | 185 | 185 | GENERAL: safety (must not be payload) | v1.14.4/msg/VehicleCommand.msg:40; v1.17.0/msg/versioned/VehicleCommand.msg:43 |
+| 208 | VEHICLE_CMD_DO_PARACHUTE | 208 | 208 | GENERAL: safety (must not be payload) | v1.14.4/msg/VehicleCommand.msg:57; v1.17.0/msg/versioned/VehicleCommand.msg:60 |
+
+The default list in `examples/rules.default.toml` is the twelve ids marked recommended, each a named constant with the same value in both versions: actuator 187; servo 184; gripper 211; winch 42600; payload deploy 30001 and 30002; camera trigger 203, 206, 214, 2003, and 260; image capture 2000. Left out: gimbal and mount pointing, relays (a relay may drive a parachute), video, camera configuration, and actuator test and configuration, which are not payload in Change Order 01's sense; ids with no `VEHICLE_CMD_*` constant in `VehicleCommand.msg` (183 `MAV_CMD_DO_SET_SERVO`, 2001 image stop capture), because Change Order 01 requires every id from that file. Flight termination (185) and parachute (208) stay GENERAL. Caveat: 187 and 184 drive whatever output an integrator maps to them, so an airframe that maps a release or parachute there would see it labelled PAYLOAD. In the golden SITL logs, PX4 itself issues one `VEHICLE_CMD_DO_GRIPPER` (211) per flight, which is now a PAYLOAD event. v1.17.0 widens `vehicle_command.source_component` from 8 to 16 bits; MAVLink component ids stay 8 bits, so R7 lists them as 0 to 255.
+
+### 12.4 Tailsitter transition semantics (SPEC B1.6 R6)
+
+Pending: verified on the tailsitter golden log (item 3) before the Change Order 01 gate.
+
+### 12.5 Correction: where `sfr` runs
+
+`sfr` runs on Linux companion computers only. Microcontroller flight controllers without Linux cannot run it, and that is out of scope.
 
 ## Appendix A. Item 11 test programs
 

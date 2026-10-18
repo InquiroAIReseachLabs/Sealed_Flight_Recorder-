@@ -18,6 +18,14 @@ A stolen key invalidates trust in every record signed with that fingerprint afte
 
 A token is in scope for v1 only if its own CMVP certificate lists EdDSA with Ed25519 (FIPS 186-5) as an approved service. The operator's flight-test lead checks this before first use and passes the certificate number to `seal --token-cert`, which records it in the signed seal leaf. Many current tokens do not list Ed25519 as approved, and such a token is out of scope for v1. No shipping TPM implements EdDSA, so in `tpm-sealed` the TPM only protects the seed at rest.
 
+## Sealed topics
+
+The raw log digest already covers every topic. Sealed topic digests (`[sealed_topics]` in the rules file) add a per-topic proof inside the record: standalone verify covers them without the log, and a future inclusion-proof export can disclose one topic's digest without revealing the rest of the record. They do not interpret, validate, or judge the topic's contents.
+
+## Command sources
+
+Command source ids are the values recorded in the log. MAVLink source ids are self-reported unless MAVLink message signing is enabled on the link. R7 proves which source the log recorded, not that the source was authentic.
+
 ## Cryptography
 
 On every target, `sfr` computes SHA-256 with `sha2`, Ed25519 with `ed25519-dalek`, and the supplementary BLAKE3 digest of the raw log with `blake3`; `seal.crypto_crates` names each crate and its crate version. The same crates build every target, so a record is byte-identical wherever it is sealed. These crates have no CMVP certificate, and `sfr` makes no FIPS 140 claim of any kind. A system whose requirements call for a CMVP-validated module must treat `sfr`'s digests and signatures as made outside one.

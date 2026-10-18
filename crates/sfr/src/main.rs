@@ -275,7 +275,48 @@ fn keygen(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Resul
 // ---------------------------------------------------------------------------------------------
 // seal
 
-fn table(ing: &Ingested, eval: &Evaluation, crypto: &dyn CryptoBackend, dry_run: bool) -> String {
+/// The transition tuning section (SPEC B1.8): the VTOL type and each watched parameter with
+/// its baseline and flown values. Empty for a vehicle that is not VTOL.
+fn transition_tuning(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> String {
+    let Some(vtol) = &ing.identity.vehicle.vtol_type else {
+        return String::new();
+    };
+    let mut out = format!("transition tuning (VTOL type {})\n", vtol.name);
+    if rules.watched.is_empty() {
+        out.push_str("  no [watched_parameters] in the rules file\n");
+        return out;
+    }
+    let show =
+        |v: Option<&sfr_core::ulog::ParamValue>| v.map_or("absent".to_string(), |v| v.to_string());
+    out.push_str(&format!(
+        "  {:<18}{:<16}{:<16}{}\n",
+        "PARAMETER", "BASELINE", "FLOWN", "R3"
+    ));
+    for name in &rules.watched {
+        let b = baseline.params.get(name);
+        let l = ing.config.params.get(name);
+        let mark = match (b, l) {
+            (None, _) if rules.compare == sfr_core::rules::Compare::Baseline => "not compared",
+            (Some(b), Some(l)) if b.same_as(l) => "MATCH",
+            _ => "DIFF",
+        };
+        out.push_str(&format!(
+            "  {name:<18}{:<16}{:<16}{mark}\n",
+            show(b),
+            show(l)
+        ));
+    }
+    out
+}
+
+fn table(
+    ing: &Ingested,
+    eval: &Evaluation,
+    crypto: &dyn CryptoBackend,
+    dry_run: bool,
+    rules: &Rules,
+    baseline: &Baseline,
+) -> String {
     let id = &ing.identity;
     let fw = &id.firmware;
     let mut out = String::new();
@@ -317,6 +358,11 @@ fn table(ing: &Ingested, eval: &Evaluation, crypto: &dyn CryptoBackend, dry_run:
                 out.push_str(&format!("{:<14}- {d}\n", ""));
             }
         }
+    }
+    let tuning = transition_tuning(ing, rules, baseline);
+    if !tuning.is_empty() {
+        out.push('\n');
+        out.push_str(&tuning);
     }
     out.push('\n');
     out.push_str(&format!("{:<10}{}\n", "events", ing.events.len()));
@@ -417,10 +463,12 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
 
     let rules_text = read_text(rules_path, "rules file", exit_code::MALFORMED_INPUT)?;
     let rules: Rules = parse_rules(&rules_text).map_err(|e| {
-        fail(
-            exit_code::MALFORMED_INPUT,
-            format!("rules file {rules_path}: {e}"),
-        )
+        let code = if e.usage {
+            exit_code::USAGE
+        } else {
+            exit_code::MALFORMED_INPUT
+        };
+        fail(code, format!("rules file {rules_path}: {e}"))
     })?;
     let baseline_text = read_text(baseline_path, "baseline", exit_code::MALFORMED_INPUT)?;
     let baseline: Baseline = parse_baseline(&baseline_text).map_err(|e| {
@@ -432,7 +480,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
     let mut file = File::open(&log)
         .map_err(|e| fail(exit_code::USAGE, format!("cannot open log {log}: {e}")))?;
     let ing = Px4Ingestor
-        .ingest(&file_name(&log), &mut file, crypto)
+        .ingest_sealing(&file_name(&log), &mut file, crypto, &rules.sealed_topics)
         .map_err(|e| match e {
             IngestError::Malformed(m) => {
                 fail(exit_code::MALFORMED_INPUT, format!("log {log}: {m}"))
@@ -472,7 +520,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
                 &crypto.sha256(rules_text.as_bytes()),
             ))
         } else {
-            table(&ing, &eval, crypto, true)
+            table(&ing, &eval, crypto, true, &rules, &baseline)
         };
         write_out(stdout, &text)?;
         return Ok(eval.exit_code);
@@ -527,7 +575,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             t.push_str(EVALUATION_LINE);
             t.push('\n');
         }
-        t.push_str(&table(&ing, &eval, crypto, false));
+        t.push_str(&table(&ing, &eval, crypto, false, &rules, &baseline));
         t.push_str(&format!(
             "\n{:<10}{}\n{:<10}{}\n{:<10}{} ({})\n{:<10}{}\n",
             "record",
