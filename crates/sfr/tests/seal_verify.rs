@@ -297,6 +297,34 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
     }
 }
 
+/// The committed examples (examples/reports/, made by scripts/make_example_reports.sh): each
+/// report is what its record renders to, every fact in it comes from the record, and each record
+/// verifies against its log with the committed public key.
+#[test]
+fn the_example_reports_render_from_their_records_and_verify() {
+    for name in ["vtol_transition", "failsafe_gps_loss"] {
+        let record = format!("examples/reports/{name}.sfr");
+        let parsed = sfr_core::json::parse(&std::fs::read(root().join(&record)).unwrap()).unwrap();
+        let md = std::fs::read_to_string(root().join(format!("{record}.md"))).unwrap();
+        assert_eq!(
+            md,
+            sfr_core::report::render(&parsed).unwrap(),
+            "{record}: the committed report is not the record's rendering; run scripts/make_example_reports.sh"
+        );
+        report_facts::check(&parsed, &md);
+        let log = format!("testdata/sitl/v1.17.0/{name}.ulg");
+        let o = sfr(&[
+            "verify",
+            &record,
+            "--pubkey",
+            "examples/reports/sfr.pub",
+            "--ulog",
+            &log,
+        ]);
+        assert_eq!(o.status.code(), Some(0), "{record}: {}", text(&o));
+    }
+}
+
 /// A baseline whose VT_B_TRANS_DUR differs from the flown value: R3 fails, and the report shows
 /// the difference in the parameter differences table and marks it DIFF under transition tuning.
 #[test]

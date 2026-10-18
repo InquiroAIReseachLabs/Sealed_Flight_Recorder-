@@ -162,7 +162,7 @@ Top-level fields: `schema_version` (starts at `1`); `tool` (`name`, `version`, `
 
 ### B1.8 Markdown report (`.sfr.md`)
 
-Emitted by `seal`. Renders in GitHub and GitLab. Contents: overall status; a rules table; parameter differences; a "Transition tuning" section when the vehicle is VTOL (the `vtol_type` and each watched parameter with baseline and flown values, marked MATCH or DIFF); a sealed topics table (topic, instance, message count, time span, digest prefix); an event timeline table with a category column for COMMAND events; log identity and digests; Merkle root, key fingerprint, key custody, crypto crates, and the exact `sfr verify` command. A record sealed with a `file-evaluation` key starts with the line `EVALUATION KEY: not for operational use`. Generated only from the record, so it cannot say anything the record does not.
+Emitted by `seal` beside the record as `<name>.sfr.md`, rendered from the record bytes `seal` has just signed; `seal` never overwrites a record or a report, and its JSON output names both files (`record`, `report`). Renders in GitHub and GitLab; no table has more than five columns. Contents: overall status; a rules table; parameter differences; a "Transition tuning" section when the vehicle is VTOL (the `vtol_type` and each watched parameter with baseline and flown values, marked MATCH or DIFF); a sealed topics table (topic, instance, message count, time span, digest prefix); an event timeline table with a category column for COMMAND events; log identity and digests; Merkle root, key fingerprint, key custody, crypto crates, and the exact `sfr verify` command. A record sealed with a `file-evaluation` key starts with the line `EVALUATION KEY: not for operational use`. Generated only from the record, so it cannot say anything the record does not.
 
 ### B1.9 Threat model (`docs/THREAT_MODEL.md`, one page)
 
@@ -213,3 +213,4 @@ Onboard or in-flight sealing; C/C++ library or ROS2 node; MAVLink `.tlog` and Ar
 ### Change log
 
 - Change Order 01: VTOL subtype and watched parameters; sealed topics; command categories and R7; armv7 build. With it, by founder ruling: one crypto stack (`sha2`, `ed25519-dalek`, `blake3`) on every target after the AWS-LC FIPS module could not be linked into a static armv7 binary; the record names its crypto by crate version; no FIPS, validated, or compliant claim anywhere.
+- Chunk 4 (Markdown report): B1.8 states that `seal` renders the report from the record bytes it has just signed, writes it beside the record, never overwrites either, and names both files in its JSON output; no report table has more than five columns.

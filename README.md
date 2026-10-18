@@ -4,6 +4,10 @@ After a PX4 flight, produce a signed, self-verifying record of the configuration
 
 v1.0 evaluation release, in development.
 
+## The record and its report
+
+`sfr seal` writes the signed record `<name>.sfr` and, beside it, the report `<name>.sfr.md`: Markdown that GitHub and GitLab render, generated only from the record, ending with the exact `sfr verify` command for it. `examples/reports/` holds the record and report of a VTOL transition flight and of a GPS loss failsafe flight, sealed with an evaluation key.
+
 ## Verify timing
 
 SPEC B1.10 gates standalone verification in-process and reports the whole `sfr verify` command beside it without a gate. Both come from the same CI test and are labelled below.
