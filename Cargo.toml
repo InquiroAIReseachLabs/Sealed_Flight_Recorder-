@@ -1,6 +1,6 @@
 # Sealed Flight Record workspace (SPEC B1.2).
 # One engine (sfr-core), two thin wrappers (sfr CLI, sfr-wasm browser build).
-# fuzz/ is a separate cargo-fuzz package and is excluded from the workspace on purpose.
+# fuzz/ becomes a separate cargo-fuzz package in Chunk 2; it is excluded from the workspace on purpose.
 [workspace]
 resolver = "3"
 members = [

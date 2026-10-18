@@ -38,11 +38,13 @@ run "language self-test" scripts/check_language.sh --self-test
 run "language check" scripts/check_language.sh
 
 # 5. Supply chain: licenses, advisories, bans, sources (SPEC B1.10, "Supply chain").
-if command -v cargo-deny >/dev/null 2>&1; then
-  run "cargo deny check" cargo deny --all-features check licenses advisories bans sources
-else
-  echo "WARN: cargo-deny not installed; CI runs it. Install: cargo install cargo-deny --locked"
-fi
+# A missing tool is a failure, never a skip: validate.sh must stay a superset of CI.
+check_cargo_deny() {
+  command -v cargo-deny >/dev/null 2>&1 \
+    || { echo "  cargo-deny not installed. Install: cargo install cargo-deny --locked"; return 1; }
+  cargo deny --all-features check licenses advisories bans sources
+}
+run "cargo deny check" check_cargo_deny
 
 echo "=== $failures failure(s) ==="
 [ "$failures" -eq 0 ]

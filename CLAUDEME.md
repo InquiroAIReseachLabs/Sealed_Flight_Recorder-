@@ -6,7 +6,8 @@
   "id": "claudeme-v3.1-sfr",
   "derived_from": "CLAUDEME v3.1 (AIFlightRecorder/CLAUDEME.md)",
   "governs": "Sealed Flight Record (this repository)",
-  "precedence": "docs/SPEC.md wins wherever it is stricter than this file.",
+  "precedence": "docs/SPEC.md is the contract. Where this file and SPEC disagree on anything, SPEC wins.",
+  "not_carried_over": "v3.1 section 2 STORE (PostgreSQL, pgvector, RabbitMQ, S3), section 12 (AI Flight Recorder v2.2 runtime patterns) and section 13 (pilot HTTP server rules): this is an offline binary with no storage service, no agent runtime, and no server.",
   "hash": "COMPUTE_ON_READ",
   "verification": "If you can read this, the standard is active."
 }
@@ -60,8 +61,10 @@ Your code fits ONE place. Know where before you type. `verify` walks the same pi
 // NETWORK: none. No networking or async-runtime crate anywhere in the dependency graph.
 //          deny-list.txt + scripts/check_deny_list.sh fail CI if one appears.
 
-// CRYPTO (SPEC B1.7, B1.10; supersedes v3.1 "MERKLE = BLAKE3" per decision R1)
-const LOG_DIGEST:  &str = "SHA-256 + BLAKE3 over the raw log bytes";  // dual hash, always both
+// CRYPTO (SPEC B1.7, B1.10). Two v3.1 rules are narrowed by the build plan's decision record:
+//   v3.1 "HASH = SHA256 + BLAKE3, ALWAYS dual-hash" now applies to the raw log bytes only;
+//   v3.1 "MERKLE = BLAKE3" is replaced by SHA-256 with domain separation, inside the tree and for rules.sha256.
+const LOG_DIGEST:  &str = "SHA-256 + BLAKE3 over the raw log bytes";  // dual hash, always both, never one
 const MERKLE:      &str = "SHA-256, leaf = H(0x00 || JCS(leaf)), node = H(0x01 || left || right), RFC 6962 odd nodes";
 const SIGNATURE:   &str = "Ed25519 over b\"SFR-RECORD-V1\" || 0x00 || schema_version (u32 BE) || merkle_root";
 const CRATES:      [&str; 3] = ["sha2", "blake3", "ed25519-dalek"];  // audited only; no custom primitives
@@ -137,12 +140,12 @@ A failing flight is still sealed. The failure is the evidence. No flag turns FAI
 | If you write... | Stop. Write this instead... |
 |---|---|
 | `unwrap()` or `expect()` on anything derived from input | `?` with a named error variant |
-| `let _ = fallible();` | handle it or propagate it |
-| `panic!`, `unreachable!`, `todo!`, `unimplemented!` in sfr-core or sfr | an error variant; fuzzing must find zero panics |
+| `let _ = fallible();` or `.ok();` that drops an error | handle it, propagate it, or `match` it with a comment saying why every outcome leads to the same result |
+| `panic!`, `unreachable!`, `todo!`, `unimplemented!` in sfr-core, sfr, or sfr-wasm | an error variant; fuzzing must find zero panics, and a panic in the browser build is a trap in the sandbox |
 | `unsafe` | nothing; it is forbidden at the crate root |
 | `std::net`, tokio, reqwest, any networking or async-runtime crate | nothing; the deny list fails CI |
 | `SystemTime::now()` inside sealing with no way to inject the time | take the seal time as an input (`--seal-time`) |
-| `rand`, `HashMap` iteration order in anything hashed or written | `BTreeMap`, sorted, deterministic |
+| randomness or `HashMap` iteration order anywhere in sealing, verifying, or report output | `BTreeMap`, sorted, deterministic; the only randomness in the tool is the OS CSPRNG in `sfr keygen` (and the sandbox's ephemeral evaluation key) |
 | hashing a JSON value before canonicalizing it | JCS (RFC 8785) first, then hash |
 | one hash over the log bytes | SHA-256 and BLAKE3, both, always |
 | a Merkle hash without the 0x00 or 0x01 prefix | the domain-separated form in SPEC B1.7 |
@@ -155,7 +158,8 @@ A failing flight is still sealed. The failure is the evidence. No flag turns FAI
 | a compliance claim | a description of what the tool does and does not prove |
 | an em-dash in any doc, page, or script text | a period, comma, or colon |
 | `println!` left in for debugging | remove it; CLI output is the results table or `--json` only |
-| a third-party action in CI pinned to a tag or branch | pin to the full commit SHA with the version in a comment |
+| a third-party action in CI pinned to a tag, a branch, or an annotated tag object | pin to the full commit SHA (`git ls-remote` shows it on the `^{}` line for annotated tags) with the version in a comment |
+| a gate that prints WARN or SKIP and exits 0 when its tool is missing | fail; a missing tool is a failed gate (v3.1 section 13.2: hard dependencies fail the build) |
 | a dependency added without a `--locked` lockfile update in the same commit | update `Cargo.lock`, run `scripts/validate.sh` |
 | a test without `assert` | an assertion against the spec line it proves |
 
@@ -167,7 +171,7 @@ A failing flight is still sealed. The failure is the evidence. No flag turns FAI
 |---|---|---|---|
 | Seal 100 MB, x86_64 | under 2 s | `assert!(elapsed < 2s)` in `scripts/benchmark.sh` | report the miss and the cause; never move the gate |
 | Seal 100 MB, real aarch64 | under 4 s | same, on hardware the founder names | same |
-| Standalone verify, 10,000 events | under 10 ms | measured in the Chunk 3 gate | same |
+| Standalone verify, 10,000 events | under 10 ms | measured and reported in the chunk gate that delivers `verify` | same |
 | Determinism | byte-identical `.sfr` and `.sfr.md` | seal twice, `cmp` | halt; a non-deterministic seal is a bug, not a flake |
 | Tamper property | 1,000 flips in `.sfr` and 1,000 in `.ulg` each fail verification | property test, 100 percent | halt |
 | Fuzzing | 60 s per CI run, 10 min nightly | zero panics, hangs, out-of-memory | halt |
@@ -175,7 +179,7 @@ A failing flight is still sealed. The failure is the evidence. No flag turns FAI
 
 ---
 
-# §7 FILE STRUCTURE (SPEC B1.2)
+# §7 FILE STRUCTURE (SPEC B1.2, plus the files later chunks add)
 
 ```
 sealed-flight-record/
@@ -186,6 +190,7 @@ sealed-flight-record/
 ├── rust-toolchain.toml       # pinned channel, components, musl and wasm32 targets
 ├── deny.toml                 # cargo-deny: licenses, advisories, bans, sources
 ├── deny-list.txt             # networking and async-runtime crates that fail CI
+├── .github/workflows/ci.yml  # the CI gates; scripts/validate.sh is their local superset
 ├── crates/
 │   ├── sfr-core/             # engine: ingest, events, rules, record, Merkle, signing, verify
 │   ├── sfr/                  # CLI: seal, verify, keygen
@@ -194,8 +199,8 @@ sealed-flight-record/
 ├── site/                     # static sandbox page, zero network requests after load
 ├── scripts/                  # validate, check_deny_list, check_language, run_demo, benchmark, regen_readme_numbers, release
 ├── testdata/                 # golden logs with license notices; expected/ records
-├── examples/                 # rules.default.toml, rules.extended.toml, baseline example
-└── docs/                     # SPEC, DIAGNOSTIC, RECORD_FORMAT, THREAT_MODEL, RULES, INTEGRATION_NOTES, SANDBOX
+├── examples/                 # added with the rules engine: rules.extended.toml (SPEC B1.6) and the default rules and baseline the demo uses
+└── docs/                     # SPEC B1.2 list: SPEC, THREAT_MODEL, RECORD_FORMAT, RULES, INTEGRATION_NOTES, DIAGNOSTIC; plus SANDBOX with the sandbox
 ```
 
 ---
@@ -209,7 +214,7 @@ sealed-flight-record/
 
 Receipt: <artifact this commit produces, or none>
 SLO: <gate affected, or none>
-Gate: <chunk-0 .. chunk-7 | post>
+Gate: <chunk-N | post>
 ```
 
 **Types:** `feat` | `fix` | `refactor` | `test` | `docs` | `ci` | `chore`
@@ -245,17 +250,17 @@ scripts/check_language.sh --self-test && scripts/check_language.sh
 cargo deny --all-features check licenses advisories bans sources
 ```
 
-Every check script ships with a `--self-test` that proves the check catches what it exists to catch. A check that cannot fail is not a gate.
+Every check script ships with a `--self-test` that runs the real scanning code against a fixture it builds, and proves the check catches what it exists to catch. A check that cannot fail is not a gate. A missing tool fails the gate; it is never a WARN.
 
 ---
 
 # §10 EXECUTOR RULES
 
-1. Read `CLAUDEME.md`, then `docs/SPEC.md`, before every chunk. From Chunk 2 on, read `docs/DIAGNOSTIC.md` too.
+1. Read `CLAUDEME.md`, then `docs/SPEC.md`, before every chunk. Once `docs/DIAGNOSTIC.md` exists, read it too. The founder's build plan lives outside this repository; each chunk's prompt is pasted at the start of that chunk and defines its task and gate.
 2. Commit to branch `chunk-N`. Never open a pull request. Never merge. Stop after the gate report.
 3. Every gate line is PASS or FAIL with evidence. A FAIL is reported, never hidden, never reworded.
 4. The spec is the contract. The tests are the proof. Code that the spec does not ask for is not written.
-5. If a reviewer's claim and the registry disagree, the registry wins. Verify before adopting.
+5. If a reviewer's claim and a primary source disagree (the package registry, the upstream repository, the PX4 source at the tag in question, a real log), the primary source wins. Verify before adopting.
 6. Nothing in this repository names a target company, aircraft, or customer.
 
 ---
@@ -276,7 +281,7 @@ assert!(understand(CLAUDEME), "Re-read from §0");
 
 ---
 
-**Derived from:** CLAUDEME v3.1 + AI Flight Recorder v2.2 + Pilot Security Rules v1.0
+**Derived from:** CLAUDEME v3.1 (sections 0 to 11). Sections 12 and 13 of the source document, and its section 2 storage stack, are not carried over; see `not_carried_over` in the header.
 **Version:** 3.1-sfr
 **Status:** ACTIVE
 

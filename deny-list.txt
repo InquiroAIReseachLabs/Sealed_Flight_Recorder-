@@ -1,6 +1,7 @@
 # Crates that must never appear in the resolved dependency graph (SPEC B1.10, "No network").
 # One crate name per line. Lines starting with # are comments.
-# Checked by scripts/check_deny_list.sh against `cargo metadata` for every platform at once.
+# Checked by scripts/check_deny_list.sh against `cargo metadata --all-features` for every
+# platform and every feature at once.
 # Add, never remove, unless docs/SPEC.md changes.
 
 # Async runtimes and executors
@@ -16,10 +17,11 @@ futures-executor
 glommio
 monoio
 may
+pollster
 mio
 polling
 
-# HTTP, RPC, websockets
+# HTTP, RPC, websockets (servers, clients, and browser fetch wrappers for the wasm build)
 hyper
 hyper-util
 hyper-rustls
@@ -52,6 +54,10 @@ tokio-tungstenite
 async-tungstenite
 websocket
 ws
+tiny_http
+gloo-net
+reqwasm
+ehttp
 
 # TLS and certificates
 rustls
@@ -77,3 +83,8 @@ redis
 rumqttc
 paho-mqtt
 smoltcp
+
+# MAVLink transports open TCP and UDP sockets by default. MAVLink .tlog ingest is a v2
+# item (SPEC B1.11); if it arrives, it parses files only and this entry is revisited.
+mavlink
+mavlink-core

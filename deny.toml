@@ -29,7 +29,7 @@ allow = [
   "Unicode-3.0",
   "Unicode-DFS-2016",
 ]
-# Inquiro crates carry no license field yet (commercial terms follow evaluation, SPEC A2 C7).
+# Inquiro crates carry no license field yet: the source license follows evaluation (founder decision).
 # Workspace members are never checked by cargo-deny's license pass.
 private = { ignore = true }
 

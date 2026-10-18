@@ -10,13 +10,16 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let mut stderr = std::io::stderr().lock();
-    // A failed write to stderr leaves nothing else to report; the exit code still carries the result.
-    let _ = writeln!(
+    let written = writeln!(
         stderr,
         "{}: no command given. Commands seal, verify, and keygen arrive in later chunks.",
         sfr_core::TOOL_NAME
     );
-    exit_with(sfr_core::exit_code::USAGE)
+    match written {
+        // Both outcomes are exit 4 (SPEC B1.4): a usage error, and a failed write to stderr
+        // is an I/O error. The exit code carries the result when stderr cannot.
+        Ok(()) | Err(_) => exit_with(sfr_core::exit_code::USAGE),
+    }
 }
 
 /// Converts a SPEC B1.4 exit code into the process exit status.
