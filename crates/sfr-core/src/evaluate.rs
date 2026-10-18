@@ -279,6 +279,44 @@ fn fail_missing(
     )
 }
 
+/// Most detail lines one result lists. Real logs need a handful; the cap keeps a crafted log
+/// from making one result enormous. The events still list every case.
+pub const MAX_DETAIL_LINES: usize = 1000;
+
+/// Detail lines with a running total, capped at [`MAX_DETAIL_LINES`].
+struct Lines {
+    lines: Vec<String>,
+    total: usize,
+}
+
+impl Lines {
+    fn new() -> Self {
+        Lines {
+            lines: Vec::new(),
+            total: 0,
+        }
+    }
+
+    /// Counts one finding and keeps its text while under the cap.
+    fn push(&mut self, line: impl FnOnce() -> String) {
+        self.total += 1;
+        if self.lines.len() < MAX_DETAIL_LINES {
+            self.lines.push(line());
+        }
+    }
+
+    fn finish(mut self) -> Vec<String> {
+        let shown = self.lines.len();
+        if self.total > shown {
+            self.lines.push(format!(
+                "and {} more; the events list every one",
+                self.total - shown
+            ));
+        }
+        self.lines
+    }
+}
+
 fn r4(f: &FlightLog) -> RuleResult {
     let expected = "vehicle_status.failsafe false whenever armed";
     let missing = missing_fields(f, &["arming_state", "failsafe"]);
@@ -288,7 +326,7 @@ fn r4(f: &FlightLog) -> RuleResult {
     let fs = &f.failsafe_flags;
     let mut rows = fs.rows.clone();
     rows.sort_by_key(|r| (r.id.ts, r.id.index));
-    let mut detail = Vec::new();
+    let mut detail = Lines::new();
     let mut active = false;
     let mut last_arm = None;
     let mut was_armed = false;
@@ -300,26 +338,29 @@ fn r4(f: &FlightLog) -> RuleResult {
         was_armed = armed;
         let now = armed && r.failsafe == Some(true);
         if now && !active {
-            let flags = attribute_failsafe(fs, &rows, r.id.ts, r.nav_state, last_arm);
-            detail.push(format!(
-                "failsafe while armed at boot_us {}: {}",
-                r.id.ts,
-                flags.join(", ")
-            ));
+            detail.push(|| {
+                let flags = attribute_failsafe(fs, &rows, r.id.ts, r.nav_state, last_arm);
+                format!(
+                    "failsafe while armed at boot_us {}: {}",
+                    r.id.ts,
+                    flags.join(", ")
+                )
+            });
         }
         active = now;
     }
-    if detail.is_empty() {
+    if detail.total == 0 {
         RuleResult::new(
             "R4",
             "no failsafe in flight",
             Status::Pass,
             expected,
             "never true while armed",
-            detail,
+            vec![],
         )
     } else {
-        let found = format!("true while armed {} time(s)", detail.len());
+        let found = format!("true while armed {} time(s)", detail.total);
+        let detail = detail.finish();
         RuleResult::new(
             "R4",
             "no failsafe in flight",
@@ -337,27 +378,28 @@ fn r5(f: &FlightLog, events: &[Event]) -> RuleResult {
     if !missing.is_empty() {
         return fail_missing("R5", "arm and disarm consistent", expected, missing);
     }
-    let mut detail = Vec::new();
+    let mut detail = Lines::new();
     let mut open: Option<&Event> = None;
     let mut arms = 0usize;
     for e in events {
         match e.kind {
             EventKind::Arm { .. } => {
                 if let Some(prev) = open {
-                    detail.push(format!(
-                        "ARM seq {} at boot_us {} has no DISARM",
-                        prev.seq, prev.boot_us
-                    ));
+                    detail.push(|| {
+                        format!(
+                            "ARM seq {} at boot_us {} has no DISARM",
+                            prev.seq, prev.boot_us
+                        )
+                    });
                 }
                 open = Some(e);
                 arms += 1;
             }
             EventKind::Disarm { .. } => {
                 if open.is_none() {
-                    detail.push(format!(
-                        "DISARM seq {} at boot_us {} has no ARM",
-                        e.seq, e.boot_us
-                    ));
+                    detail.push(|| {
+                        format!("DISARM seq {} at boot_us {} has no ARM", e.seq, e.boot_us)
+                    });
                 }
                 open = None;
             }
@@ -365,22 +407,25 @@ fn r5(f: &FlightLog, events: &[Event]) -> RuleResult {
         }
     }
     if let Some(prev) = open {
-        detail.push(format!(
-            "ARM seq {} at boot_us {} has no DISARM: the log ends armed",
-            prev.seq, prev.boot_us
-        ));
+        detail.push(|| {
+            format!(
+                "ARM seq {} at boot_us {} has no DISARM: the log ends armed",
+                prev.seq, prev.boot_us
+            )
+        });
     }
-    if detail.is_empty() {
+    if detail.total == 0 {
         RuleResult::new(
             "R5",
             "arm and disarm consistent",
             Status::Pass,
             expected,
             format!("{arms} ARM, {arms} DISARM"),
-            detail,
+            vec![],
         )
     } else {
-        let found = format!("{} unmatched", detail.len());
+        let found = format!("{} unmatched", detail.total);
+        let detail = detail.finish();
         RuleResult::new(
             "R5",
             "arm and disarm consistent",
@@ -415,7 +460,7 @@ fn r6(f: &FlightLog, events: &[Event]) -> RuleResult {
     if !missing.is_empty() {
         return fail_missing("R6", "VTOL transitions completed", expected, missing);
     }
-    let mut detail = Vec::new();
+    let mut detail = Lines::new();
     let mut open: Option<&Event> = None;
     let (mut starts, mut ends) = (0usize, 0usize);
     for e in events {
@@ -429,12 +474,14 @@ fn r6(f: &FlightLog, events: &[Event]) -> RuleResult {
                 open = None;
             }
             EventKind::VtolTransitionAbort { direction } => {
-                detail.push(format!(
-                    "VTOL_TRANSITION_ABORT {} seq {} at boot_us {}",
-                    direction.as_str(),
-                    e.seq,
-                    e.boot_us
-                ));
+                detail.push(|| {
+                    format!(
+                        "VTOL_TRANSITION_ABORT {} seq {} at boot_us {}",
+                        direction.as_str(),
+                        e.seq,
+                        e.boot_us
+                    )
+                });
                 open = None;
             }
             _ => {}
@@ -443,15 +490,17 @@ fn r6(f: &FlightLog, events: &[Event]) -> RuleResult {
     if let Some(e) = open
         && let EventKind::VtolTransitionStart { direction } = &e.kind
     {
-        detail.push(format!(
-            "VTOL_TRANSITION_START {} seq {} at boot_us {} has no END: the log ends in transition",
-            direction.as_str(),
-            e.seq,
-            e.boot_us
-        ));
+        detail.push(|| {
+            format!(
+                "VTOL_TRANSITION_START {} seq {} at boot_us {} has no END: the log ends in transition",
+                direction.as_str(),
+                e.seq,
+                e.boot_us
+            )
+        });
     }
-    let found = format!("{starts} START, {ends} END, {} problem(s)", detail.len());
-    let status = if detail.is_empty() {
+    let found = format!("{starts} START, {ends} END, {} problem(s)", detail.total);
+    let status = if detail.total == 0 {
         Status::Pass
     } else {
         Status::Fail
@@ -462,7 +511,7 @@ fn r6(f: &FlightLog, events: &[Event]) -> RuleResult {
         status,
         expected,
         found,
-        detail,
+        detail.finish(),
     )
 }
 
@@ -787,5 +836,52 @@ pub fn evaluate(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Evaluatio
         results,
         status: if any_fail { Status::Fail } else { Status::Pass },
         exit_code,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::ingest::{RowId, VehicleStatusRow};
+
+    #[test]
+    fn r4_lists_at_most_the_detail_cap_and_counts_the_rest() {
+        let rows = (0..3000u64)
+            .map(|i| VehicleStatusRow {
+                id: RowId {
+                    ts: i,
+                    instance: 0,
+                    index: i,
+                },
+                arming_state: Some(2),
+                nav_state: Some(4),
+                failsafe: Some(i % 2 == 0),
+                is_vtol: Some(false),
+                in_transition_mode: Some(false),
+                in_transition_to_fw: Some(false),
+                vehicle_type: Some(1),
+                system_type: Some(2),
+                latest_arming_reason: None,
+                latest_disarming_reason: None,
+            })
+            .collect();
+        let fields = VEHICLE_STATUS_FIELDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let flight = FlightLog {
+            vehicle_status: rows,
+            vehicle_status_fields: fields,
+            ..FlightLog::default()
+        };
+        let r = r4(&flight);
+        assert_eq!(r.status, Status::Fail);
+        assert_eq!(r.found, "true while armed 1500 time(s)");
+        assert_eq!(r.detail.len(), MAX_DETAIL_LINES + 1);
+        assert_eq!(
+            r.detail.last().map(String::as_str),
+            Some("and 500 more; the events list every one")
+        );
     }
 }

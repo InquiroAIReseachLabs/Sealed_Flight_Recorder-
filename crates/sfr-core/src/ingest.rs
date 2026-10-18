@@ -21,13 +21,21 @@ pub enum IngestError {
     Malformed(UlogError),
     /// Reading failed (SPEC B1.4 exit 4).
     Io(String),
+    /// The log is readable but exceeds a limit `sfr` sets so that a small crafted file
+    /// cannot exhaust memory or time (SPEC B1.4 exit 3).
+    Limit(String),
 }
+
+/// Most flags (`bool` fields plus `battery_warning`) a `failsafe_flags` format may have. PX4
+/// v1.14 to v1.17 log 26 to 28.
+pub const MAX_FAILSAFE_FLAGS: usize = 256;
 
 impl std::fmt::Display for IngestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IngestError::Malformed(e) => write!(f, "{e}"),
             IngestError::Io(e) => write!(f, "read error: {e}"),
+            IngestError::Limit(e) => write!(f, "exceeds a limit: {e}"),
         }
     }
 }
@@ -396,7 +404,7 @@ impl FlightLogIngestor for Px4Ingestor {
         let Hashing { sha, b3, size, .. } = hashing;
         let sha256 = sha.finish();
         let blake3: [u8; 32] = *b3.finalize().as_bytes();
-        Ok(collector.finish(file_name.to_string(), size, sha256, blake3, summary))
+        collector.finish(file_name.to_string(), size, sha256, blake3, summary)
     }
 }
 
@@ -547,6 +555,7 @@ struct Collector {
     vs: BTreeMap<u8, (Vec<String>, Vec<VehicleStatusRow>)>,
     fs: BTreeMap<u8, (Vec<String>, FailsafeFlags)>,
     flight: FlightLog,
+    limit: Option<String>,
 }
 
 impl Visitor for Collector {
@@ -610,6 +619,12 @@ impl Visitor for Collector {
                     latest_arming_reason: field(l, "latest_arming_reason"),
                     latest_disarming_reason: field(l, "latest_disarming_reason"),
                 }))
+            }
+            "failsafe_flags" if failsafe_schema(l).len() > MAX_FAILSAFE_FLAGS => {
+                self.limit.get_or_insert_with(|| {
+                    format!("failsafe_flags has more than {MAX_FAILSAFE_FLAGS} flag fields")
+                });
+                Decoder::Count
             }
             "failsafe_flags" => {
                 let flags = failsafe_schema(l);
@@ -863,7 +878,10 @@ impl Collector {
         sha256: [u8; 32],
         blake3: [u8; 32],
         summary: ulog::Summary,
-    ) -> Ingested {
+    ) -> Result<Ingested, IngestError> {
+        if let Some(limit) = self.limit.take() {
+            return Err(IngestError::Limit(limit));
+        }
         let mut flight = std::mem::take(&mut self.flight);
         flight.start_timestamp = self.header.map_or(0, |h| h.timestamp);
         flight.summary = summary;
@@ -898,13 +916,13 @@ impl Collector {
             firmware: firmware.version.clone(),
             params: std::mem::take(&mut self.params),
         };
-        let events = events::build(&flight, &config);
-        Ingested {
+        let events = events::build(&flight, &config).map_err(IngestError::Limit)?;
+        Ok(Ingested {
             identity,
             config,
             flight,
             events,
-        }
+        })
     }
 }
 
@@ -986,6 +1004,29 @@ mod tests {
             crate::hex(&h.sha.finish()),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn a_failsafe_flags_format_with_too_many_flags_is_refused() {
+        use crate::ulog::tests::Builder;
+        let mut format = String::from("failsafe_flags:uint64_t timestamp;");
+        for i in 0..=MAX_FAILSAFE_FLAGS {
+            format.push_str(&format!("bool f{i};"));
+        }
+        let log = Builder::new(0)
+            .flags(&[])
+            .format(&format)
+            .sub(0, 0, "failsafe_flags");
+        let err = Px4Ingestor
+            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            IngestError::Limit(format!(
+                "failsafe_flags has more than {MAX_FAILSAFE_FLAGS} flag fields"
+            ))
+        );
+        assert!(err.to_string().starts_with("exceeds a limit: "));
     }
 
     #[test]

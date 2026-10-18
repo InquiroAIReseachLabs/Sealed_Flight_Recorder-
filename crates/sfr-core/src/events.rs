@@ -19,6 +19,11 @@ pub const TOPIC_PARAMETER: &str = "ulog.parameter";
 /// Pseudo-topic of 'O' records.
 pub const TOPIC_DROPOUT: &str = "ulog.dropout";
 
+/// Most events one log may produce. A real flight has hundreds; the cap stops a crafted log
+/// (for example a failsafe that toggles on every row, each naming many flags) from building
+/// a timeline that exhausts memory.
+pub const MAX_EVENTS: usize = 1_000_000;
+
 /// Direction of a VTOL transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -408,6 +413,7 @@ fn sorted_flag_rows(fs: &FailsafeFlags) -> Vec<FailsafeRow> {
 
 struct Builder {
     out: Vec<Event>,
+    overflow: bool,
 }
 
 impl Builder {
@@ -420,6 +426,10 @@ impl Builder {
         order: u32,
         kind: EventKind,
     ) {
+        if self.out.len() >= MAX_EVENTS {
+            self.overflow = true;
+            return;
+        }
         self.out.push(Event {
             seq: 0,
             boot_us,
@@ -642,9 +652,12 @@ pub fn utc_offset(flight: &FlightLog) -> Option<i128> {
     first(&flight.vehicle_gps).or_else(|| first(&flight.sensor_gps))
 }
 
-/// Builds the ordered timeline.
-pub fn build(flight: &FlightLog, config: &Config) -> Vec<Event> {
-    let mut b = Builder { out: Vec::new() };
+/// Builds the ordered timeline, or says which limit the log exceeds.
+pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> {
+    let mut b = Builder {
+        out: Vec::new(),
+        overflow: false,
+    };
     vehicle_status_events(&mut b, flight);
 
     let results = pair_commands(&flight.commands, &flight.acks);
@@ -716,6 +729,9 @@ pub fn build(flight: &FlightLog, config: &Config) -> Vec<Event> {
         );
     }
 
+    if b.overflow {
+        return Err(format!("more than {MAX_EVENTS} events"));
+    }
     let mut events = b.out;
     events.sort_by(|x, y| {
         (x.boot_us, x.topic.as_str(), x.instance, x.index, x.order).cmp(&(
@@ -731,7 +747,7 @@ pub fn build(flight: &FlightLog, config: &Config) -> Vec<Event> {
         e.seq = seq as u64;
         e.utc_us = offset.and_then(|o| u64::try_from(i128::from(e.boot_us) + o).ok());
     }
-    events
+    Ok(events)
 }
 
 fn opt_u8(v: Option<u8>) -> Value {
@@ -888,7 +904,7 @@ mod tests {
             vehicle_status: rows,
             ..FlightLog::default()
         };
-        let ev = build(&flight, &Config::default());
+        let ev = build(&flight, &Config::default()).unwrap();
         let k: Vec<String> = kinds(&ev)
             .into_iter()
             .filter(|k| k.starts_with("VTOL"))
@@ -919,7 +935,7 @@ mod tests {
             vehicle_status: rows,
             ..FlightLog::default()
         };
-        let ev = build(&flight, &Config::default());
+        let ev = build(&flight, &Config::default()).unwrap();
         assert_eq!(kinds(&ev), ["ARM", "NAV_STATE_CHANGE", "DISARM"]);
         assert_eq!(
             ev.first().map(|e| e.kind.clone()),
@@ -1050,6 +1066,48 @@ mod tests {
     }
 
     #[test]
+    fn a_timeline_over_the_event_cap_is_refused() {
+        // A failsafe that toggles on 8,000 rows while 256 flags are newly active names 256
+        // flags per edge: about 2 million events, over the cap.
+        let names: Vec<String> = (0..256).map(|i| format!("f{i:03}")).collect();
+        let fs = FailsafeFlags {
+            flags: names.iter().map(|n| flag(n)).collect(),
+            rows: vec![
+                FailsafeRow {
+                    id: RowId {
+                        ts: 0,
+                        instance: 0,
+                        index: 0,
+                    },
+                    active: vec![false; 256],
+                    mode_req: vec![0; 256],
+                },
+                FailsafeRow {
+                    id: RowId {
+                        ts: 11,
+                        instance: 0,
+                        index: 1,
+                    },
+                    active: vec![true; 256],
+                    mode_req: vec![0; 256],
+                },
+            ],
+        };
+        let rows = (0..8000u64)
+            .map(|i| vs(10 + i, i, 2, 4, i % 2 == 0, false, false, 1))
+            .collect();
+        let flight = FlightLog {
+            vehicle_status: rows,
+            failsafe_flags: fs,
+            ..FlightLog::default()
+        };
+        assert_eq!(
+            build(&flight, &Config::default()),
+            Err(format!("more than {MAX_EVENTS} events"))
+        );
+    }
+
+    #[test]
     fn armed_lookups_match_a_linear_scan() {
         let armed = [
             ArmedInterval {
@@ -1122,7 +1180,7 @@ mod tests {
             ..FlightLog::default()
         };
         assert_eq!(utc_offset(&flight), Some(1_700_000_000_000_000));
-        let ev = build(&flight, &Config::default());
+        let ev = build(&flight, &Config::default()).unwrap();
         assert_eq!(
             ev.first().and_then(|e| e.utc_us),
             Some(1_700_000_000_001_000)

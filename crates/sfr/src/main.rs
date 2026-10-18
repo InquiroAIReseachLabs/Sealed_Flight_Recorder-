@@ -189,6 +189,10 @@ fn seal(args: &[String], stdout: &mut dyn Write) -> Result<i32, Failure> {
                 fail(exit_code::MALFORMED_INPUT, format!("log {}: {m}", a.log))
             }
             IngestError::Io(m) => fail(exit_code::USAGE, format!("log {}: {m}", a.log)),
+            limit @ IngestError::Limit(_) => fail(
+                exit_code::MALFORMED_INPUT,
+                format!("log {}: {limit}", a.log),
+            ),
         })?;
     let eval = evaluate(&ing, &rules, &baseline);
     let text = if a.json {
