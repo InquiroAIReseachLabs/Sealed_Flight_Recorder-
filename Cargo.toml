@@ -37,6 +37,9 @@ blake3 = { version = "=1.8.7", default-features = false, features = ["std"] }
 sha2 = { version = "=0.11.1", default-features = false }
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }
 zeroize = { version = "1", default-features = false }
+# Rules file parsing (SPEC B1.6). serde_core only, no derive macros; tables are walked by hand
+# so unknown keys can be rejected.
+toml = { version = "=0.9.12", default-features = false, features = ["parse", "std", "serde"] }
 # sfr-pkcs11-helper only: a separate, dynamically linked process (SPEC B1.2).
 cryptoki = { version = "=0.12.1" }
 

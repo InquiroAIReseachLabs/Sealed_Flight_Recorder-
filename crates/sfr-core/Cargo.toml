@@ -28,6 +28,13 @@ rustls-pki-types = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true, optional = true }
 zeroize = { workspace = true, optional = true }
+# Supplementary, non-approved digest of the raw log bytes (founder ruling; never anchors trust).
+blake3 = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+# Test-only SHA-256 so `cargo test -p sfr-core` runs without choosing a backend.
+sha2 = { workspace = true }
 
 [lints]
 workspace = true

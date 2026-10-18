@@ -36,12 +36,27 @@ jobs:
             [ -f "$f" ] || continue
             grep -q '^#!\[forbid(unsafe_code)\]' "$f" || { echo "missing #![forbid(unsafe_code)]: $f"; exit 1; }
           done
+      - name: FIPS module build tools (aws-lc-fips-sys needs CMake, Go, Perl, a C compiler)
+        run: |
+          set -euo pipefail
+          cmake --version | head -1
+          go version
+          perl -e 'print "perl $^V\n"'
+          cc --version | head -1
       - name: rustfmt --check
         run: cargo fmt --all --check
       - name: clippy, warnings as errors
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: cargo test --locked
         run: cargo test --workspace --locked
+
+  golden-oracle:
+    name: golden files agree with the independent pyulog oracle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Compare testdata/expected with testdata/expected/oracle (Python standard library only)
+        run: scripts/testdata/regenerate.sh compare
 
   no-network:
     name: deny list (networking and async runtimes)

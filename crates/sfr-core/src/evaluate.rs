@@ -1,0 +1,791 @@
+//! Rule evaluation (SPEC B1.6). Missing input data is FAIL, never N/A; N/A means only that a
+//! rule does not apply (R6 on a vehicle that is not VTOL). No threshold here is presented as
+//! correct for any aircraft: the optional rules take every threshold from the rules file.
+
+use crate::events::{
+    ArmedInterval, Event, EventKind, armed_intervals, armed_sample, attribute_failsafe,
+};
+use crate::exit_code;
+use crate::ingest::{FlightLog, Ingested};
+use crate::json::{Obj, Value};
+use crate::params::Baseline;
+use crate::rules::{Compare, Rules};
+use crate::ulog::f32_shortest;
+use std::collections::BTreeSet;
+
+/// A rule outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    /// The rule holds.
+    Pass,
+    /// The rule does not hold, or its input data is missing.
+    Fail,
+    /// The rule does not apply to this log.
+    NotApplicable,
+}
+
+impl Status {
+    /// Record spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Pass => "PASS",
+            Status::Fail => "FAIL",
+            Status::NotApplicable => "N/A",
+        }
+    }
+}
+
+/// One rule result (SPEC B1.7 `results`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleResult {
+    /// R1 to R6, X1 to X5.
+    pub id: &'static str,
+    /// Short name.
+    pub name: &'static str,
+    /// Outcome.
+    pub status: Status,
+    /// What the rule expects.
+    pub expected: String,
+    /// What the log shows.
+    pub found: String,
+    /// One line per finding.
+    pub detail: Vec<String>,
+}
+
+impl RuleResult {
+    fn new(
+        id: &'static str,
+        name: &'static str,
+        status: Status,
+        expected: impl Into<String>,
+        found: impl Into<String>,
+        detail: Vec<String>,
+    ) -> Self {
+        RuleResult {
+            id,
+            name,
+            status,
+            expected: expected.into(),
+            found: found.into(),
+            detail,
+        }
+    }
+
+    /// Record form.
+    pub fn to_json(&self) -> Value {
+        Obj::new()
+            .field("id", Value::str(self.id))
+            .field("name", Value::str(self.name))
+            .field("status", Value::str(self.status.as_str()))
+            .field("expected", Value::str(self.expected.clone()))
+            .field("found", Value::str(self.found.clone()))
+            .field(
+                "detail",
+                Value::Array(self.detail.iter().map(|d| Value::str(d.clone())).collect()),
+            )
+            .build()
+    }
+}
+
+/// All results plus the overall status and exit code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Evaluation {
+    /// In rule-id order: R1 to R6, then the enabled X rules.
+    pub results: Vec<RuleResult>,
+    /// PASS when no rule is FAIL.
+    pub status: Status,
+    /// SPEC B1.4: 2 if R1 fails, else 1 if any rule fails, else 0.
+    pub exit_code: i32,
+}
+
+/// The `vehicle_status` fields the core rules read (R1 checks them).
+pub const VEHICLE_STATUS_FIELDS: [&str; 8] = [
+    "timestamp",
+    "arming_state",
+    "nav_state",
+    "failsafe",
+    "is_vtol",
+    "in_transition_mode",
+    "in_transition_to_fw",
+    "vehicle_type",
+];
+
+/// The `failsafe_flags` fields the core rules read.
+pub const FAILSAFE_FLAGS_FIELDS: [&str; 1] = ["timestamp"];
+
+fn r1(f: &FlightLog, rules: &Rules) -> RuleResult {
+    let topics = rules.r1_topics();
+    let mut missing = Vec::new();
+    for t in &topics {
+        if f.topic_rows.get(t).copied().unwrap_or(0) == 0 {
+            missing.push(t.clone());
+            continue;
+        }
+        let (fields, have): (&[&str], &[String]) = match t.as_str() {
+            "vehicle_status" => (&VEHICLE_STATUS_FIELDS, &f.vehicle_status_fields),
+            "failsafe_flags" => (&FAILSAFE_FLAGS_FIELDS, &f.failsafe_flags_fields),
+            _ => (&[], &[]),
+        };
+        for field in fields {
+            if !have.iter().any(|h| h == field) {
+                missing.push(format!("{t}.{field}"));
+            }
+        }
+    }
+    let expected = format!(
+        "data records for {}, and the fields the core rules read",
+        topics.join(", ")
+    );
+    if missing.is_empty() {
+        RuleResult::new(
+            "R1",
+            "required topics present",
+            Status::Pass,
+            expected,
+            "all present",
+            vec![],
+        )
+    } else {
+        let found = format!("missing: {}", missing.join(", "));
+        let detail = missing.iter().map(|m| format!("missing {m}")).collect();
+        RuleResult::new(
+            "R1",
+            "required topics present",
+            Status::Fail,
+            expected,
+            found,
+            detail,
+        )
+    }
+}
+
+fn r2(ing: &Ingested, baseline: &Baseline) -> RuleResult {
+    let fw = &ing.identity.firmware;
+    let expected = baseline.firmware.to_string();
+    let found = match (&fw.version, &fw.git) {
+        (Some(v), Some(g)) => format!("{v} {g}"),
+        (Some(v), None) => v.clone(),
+        (None, Some(g)) => format!("no ver_sw_release, ver_sw {g}"),
+        (None, None) => "no ver_sw_release or ver_sw".into(),
+    };
+    let mut detail = Vec::new();
+    match &fw.version {
+        None => detail.push("log has no ver_sw_release info message".to_string()),
+        Some(v) if *v != baseline.firmware.version => detail.push(format!(
+            "version: baseline {}, log {v}",
+            baseline.firmware.version
+        )),
+        Some(_) => {}
+    }
+    if let Some(prefix) = &baseline.firmware.git_prefix {
+        match &fw.git {
+            None => detail.push("log has no ver_sw info message".to_string()),
+            Some(g) if !g.to_ascii_lowercase().starts_with(prefix) => {
+                detail.push(format!("git: baseline {prefix}, log {g}"))
+            }
+            Some(_) => {}
+        }
+    }
+    let status = if detail.is_empty() {
+        Status::Pass
+    } else {
+        Status::Fail
+    };
+    RuleResult::new(
+        "R2",
+        "firmware matches baseline",
+        status,
+        expected,
+        found,
+        detail,
+    )
+}
+
+fn r3(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> RuleResult {
+    let flown = &ing.config.params;
+    let mut names: BTreeSet<&str> = baseline.params.keys().map(String::as_str).collect();
+    if rules.compare == Compare::All {
+        names.extend(flown.keys().map(String::as_str));
+    }
+    let mut detail = Vec::new();
+    let mut ignored = 0usize;
+    for name in names {
+        if rules.ignores(name) {
+            ignored += 1;
+            continue;
+        }
+        let b = baseline.params.get(name);
+        let l = flown.get(name);
+        let same = matches!((b, l), (Some(b), Some(l)) if b.same_as(l));
+        if !same {
+            let show = |v: Option<&crate::ulog::ParamValue>| {
+                v.map_or("absent".to_string(), |v| v.to_string())
+            };
+            detail.push(format!("{name}: baseline {}, flown {}", show(b), show(l)));
+        }
+    }
+    let scope = match rules.compare {
+        Compare::All => "every parameter in the baseline or the log",
+        Compare::Baseline => "every parameter in the baseline",
+    };
+    let expected = format!("{scope} equal, {ignored} ignored by pattern");
+    if detail.is_empty() {
+        RuleResult::new(
+            "R3",
+            "parameters match baseline",
+            Status::Pass,
+            expected,
+            "no differences",
+            detail,
+        )
+    } else {
+        let found = format!("{} differ", detail.len());
+        RuleResult::new(
+            "R3",
+            "parameters match baseline",
+            Status::Fail,
+            expected,
+            found,
+            detail,
+        )
+    }
+}
+
+fn missing_fields(f: &FlightLog, fields: &[&str]) -> Vec<String> {
+    if f.vehicle_status.is_empty() {
+        return vec!["vehicle_status".into()];
+    }
+    fields
+        .iter()
+        .filter(|x| !f.vehicle_status_fields.iter().any(|h| h == *x))
+        .map(|x| format!("vehicle_status.{x}"))
+        .collect()
+}
+
+fn fail_missing(
+    id: &'static str,
+    name: &'static str,
+    expected: &str,
+    missing: Vec<String>,
+) -> RuleResult {
+    let detail = missing.iter().map(|m| format!("missing {m}")).collect();
+    RuleResult::new(
+        id,
+        name,
+        Status::Fail,
+        expected,
+        format!("cannot evaluate: missing {}", missing.join(", ")),
+        detail,
+    )
+}
+
+fn r4(f: &FlightLog) -> RuleResult {
+    let expected = "vehicle_status.failsafe false whenever armed";
+    let missing = missing_fields(f, &["arming_state", "failsafe"]);
+    if !missing.is_empty() {
+        return fail_missing("R4", "no failsafe in flight", expected, missing);
+    }
+    let fs = &f.failsafe_flags;
+    let mut rows = fs.rows.clone();
+    rows.sort_by_key(|r| (r.id.ts, r.id.index));
+    let mut detail = Vec::new();
+    let mut active = false;
+    let mut last_arm = None;
+    let mut was_armed = false;
+    for r in &f.vehicle_status {
+        let armed = r.arming_state == Some(2);
+        if armed && !was_armed {
+            last_arm = Some(r.id.ts);
+        }
+        was_armed = armed;
+        let now = armed && r.failsafe == Some(true);
+        if now && !active {
+            let flags = attribute_failsafe(fs, &rows, r.id.ts, r.nav_state, last_arm);
+            detail.push(format!(
+                "failsafe while armed at boot_us {}: {}",
+                r.id.ts,
+                flags.join(", ")
+            ));
+        }
+        active = now;
+    }
+    if detail.is_empty() {
+        RuleResult::new(
+            "R4",
+            "no failsafe in flight",
+            Status::Pass,
+            expected,
+            "never true while armed",
+            detail,
+        )
+    } else {
+        let found = format!("true while armed {} time(s)", detail.len());
+        RuleResult::new(
+            "R4",
+            "no failsafe in flight",
+            Status::Fail,
+            expected,
+            found,
+            detail,
+        )
+    }
+}
+
+fn r5(f: &FlightLog, events: &[Event]) -> RuleResult {
+    let expected = "every ARM followed by a DISARM; log does not end armed";
+    let missing = missing_fields(f, &["arming_state"]);
+    if !missing.is_empty() {
+        return fail_missing("R5", "arm and disarm consistent", expected, missing);
+    }
+    let mut detail = Vec::new();
+    let mut open: Option<&Event> = None;
+    let mut arms = 0usize;
+    for e in events {
+        match e.kind {
+            EventKind::Arm { .. } => {
+                if let Some(prev) = open {
+                    detail.push(format!(
+                        "ARM seq {} at boot_us {} has no DISARM",
+                        prev.seq, prev.boot_us
+                    ));
+                }
+                open = Some(e);
+                arms += 1;
+            }
+            EventKind::Disarm { .. } => {
+                if open.is_none() {
+                    detail.push(format!(
+                        "DISARM seq {} at boot_us {} has no ARM",
+                        e.seq, e.boot_us
+                    ));
+                }
+                open = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(prev) = open {
+        detail.push(format!(
+            "ARM seq {} at boot_us {} has no DISARM: the log ends armed",
+            prev.seq, prev.boot_us
+        ));
+    }
+    if detail.is_empty() {
+        RuleResult::new(
+            "R5",
+            "arm and disarm consistent",
+            Status::Pass,
+            expected,
+            format!("{arms} ARM, {arms} DISARM"),
+            detail,
+        )
+    } else {
+        let found = format!("{} unmatched", detail.len());
+        RuleResult::new(
+            "R5",
+            "arm and disarm consistent",
+            Status::Fail,
+            expected,
+            found,
+            detail,
+        )
+    }
+}
+
+fn r6(f: &FlightLog, events: &[Event]) -> RuleResult {
+    let expected = "every VTOL transition START has an END; none aborted";
+    let missing = missing_fields(f, &["is_vtol"]);
+    if !missing.is_empty() {
+        return fail_missing("R6", "VTOL transitions completed", expected, missing);
+    }
+    if f.vehicle_status.iter().all(|r| r.is_vtol == Some(false)) {
+        return RuleResult::new(
+            "R6",
+            "VTOL transitions completed",
+            Status::NotApplicable,
+            expected,
+            "vehicle_status.is_vtol false on every sample",
+            vec![],
+        );
+    }
+    let missing = missing_fields(
+        f,
+        &["in_transition_mode", "in_transition_to_fw", "vehicle_type"],
+    );
+    if !missing.is_empty() {
+        return fail_missing("R6", "VTOL transitions completed", expected, missing);
+    }
+    let mut detail = Vec::new();
+    let mut open: Option<&Event> = None;
+    let (mut starts, mut ends) = (0usize, 0usize);
+    for e in events {
+        match &e.kind {
+            EventKind::VtolTransitionStart { .. } => {
+                starts += 1;
+                open = Some(e);
+            }
+            EventKind::VtolTransitionEnd { .. } => {
+                ends += 1;
+                open = None;
+            }
+            EventKind::VtolTransitionAbort { direction } => {
+                detail.push(format!(
+                    "VTOL_TRANSITION_ABORT {} seq {} at boot_us {}",
+                    direction.as_str(),
+                    e.seq,
+                    e.boot_us
+                ));
+                open = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(e) = open
+        && let EventKind::VtolTransitionStart { direction } = &e.kind
+    {
+        detail.push(format!(
+            "VTOL_TRANSITION_START {} seq {} at boot_us {} has no END: the log ends in transition",
+            direction.as_str(),
+            e.seq,
+            e.boot_us
+        ));
+    }
+    let found = format!("{starts} START, {ends} END, {} problem(s)", detail.len());
+    let status = if detail.is_empty() {
+        Status::Pass
+    } else {
+        Status::Fail
+    };
+    RuleResult::new(
+        "R6",
+        "VTOL transitions completed",
+        status,
+        expected,
+        found,
+        detail,
+    )
+}
+
+fn in_armed(armed: &[ArmedInterval], t: u64) -> bool {
+    armed_sample(armed, t)
+}
+
+fn need_armed(
+    id: &'static str,
+    name: &'static str,
+    expected: &str,
+    f: &FlightLog,
+    armed: &[ArmedInterval],
+) -> Option<RuleResult> {
+    let missing = missing_fields(f, &["arming_state"]);
+    if !missing.is_empty() {
+        return Some(fail_missing(id, name, expected, missing));
+    }
+    if armed.is_empty() {
+        return Some(RuleResult::new(
+            id,
+            name,
+            Status::Fail,
+            expected,
+            "the vehicle never armed, so there is no flight to check",
+            vec![],
+        ));
+    }
+    None
+}
+
+fn x1(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::MinBattery) -> RuleResult {
+    let (id, name) = ("X1", "minimum battery");
+    let expected = format!(
+        "battery_status.remaining >= {} while armed (threshold set by your flight-test lead)",
+        t.min_remaining.text
+    );
+    if let Some(r) = need_armed(id, name, &expected, f, armed) {
+        return r;
+    }
+    let mut min: Option<(f32, u64, u8)> = None;
+    for b in &f.battery {
+        if !in_armed(armed, b.id.ts) || b.connected == Some(false) {
+            continue;
+        }
+        let Some(rem) = b.remaining.filter(|r| r.is_finite()) else {
+            continue;
+        };
+        if min.is_none_or(|(m, _, _)| rem < m) {
+            min = Some((rem, b.id.ts, b.id.instance));
+        }
+    }
+    match min {
+        None => fail_missing(
+            id,
+            name,
+            &expected,
+            vec!["battery_status.remaining samples while armed".into()],
+        ),
+        Some((m, ts, inst)) => {
+            let shown = f32_shortest(m);
+            let found = format!("minimum {shown} (instance {inst}, boot_us {ts})");
+            let status = if f64::from(m) >= t.min_remaining.value {
+                Status::Pass
+            } else {
+                Status::Fail
+            };
+            let detail = if status == Status::Fail {
+                vec![format!(
+                    "remaining {shown} at boot_us {ts}, below {}",
+                    t.min_remaining.text
+                )]
+            } else {
+                vec![]
+            };
+            RuleResult::new(id, name, status, expected, found, detail)
+        }
+    }
+}
+
+fn x2(f: &FlightLog, events: &[Event], t: &crate::rules::GpsFixAtArm) -> RuleResult {
+    let (id, name) = ("X2", "GPS fix at arm");
+    let expected = format!(
+        "at each ARM, vehicle_gps_position fix_type >= {} and satellites_used >= {} (thresholds set by your flight-test lead)",
+        t.min_fix_type, t.min_satellites
+    );
+    let armed = armed_intervals(&f.vehicle_status);
+    if let Some(r) = need_armed(id, name, &expected, f, &armed) {
+        return r;
+    }
+    let mut rows = f.vehicle_gps.clone();
+    rows.sort_by_key(|g| (g.id.ts, g.id.index));
+    let mut detail = Vec::new();
+    let mut found = Vec::new();
+    for e in events
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::Arm { .. }))
+    {
+        let n = rows.partition_point(|g| g.id.ts <= e.boot_us);
+        let sample = n.checked_sub(1).and_then(|i| rows.get(i));
+        match sample.map(|g| (g.fix_type, g.satellites_used)) {
+            Some((Some(fix), Some(sats))) => {
+                found.push(format!("ARM at boot_us {}: fix_type {fix}, satellites_used {sats}", e.boot_us));
+                if fix < t.min_fix_type || sats < t.min_satellites {
+                    detail.push(format!("ARM at boot_us {}: fix_type {fix}, satellites_used {sats}", e.boot_us));
+                }
+            }
+            _ => detail.push(format!("ARM at boot_us {}: no vehicle_gps_position sample with fix_type and satellites_used at or before it", e.boot_us)),
+        }
+    }
+    let status = if detail.is_empty() {
+        Status::Pass
+    } else {
+        Status::Fail
+    };
+    let found = if found.is_empty() {
+        "no GPS sample at any ARM".to_string()
+    } else {
+        found.join("; ")
+    };
+    RuleResult::new(id, name, status, expected, found, detail)
+}
+
+fn x3(f: &FlightLog, armed: &[ArmedInterval]) -> RuleResult {
+    let (id, name) = ("X3", "estimator fault flags");
+    let expected = "estimator_status.filter_fault_flags 0 on the primary estimator while armed";
+    if let Some(r) = need_armed(id, name, expected, f, armed) {
+        return r;
+    }
+    let mut selector = f.estimator_selector.clone();
+    selector.sort_by_key(|s| (s.id.ts, s.id.index));
+    let primary_at = |t: u64| -> u8 {
+        let n = selector.partition_point(|s| s.id.ts <= t);
+        n.checked_sub(1)
+            .and_then(|i| selector.get(i))
+            .and_then(|s| s.primary_instance)
+            .unwrap_or(0)
+    };
+    let mut checked = 0usize;
+    let mut detail = Vec::new();
+    for e in &f.estimator {
+        if !in_armed(armed, e.id.ts) || e.id.instance != primary_at(e.id.ts) {
+            continue;
+        }
+        let Some(flags) = e.filter_fault_flags else {
+            continue;
+        };
+        checked += 1;
+        if flags != 0 && detail.len() < 20 {
+            detail.push(format!(
+                "filter_fault_flags 0x{flags:x} on instance {} at boot_us {}",
+                e.id.instance, e.id.ts
+            ));
+        }
+    }
+    if checked == 0 {
+        return fail_missing(
+            id,
+            name,
+            expected,
+            vec![
+                "estimator_status.filter_fault_flags samples on the primary estimator while armed"
+                    .into(),
+            ],
+        );
+    }
+    let status = if detail.is_empty() {
+        Status::Pass
+    } else {
+        Status::Fail
+    };
+    let found = if detail.is_empty() {
+        format!("0 on all {checked} samples")
+    } else {
+        format!("nonzero in flight ({} shown)", detail.len())
+    };
+    RuleResult::new(id, name, status, expected, found, detail)
+}
+
+fn x4(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::Vibration) -> RuleResult {
+    let (id, name) = ("X4", "vibration and clipping");
+    let expected = format!(
+        "accel_vibration_metric <= {} and accel_clipping increase <= {} on the selected accelerometer while armed (thresholds set by your flight-test lead)",
+        t.max_accel_vibration_metric.text, t.max_accel_clipping
+    );
+    if let Some(r) = need_armed(id, name, &expected, f, armed) {
+        return r;
+    }
+    let mut sel = f.sensor_selection.clone();
+    sel.sort_by_key(|s| (s.id.ts, s.id.index));
+    let device_at = |ts: u64| {
+        let n = sel.partition_point(|s| s.id.ts <= ts);
+        n.checked_sub(1)
+            .and_then(|i| sel.get(i))
+            .and_then(|s| s.accel_device_id)
+    };
+    let mut max_vib: Option<(f32, u64)> = None;
+    let mut clip_increase: u64 = 0;
+    let mut prev: std::collections::BTreeMap<u8, u64> = std::collections::BTreeMap::new();
+    let mut samples = 0usize;
+    for r in &f.imu {
+        if !in_armed(armed, r.id.ts) {
+            continue;
+        }
+        let Some(dev) = device_at(r.id.ts) else {
+            continue;
+        };
+        if r.accel_device_id != Some(dev) {
+            continue;
+        }
+        samples += 1;
+        if let Some(v) = r.accel_vibration_metric.filter(|v| v.is_finite())
+            && max_vib.is_none_or(|(m, _)| v > m)
+        {
+            max_vib = Some((v, r.id.ts));
+        }
+        if let Some(c) = r.accel_clipping {
+            let total = c.iter().fold(0u64, |a, b| a.saturating_add(*b));
+            if let Some(p) = prev.insert(r.id.instance, total) {
+                clip_increase = clip_increase.saturating_add(total.saturating_sub(p));
+            }
+        }
+    }
+    let Some((vib, vib_ts)) = max_vib.filter(|_| samples > 0) else {
+        return fail_missing(
+            id,
+            name,
+            &expected,
+            vec![
+                "vehicle_imu_status samples for the accelerometer in sensor_selection while armed"
+                    .into(),
+            ],
+        );
+    };
+    let shown = f32_shortest(vib);
+    let mut detail = Vec::new();
+    if f64::from(vib) > t.max_accel_vibration_metric.value {
+        detail.push(format!(
+            "accel_vibration_metric {shown} at boot_us {vib_ts}, above {}",
+            t.max_accel_vibration_metric.text
+        ));
+    }
+    if clip_increase > t.max_accel_clipping {
+        detail.push(format!(
+            "accel_clipping increased by {clip_increase}, above {}",
+            t.max_accel_clipping
+        ));
+    }
+    let found = format!(
+        "max accel_vibration_metric {shown} (boot_us {vib_ts}), accel_clipping increase {clip_increase}"
+    );
+    let status = if detail.is_empty() {
+        Status::Pass
+    } else {
+        Status::Fail
+    };
+    RuleResult::new(id, name, status, expected, found, detail)
+}
+
+fn x5(f: &FlightLog, t: &crate::rules::Dropouts) -> RuleResult {
+    let expected = format!(
+        "total dropout time <= {} ms (threshold set by your flight-test lead)",
+        t.max_total_ms
+    );
+    let total = f
+        .dropouts
+        .iter()
+        .fold(0u64, |a, d| a.saturating_add(u64::from(d.duration_ms)));
+    let found = format!("{} dropout(s), {total} ms in total", f.dropouts.len());
+    let (status, detail) = if total <= t.max_total_ms {
+        (Status::Pass, vec![])
+    } else {
+        (
+            Status::Fail,
+            vec![format!(
+                "{total} ms of dropouts, above {} ms",
+                t.max_total_ms
+            )],
+        )
+    };
+    RuleResult::new("X5", "total dropout time", status, expected, found, detail)
+}
+
+/// Evaluates the core rules and the enabled optional rules.
+pub fn evaluate(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Evaluation {
+    let f = &ing.flight;
+    let armed = armed_intervals(&f.vehicle_status);
+    let mut results = vec![
+        r1(f, rules),
+        r2(ing, baseline),
+        r3(ing, rules, baseline),
+        r4(f),
+        r5(f, &ing.events),
+        r6(f, &ing.events),
+    ];
+    let x = &rules.extended;
+    if let Some(t) = &x.min_battery {
+        results.push(x1(f, &armed, t));
+    }
+    if let Some(t) = &x.gps_fix_at_arm {
+        results.push(x2(f, &ing.events, t));
+    }
+    if x.estimator_faults {
+        results.push(x3(f, &armed));
+    }
+    if let Some(t) = &x.vibration {
+        results.push(x4(f, &armed, t));
+    }
+    if let Some(t) = &x.dropouts {
+        results.push(x5(f, t));
+    }
+    let any_fail = results.iter().any(|r| r.status == Status::Fail);
+    let r1_fail = results.first().is_some_and(|r| r.status == Status::Fail);
+    let exit_code = if r1_fail {
+        exit_code::MISSING_TOPIC
+    } else if any_fail {
+        exit_code::RULE_FAIL
+    } else {
+        exit_code::OK
+    };
+    Evaluation {
+        results,
+        status: if any_fail { Status::Fail } else { Status::Pass },
+        exit_code,
+    }
+}

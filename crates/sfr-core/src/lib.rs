@@ -2,8 +2,29 @@
 //!
 //! Ingest, events, rules, record, Merkle tree, signing, and verification live here.
 //! The engine performs no I/O beyond reading byte streams handed to it, has no
-//! networking, and contains no `unsafe` code. Feature code arrives in Chunks 2 to 4.
+//! networking, and contains no `unsafe` code. Chunk 2 adds ingest, events, and rules; the
+//! record, Merkle tree, signing, and verification arrive in Chunks 3 and 4.
 #![forbid(unsafe_code)]
+
+pub mod crypto;
+pub mod evaluate;
+pub mod events;
+pub mod ingest;
+pub mod json;
+pub mod params;
+pub mod record;
+pub mod rules;
+pub mod ulog;
+
+/// Lowercase hex of `bytes`.
+pub fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
 
 /// Name of the tool and of its binary (SPEC B1.1).
 pub const TOOL_NAME: &str = "sfr";
