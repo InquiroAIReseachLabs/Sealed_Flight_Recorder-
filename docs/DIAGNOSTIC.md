@@ -13263,6 +13263,7 @@ Toolchain used for every claim above: Rust 1.97.0, cargo-deny 0.20.2, cargo-zigb
 | 7 | FIPS module version | Pin the newest AWS-LC-FIPS version that holds an active CMVP certificate (item 11.3), with the matching rustls-webpki. | Item 11 |
 | 8 | Key custody model | `pkcs11-token` for operations, `tpm-sealed` where no token fits, `file-evaluation` for demos only; offline certificate chain and CRL checks in `verify`. Applied to `docs/SPEC.md` in this chunk for review. | Item 11 |
 | 9 | OpenSSL license | Allow `OpenSSL` in `deny.toml`; the AWS-LC module requires it. Its advertising clause applies to product documentation that mentions the cryptography. | Item 11 |
+| 10 | Validated-profile build settings | Build the #5314 module exactly per its security policy (no build type, so no `-O`), and measure the seal gates with it; build aarch64 natively on aarch64 for releases. Any departure (an optimization flag, cross-compiling) goes to the assessor first. | Item 11.5 |
 
 **Inputs the founder provides**
 
@@ -13381,6 +13382,92 @@ Fallback if the cross toolchain is unavailable: build natively on an arm64 runne
 - **Custody is self-declared.** Hardware custody is proven only by the operator's CA issuing certificates to keys it has seen in hardware. Attestation (PIV attestation, TPM2_Certify) is out of scope (SPEC B1.11).
 - **A validated module is not a validated product.** The certificate covers the module in the operational environments it lists. A static musl build on an unlisted environment rests on the CMVP's operational-environment porting rules (11.3). The operator's assessor decides whether that applies to their system.
 - **The sandbox is not validated.** The wasm32 build uses `crypto-portable`, names it in every record, and exists for evaluation only.
+
+
+### 11.5 Does aws-lc-rs 1.17.x ship the #5314 module? Measured
+
+**What AWS states (VERIFIED, aws-lc-rs v1.18.0 release notes, 7 Aug 2026):** "The FIPS v3 module shipped in aws-lc-rs v1.17.x is FIPS 140-3 validated (Certificate #5314 static, Certificate #5298 dynamic)." Consumers who need the 3.x module "should pin `aws-lc-rs` to `<1.18.0`".
+
+**What the security policy requires (VERIFIED, #5314 section 11.1):** the complete, unaltered file set of the `AWS-LC-FIPS-3.1.0` archive, built with `-DFIPS=1`, separately per processor and operating system, with `bssl isfips` printing 1 and the version string "AWS-LC FIPS 3.1.0".
+
+**Comparison of `crypto/fipsmodule`, tag `AWS-LC-FIPS-3.1.0` (commit `ae0cd62f`) against the tree aws-lc-fips-sys 0.13.17 vendors:**
+
+| Module code `sfr` uses | Identical to the 3.1.0 tag? |
+|---|---|
+| `bcm.c` (the module's single compilation unit) | Yes |
+| `curve25519/` (Ed25519) | Yes |
+| `sha/`, `digest/` (SHA-256) | Yes |
+| `rand/` (DRBG, key generation) | Yes |
+| `self_check/` (power-on self-tests) | Yes |
+| `delocate.h` (integrity check) | Yes |
+| `service_indicator/service_indicator.c` | Yes (only its test file differs) |
+
+Five other module source files differ: `cipher/cipher.c`, `cipher/e_aesccm.c`, `dh/dh.c`, `evp/p_hkdf.c` and `evp/p_kem.c`. Across them and two test files, 71 lines are added or removed. The crate also omits the tag's test vectors and policy documents, compiles with a symbol prefix (`BORINGSSL_PREFIX`), and reports library version 3.6.0, not 3.1.0.
+
+**Conclusion.** The code paths `sfr` exercises are byte-identical to the validated module source, and AWS states the 1.17.x module is the #5314 module. Against the letter of section 11.1, though, the crate's file set and build differ. That is why SPEC B1.10 keeps two profiles:
+
+- **Development profile:** aws-lc-rs 1.17.4 with its vendored module. It is the module AWS labels #5314, but the build is not the security policy's exact build.
+- **Validated profile:** the 3.1.0 archive built exactly per the security policy and linked through aws-lc-fips-sys system-library mode. It is the only profile that removes the difference, and the build result follows below.
+
+**Validated-profile build: it works, no blocker (VERIFIED, both architectures; key results re-checked independently).**
+
+| Check | x86_64 musl | aarch64 musl |
+|---|---|---|
+| Source archive sha256 equals the security policy's `fe408fa4...c9f1` | Yes | Yes (same archive) |
+| Source tree unchanged after the build (9038 files, manifest diff empty) | Yes | Yes |
+| `./tool/bssl isfips` | 1 | 1 (under qemu) |
+| `awslc_version_string()` | "AWS-LC FIPS 3.1.0" | "AWS-LC FIPS 3.1.0" |
+| Module test suite (`crypto_test`) | 3083 of 3083 passed | not run (qemu time) |
+| Probe through aws-lc-rs 1.17.4 system mode: FIPS mode, RFC 8032 TEST 1, tamper rejection, SHA-256, keygen | Pass | Pass (under qemu) |
+| "AWS-LC FIPS 3.1.0" in the probe / "3.6.0" / crate-prefixed symbols | 2 / 0 / 0 | 2 / 0 / 0 |
+| Module text of the built `bcm.o` present verbatim in the probe, HMAC once | Yes | Yes |
+| One flipped module byte | "FIPS integrity test failed", abort (134) | not run |
+| `readelf`: NEEDED / INTERP | 0 / 0 (static-pie) | 0 / 0 (static EXEC) |
+
+**Exact validated-profile build (Chunk 5 release job).**
+
+```bash
+# 1. Source: the archive named in the #5314 security policy, verified by hash.
+#    (Here the URL was proxy-blocked, so the archive was rebuilt from tag AWS-LC-FIPS-3.1.0,
+#    commit ae0cd62f, with: TZ=America/Los_Angeles git archive --format=zip
+#    --prefix=aws-lc-AWS-LC-FIPS-3.1.0/ AWS-LC-FIPS-3.1.0 ; the sha256 matched exactly.)
+echo "fe408fa438850786396faf79eba9ea4116c3802e60f3a95865f0dd2adb64c9f1  AWS-LC-FIPS-3.1.0.zip" | sha256sum -c
+unzip -q AWS-LC-FIPS-3.1.0.zip && cd aws-lc-AWS-LC-FIPS-3.1.0 && mkdir build && cd build
+
+# 2. The security policy's build, one per processor: cmake -DFIPS=1 .. && make
+#    x86_64 (C++ is needed only for bssl and tests, never for module code):
+cmake -DFIPS=1 -DCMAKE_C_COMPILER=musl-gcc -DCMAKE_C_FLAGS="-isystem $KH_X86_64" \
+      -DCMAKE_CXX_COMPILER=$ZIGCXX_X86_64 -DCMAKE_CXX_FLAGS=-Wno-error=uninitialized-const-pointer ..
+#    aarch64 adds: -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64
+#      -DCMAKE_AR=aarch64-linux-gnu-ar -DCMAKE_RANLIB=aarch64-linux-gnu-ranlib, with the aarch64 musl-gcc
+make
+./tool/bssl isfips                        # must print 1 (qemu-aarch64-static on aarch64)
+cmake --install . --prefix $PREFIX
+
+# 3. Rust bindings: 3.1.0 installs none. Generate them from the installed headers with bindgen
+#    =0.72.1 and the crate's own options (Appendix A, bindgen-gen). They match the crate's
+#    3.6.0 bindings except three version constants: same 2553 functions, same layouts.
+bindgen-gen <aws-lc-fips-sys-0.13.17>/include $PREFIX/include bindings-<target>-3.1.0.rs \
+  -nostdinc -isystem <clang resource include> -isystem <musl include> -isystem $KH_<arch>
+
+# 4. Link sfr against the installed module (system-library mode; no vendored build runs).
+AWS_LC_FIPS_SYS_SYSTEM_DIR_<target_underscored>=$PREFIX \
+AWS_LC_FIPS_SYS_SYSTEM_BINDINGS_<target_underscored>=bindings-<target>-3.1.0.rs \
+AWS_LC_FIPS_SYS_STATIC=1 CC_<target_underscored>=<musl-gcc for that target> \
+  cargo build -p sfr --release --locked --target <target>
+# The build script runs its own FIPS link probe and adds a constructor that aborts if FIPS_mode() is 0.
+# aarch64 also needs CFLAGS_<target>="... -static", the linker variable, and a qemu runner for the probe.
+```
+
+**Deviations from security policy section 11.1, for the assessor.**
+1. Build host: Ubuntu 24.04 with musl, not Amazon Linux 2023 with glibc. Run target: not a tested environment (no vendor-affirmed environments exist).
+2. aarch64 was cross-compiled on x86_64 and run under qemu, not built and run on the target processor. For a release, the aarch64 build should run natively on aarch64.
+3. Tools: `cmake` 3.28.3 (not `cmake3`), Go 1.24.7, GCC 13.3.0 through `musl-gcc`; kernel UAPI headers through `-isystem` (headers only).
+4. C++ for bssl and tests was zig 0.17.0 c++ (Clang 22.1.8). It needed `-Wno-error=uninitialized-const-pointer` for one test file; `bcm.o`, `libcrypto.a`, `libssl.a` and `bssl` were byte-identical with and without the flag.
+5. After the policy's steps: `cmake --install`, generated bindings, the crate's runtime FIPS-mode constructor, and rustc's musl C runtime in the final link. No module source or object changes.
+6. **Performance consequence:** the policy's literal steps set no build type, so the module compiles without `-O`. Chunk 5 must measure the 2 s and 4 s seal gates with this build; adding a build type would depart from the policy's steps, which is the assessor's call.
+
+**On crates.io**, only aws-lc-fips-sys 0.13.11 vendors 3.1.0, and it is not the policy's file set: `go.mod` altered, 7654 files removed including `tool/`, built with a symbol prefix. aws-lc-rs 1.17.4 requires `^0.13.17` regardless. System-library mode is the only route that meets section 11.1.
 
 
 ## Appendix A. Item 11 test programs
@@ -13753,6 +13840,82 @@ for n in signer wrongeku revoked; do
 done
 openssl ca -config ca.cnf -cert ca.pem -keyfile ca.key -revoke revoked.pem
 openssl ca -config ca.cnf -cert ca.pem -keyfile ca.key -gencrl -out ca.crl.pem
+```
+
+</details>
+
+<details><summary>bindgen-gen: unprefixed bindings for a system AWS-LC 3.1.0 install (bindgen =0.72.1)</summary>
+
+```toml
+[package]
+name = "bindgen-gen"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+bindgen = "=0.72.1"
+```
+
+```rust
+// Generates unprefixed Rust bindings for a system AWS-LC install, using the same
+// bindgen options as aws-lc-fips-sys 0.13.17 builder/sys_bindgen.rs
+// (prepare_bindings_builder, all-bindings mode as used by the FIPS crate,
+// disable_prelude = true and build_prefix = None as in main.rs generate_bindings).
+// Usage: bindgen-gen <rust_wrapper.h dir> <aws-lc include dir> <out.rs> [extra clang args...]
+const COPYRIGHT: &str = r"
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR ISC
+";
+fn main() {
+    let a: Vec<String> = std::env::args().collect();
+    let (wrapper_dir, inc, out) = (&a[1], &a[2], &a[3]);
+    let mut clang_args = vec!["-I".to_string(), wrapper_dir.clone(), "-I".to_string(), inc.clone()];
+    clang_args.extend(a[4..].iter().cloned());
+    let b = bindgen::Builder::default()
+        .derive_copy(true)
+        .derive_debug(true)
+        .derive_default(true)
+        .derive_eq(true)
+        .allowlist_file(r".*(/|\\)rust_wrapper\.h")
+        .rustified_enum(r"point_conversion_form_t")
+        .rust_target(bindgen::RustTarget::stable(70, 0).unwrap())
+        .default_macro_constant_type(bindgen::MacroTypeVariation::Signed)
+        .generate_comments(true)
+        .fit_macro_constants(false)
+        .size_t_is_usize(true)
+        .layout_tests(true)
+        .prepend_enum_name(true)
+        .formatter(bindgen::Formatter::Rustfmt)
+        .clang_args(clang_args)
+        .raw_line(COPYRIGHT)
+        .header(format!("{wrapper_dir}/rust_wrapper.h"))
+        .allowlist_file(r".*(/|\\)openssl((/|\\)[^/\\]+)+\.h");
+    b.generate().expect("Unable to generate bindings.").write_to_file(out).expect("write");
+}
+```
+
+</details>
+
+<details><summary>Module identity check: awslc_version_string() and FIPS_mode()</summary>
+
+```c
+#include <stdio.h>
+#include <openssl/crypto.h>
+#include <openssl/service_indicator.h>
+/* Calls the SP "Show Version" and "Show Status" services. */
+int main(void) {
+  printf("awslc_version_string: %s\n", awslc_version_string());
+  printf("FIPS_mode: %d\n", FIPS_mode());
+  return FIPS_mode() ? 0 : 1;
+}
+```
+
+C++ wrapper used for the non-module C++ (bssl, tests):
+
+```sh
+#!/bin/sh
+exec /usr/local/lib/python3.13/dist-packages/ziglang/zig c++ -target x86_64-linux-musl "$@"
 ```
 
 </details>
