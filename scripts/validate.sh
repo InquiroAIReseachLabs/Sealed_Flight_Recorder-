@@ -37,6 +37,18 @@ run "deny-list check" scripts/check_deny_list.sh
 run "language self-test" scripts/check_language.sh --self-test
 run "language check" scripts/check_language.sh
 
+# 4b. The shipped graph takes SHA-256 and Ed25519 only from the FIPS module (SPEC B1.10, "Crypto").
+check_crypto_graph() {
+  local tree
+  tree="$(cargo tree -p sfr --locked --prefix none)" || return 1
+  if grep -E '^(sha2|ed25519-dalek) ' <<<"$tree"; then
+    echo "  sfr's dependency graph contains a SHA-256 or Ed25519 crate outside the FIPS module"
+    return 1
+  fi
+  grep -qE '^aws-lc-fips-sys v' <<<"$tree" || { echo "  aws-lc-fips-sys missing from sfr's graph"; return 1; }
+}
+run "cargo tree -p sfr: no sha2 or ed25519-dalek" check_crypto_graph
+
 # 5. Supply chain: licenses, advisories, bans, sources (SPEC B1.10, "Supply chain").
 # A missing tool is a failure, never a skip: validate.sh must stay a superset of CI.
 check_cargo_deny() {

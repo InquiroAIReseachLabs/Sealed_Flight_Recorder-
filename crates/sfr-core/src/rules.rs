@@ -27,6 +27,10 @@ pub const RULES_FORMAT: &str = "sfr-rules/1";
 /// list a handful; the caps keep evaluation time bounded on any file.
 pub const MAX_LIST_ENTRIES: usize = 256;
 
+/// Depth at which the toml parser (`toml` 0.9.12, `LIMIT` in `de/parser/mod.rs`) stops nested
+/// arrays, inline tables, and dotted keys. Recorded here so the error can name it.
+pub const TOML_MAX_DEPTH: usize = 80;
+
 /// Topics R1 always requires, because the core rules read them.
 pub const CORE_TOPICS: [&str; 2] = ["vehicle_status", "failsafe_flags"];
 
@@ -302,11 +306,14 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
     let ctx = Ctx { text: body };
     let doc = DeTable::parse(body).map_err(|e| {
         let line = e.span().map_or(0, |s| ctx.line(s.start));
-        let msg = e.message().trim().to_string();
-        RulesError {
-            line,
-            reason: format!("not valid TOML: {msg}"),
-        }
+        let msg = e.message().trim();
+        // The toml parser stops nesting and dotted keys at its own depth limit.
+        let reason = if msg.contains("recursion") {
+            crate::limit_exceeded("TOML nesting or dotted-key depth", TOML_MAX_DEPTH, "levels")
+        } else {
+            format!("not valid TOML: {msg}")
+        };
+        RulesError { line, reason }
     })?;
     let root = doc.get_ref();
     check_keys(
@@ -539,6 +546,32 @@ mod tests {
 
     const MIN: &str =
         "format = \"sfr-rules/1\"\n[required_topics]\ntopics = [\"vehicle_status\"]\n";
+
+    #[test]
+    fn pattern_length_and_toml_depth_limits_are_named() {
+        let pattern = |n: usize| format!("{MIN}[parameters]\nignore = [\"{}\"]\n", "A".repeat(n));
+        parse_rules(&pattern(64)).expect("64 characters");
+        let e = parse_rules(&pattern(65)).expect_err("65 characters");
+        assert!(e.to_string().contains("1 to 64 letters"), "{e}");
+        assert_eq!(e.line, 5);
+
+        let deep = format!("{MIN}x = {}{}\n", "[".repeat(81), "]".repeat(81));
+        let e = parse_rules(&deep).expect_err("81 nested arrays");
+        assert!(
+            e.to_string().contains(
+                "TOML nesting or dotted-key depth exceeds the input limit of 80 levels (SPEC B1.4)"
+            ),
+            "{e}"
+        );
+        assert_eq!(e.line, 4);
+        let dotted = format!("{MIN}{} = 1\n", vec!["a"; 100].join("."));
+        let e = parse_rules(&dotted).expect_err("100 dotted parts");
+        assert!(
+            e.to_string()
+                .contains("exceeds the input limit of 80 levels"),
+            "{e}"
+        );
+    }
 
     #[test]
     fn list_and_pattern_limits_are_enforced_and_named() {

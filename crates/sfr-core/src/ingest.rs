@@ -1110,6 +1110,38 @@ mod tests {
     }
 
     #[test]
+    fn exactly_the_parameter_and_flag_limits_are_accepted() {
+        use crate::ulog::tests::Builder;
+        let mut log = Builder::new(0).flags(&[]);
+        for i in 0..crate::params::MAX_PARAMS {
+            log = log.param_f(&format!("P{i}"), 1.0);
+        }
+        // With no data record the log is truncated; the parameter limit is checked first.
+        let err = Px4Ingestor
+            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
+            .unwrap_err();
+        assert!(
+            matches!(err, IngestError::Malformed(ref m) if m.to_string().contains("ends before any data record")),
+            "{err}"
+        );
+        let mut format = String::from("failsafe_flags:uint64_t timestamp;");
+        for i in 0..MAX_FAILSAFE_FLAGS {
+            format.push_str(&format!("bool f{i};"));
+        }
+        let log = Builder::new(0)
+            .flags(&[])
+            .format(&format)
+            .sub(0, 0, "failsafe_flags");
+        let err = Px4Ingestor
+            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
+            .unwrap_err();
+        assert!(
+            matches!(err, IngestError::Malformed(ref m) if m.to_string().contains("ends before any data record")),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn too_many_parameters_at_log_start_are_refused() {
         use crate::ulog::tests::Builder;
         let mut log = Builder::new(0).flags(&[]);

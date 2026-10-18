@@ -37,23 +37,23 @@ Every command supports `--json` for machine-readable output. `sfr --version` pri
 | 0 | Seal: all rules PASS or N/A. Verify: VERIFIED. |
 | 1 | Seal: one or more rules FAIL (record is still written). Verify: verification failed. |
 | 2 | Required topic missing from the log (record written with status FAIL and the missing topic named). |
-| 3 | Malformed or truncated input file (log, rules, or baseline), including a log with no data records and an input over a documented size limit; the message names the file and the byte offset or line. |
-| 4 | Usage, key, or file I/O error, including a missing `--evaluation-only`, a hardware key source that fails, a signature that does not verify against the signing key, and a FIPS module that reports it is not in approved mode. |
+| 3 | Malformed or truncated input file (log, rules, or baseline), including a log with no data records and an input over a limit (Input limits below); the message names the file and the byte offset or line, except for limits on whole-log totals and file sizes, which name the file only. |
+| 4 | Usage, key, or file I/O error, including a key file or public key over its limit, a missing `--evaluation-only`, a hardware key source that fails, a signature that does not verify against the signing key, and a FIPS module that reports it is not in approved mode. |
 
 If the FIPS module fails a power-on self-test or its integrity check, the module aborts the process before `sfr` can choose an exit code (SIGABRT; a shell reports 134). Nothing is written.
 
 #### Input limits
 
-Every input is bounded. An input over a limit is refused, never truncated, and the message names the limit (`... exceeds the input limit of N <unit> (SPEC B1.4)`). `seal` exits 3 for the log, rules file, and baseline, and 4 for key files. `verify` treats any limit, in the record or in the `--ulog` log, as a verification failure (exit 1). `docs/LIMITS.md` gives the reason for each limit.
+Every input is bounded by the limits below. An input over a limit is refused, never truncated. A message for a count or a size reads `... exceeds the input limit of N <unit> (SPEC B1.4)`; a message for a name, version, or length rule states the rule and ends with `(SPEC B1.4)`. A limit met while reading names the byte offset or line; a limit on a total over the whole log (parameters at log start, `failsafe_flags` flag fields, events) or on a file's size names the file only. `seal` exits 3 for the log, the rules file, and the baseline, including a log whose record would be over the record limit, and 4 for the key file. `verify` exits 4 for the public key, and 1 (verification failed) for any limit in the record or in the `--ulog` log. `docs/LIMITS.md` gives the reason for each limit.
 
 | Input | Limit |
 |---|---|
 | Log: ULog file format version | 0 or 1 |
-| Log: format nesting | 8 levels |
+| Log: format nesting | 8 levels of nested types below a subscribed format |
 | Log: one flattened format | 65,535 bytes and 65,535 fields; array length 1 to 65,535 |
 | Log: fields across all format definitions | 1,000,000 |
 | Log: flattened fields across all subscriptions | 1,000,000 |
-| Log: flattened field name, subscription name | 255 bytes |
+| Log: flattened field name (with its nested prefixes and `[i]` index), subscription name | 255 bytes |
 | Log: parameter name | 1 to 16 letters, digits, `_` |
 | Log: parameters at log start | 65,536 |
 | Log: `failsafe_flags` flag fields | 256 |
@@ -62,10 +62,11 @@ Every input is bounded. An input over a limit is refused, never truncated, and t
 | Rules: `required_topics.topics`, `parameters.ignore` | 256 entries each |
 | Rules: topic name | 1 to 64 lowercase letters, digits, `_` |
 | Rules: parameter name pattern | 1 to 64 letters, digits, `_`, `*`, with at most 8 `*` |
+| Rules: TOML nesting and dotted keys | 80 levels (the limit of the `toml` parser) |
 | Baseline: parameters | 65,536 |
-| Record (`verify`) | 512 MiB (536,870,912 bytes); JSON nesting 64 levels |
+| Record (`seal` output, `verify` input) | 512 MiB (536,870,912 bytes); JSON with at most 64 nested arrays and objects |
 
-The log itself has no size limit: it is read as a stream in one pass. One limit truncates instead of refusing: a rule's `detail` lists at most 1,000 lines, then one line `and N more; the events list every one`.
+The log has no size limit. It is read once, as a stream. The reader keeps the records the events and rules use (for example `vehicle_status`, `failsafe_flags`, commands and acks, warning messages, and parameter records) and hashes and drops every other record, so memory grows with the number of kept records: a log made mostly of them needs memory in proportion to its size. One limit truncates instead of refusing: R4, R5, R6, X2, and X3 list at most 1,000 `detail` lines, then one line `and N more; ...` that says where the rest are counted (the events, or for X3 its sample count). R3 lists every differing parameter (B1.6), at most 131,072 lines under the two parameter limits.
 
 ### B1.5 What is extracted from the log
 
@@ -80,10 +81,11 @@ Supported: PX4 v1.14 through v1.17 ULog. Exact topic and field names per version
   - COMMAND (command id, source system and component, result from the matching `vehicle_command_ack`, or `NO_ACK`): the matching ack is the earliest unused ack with the same command id, a timestamp not before the command's and before the next identical command from the same source, and target system and component equal to the command's source; a final result is preferred over IN_PROGRESS.
   - VTOL_TRANSITION_START, VTOL_TRANSITION_END, VTOL_TRANSITION_ABORT (direction): from the VTOL state derived from `vehicle_status` (in transition to fixed wing, in transition to multicopter, fixed wing, multicopter). START when a transition state is entered; END on transition-to-fixed-wing then fixed wing, or transition-to-multicopter then multicopter; ABORT when a transition state is left any other way. A quadchute (fixed wing straight to multicopter) is not a transition; R4 reports it.
   - QUADCHUTE (`vtol_fixed_wing_system_failure` true, false, or null when not logged): the VTOL state goes from fixed wing straight to multicopter without a transition state; the flag is the `failsafe_flags` value at that moment. R6 does not count it; R4 fails on it while armed.
+  - A `failsafe_flags` value "at that moment" (FAILSAFE_*, QUADCHUTE) comes from the latest `failsafe_flags` sample whose timestamp is at or before the `vehicle_status` sample's, in timestamp order whatever the file order; with no such sample the flag is null, and a FAILSAFE edge is `unattributed`.
   - PARAM_CHANGED_IN_FLIGHT (name, old, new): a data-section 'P' record whose value differs from the last known value of that parameter, between ARM and DISARM (ARM time < its time <= DISARM time, so the timeline shows it after ARM and before DISARM); its time is the last data timestamp before it. Firmware-written changes count like any other.
   - LOG_MESSAGE (flight stack messages at warning level or above): 'L' and 'C' records at levels 0 to 4 (emergency to warning), text kept verbatim. PX4 events (the `event` topic) are not decoded in v1.
   - LOG_DROPOUT (duration): an 'O' record, in milliseconds; its time is the last data timestamp before it.
-- **Event ordering** is deterministic: boot time, then topic name, then instance id, then message index. Records without a topic use the names `ulog.logging`, `ulog.parameter`, and `ulog.dropout`. Several events from one source message keep a fixed order. Sequence numbers start at 0. The message index counts from 0: for a topic, the data record's position among that topic instance's data records; for `ulog.parameter`, among all 'P' records in the file, definitions section included; for `ulog.logging`, among all 'L' and 'C' records; for `ulog.dropout`, among all 'O' records.
+- **Event ordering** is deterministic: boot time, then topic name, then instance id, then message index. Records without a topic use the names `ulog.logging`, `ulog.parameter`, and `ulog.dropout`. Several events from one source message keep this order: ARM or DISARM; NAV_STATE_CHANGE; FAILSAFE_SET or FAILSAFE_CLEAR, one per flag, by flag name in byte order; VTOL_TRANSITION_END, VTOL_TRANSITION_ABORT, or QUADCHUTE; VTOL_TRANSITION_START. Sequence numbers start at 0. The message index counts from 0: for a topic, the data record's position among that topic instance's data records; for `ulog.parameter`, among all 'P' records in the file, definitions section included; for `ulog.logging`, among all 'L' and 'C' records; for `ulog.dropout`, among all 'O' records.
 - **Multi-instance topics** are filtered to the active instance where PX4 records one (used by optional estimator rules only).
 
 ### B1.6 Rules

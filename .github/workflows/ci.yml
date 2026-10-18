@@ -43,6 +43,15 @@ jobs:
           go version
           perl -e 'print "perl $^V\n"'
           cc --version | head -1
+      - name: cargo tree -p sfr has neither sha2 nor ed25519-dalek (SPEC B1.10 Crypto)
+        run: |
+          set -euo pipefail
+          tree="$(cargo tree -p sfr --locked --prefix none)"
+          if grep -E '^(sha2|ed25519-dalek) ' <<<"$tree"; then
+            echo "sfr's dependency graph contains a SHA-256 or Ed25519 crate outside the FIPS module"
+            exit 1
+          fi
+          grep -m1 -E '^aws-lc-fips-sys v' <<<"$tree"
       - name: rustfmt --check
         run: cargo fmt --all --check
       - name: clippy, warnings as errors

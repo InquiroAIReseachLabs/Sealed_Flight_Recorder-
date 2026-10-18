@@ -658,5 +658,19 @@ fn oversize_text_inputs_are_refused_and_name_the_limit() {
         "{}",
         stderr(&out)
     );
+    // Exactly 16 MiB is accepted: the default rules padded with a comment.
+    let mut at = std::fs::read(root().join(RULES)).unwrap();
+    at.extend_from_slice(b"#");
+    at.resize(16 * 1024 * 1024 - 1, b'x');
+    at.push(b'\n');
+    let at_path = dir.join("at_limit.toml");
+    std::fs::write(&at_path, &at).unwrap();
+    let out = dry_run(
+        "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+        at_path.to_str().unwrap(),
+        "testdata/baselines/v1.17.0_mc_flight_1.params",
+        false,
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     std::fs::remove_dir_all(dir).unwrap();
 }

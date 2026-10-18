@@ -162,7 +162,12 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, BaselineError> {
             ));
         }
         if !valid_param_name(name) {
-            return Err(err(n, format!("`{name}` is not a parameter name")));
+            return Err(err(
+                n,
+                format!(
+                    "`{name}` is not a parameter name (1 to 16 letters, digits, `_`; SPEC B1.4)"
+                ),
+            ));
         }
         let value = match *ty {
             "6" => ParamValue::I32(
@@ -273,6 +278,18 @@ mod tests {
     use super::*;
 
     const GOOD: &str = "# Onboard parameters for Vehicle 1\n#\n# Firmware: 1.17.0 D6F12AD\n#\n# Vehicle-Id Component-Id Name Value Type\n1\t1\tBAT_LOW_THR\t0.150000005960464478\t9\r\n1\t1\tCOM_DISARM_LAND\t2\t9\n1\t1\tNAV_DLL_ACT\t0\t6\n";
+
+    #[test]
+    fn baseline_parameter_names_follow_the_px4_rule() {
+        let text = |name: &str| format!("# Firmware: 1.17.0\n1\t1\t{name}\t1\t6\n");
+        parse_baseline(&text(&"P".repeat(16))).expect("16 characters");
+        let e = parse_baseline(&text(&"P".repeat(17))).expect_err("17 characters");
+        assert!(
+            e.to_string()
+                .contains("is not a parameter name (1 to 16 letters, digits, `_`; SPEC B1.4)"),
+            "{e}"
+        );
+    }
 
     #[test]
     fn baseline_parameter_limit_is_enforced_and_named() {

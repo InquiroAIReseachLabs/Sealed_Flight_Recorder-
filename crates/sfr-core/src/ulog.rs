@@ -528,8 +528,16 @@ fn parse_type(token: &str, offset: u64) -> Result<(FieldType, Option<usize>), Ul
             let n = rest
                 .strip_suffix(']')
                 .ok_or_else(|| malformed(offset, format!("bad array type `{token}`")))?;
-            if n.is_empty() || !n.bytes().all(|c| c.is_ascii_digit()) || n.len() > 5 {
+            if n.is_empty() || !n.bytes().all(|c| c.is_ascii_digit()) {
                 return Err(malformed(offset, format!("bad array length in `{token}`")));
+            }
+            if n.len() > 5 {
+                return Err(malformed(
+                    offset,
+                    format!(
+                        "array length in `{token}` is outside 1 to {MAX_LAYOUT_SIZE} (SPEC B1.4)"
+                    ),
+                ));
             }
             let len: usize = n
                 .parse()
@@ -613,8 +621,12 @@ impl Flattener<'_> {
         for def in defs {
             let count = def.array.unwrap_or(1);
             for i in 0..count {
-                // An array element adds "[i]", at most 7 bytes ("[65535]").
-                let suffix = if def.array.is_some() { 7 } else { 0 };
+                // An array element adds "[i]".
+                let suffix = if def.array.is_some() {
+                    2 + i.checked_ilog10().map_or(1, |d| d as usize + 1)
+                } else {
+                    0
+                };
                 if prefix.len() + def.name.len() + suffix > MAX_NAME_LEN {
                     return Err(malformed(
                         self.offset,
@@ -784,7 +796,10 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
     if header.version > 1 {
         return Err(malformed(
             7,
-            format!("unsupported ULog file format version {}", header.version),
+            format!(
+                "unsupported ULog file format version {} (versions 0 and 1 are read; SPEC B1.4)",
+                header.version
+            ),
         ));
     }
     visitor.header(&header);
@@ -902,7 +917,9 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                 if !crate::params::valid_param_name(name) {
                     return Err(malformed(
                         start,
-                        format!("`{name}` is not a parameter name (1 to 16 letters, digits, `_`)"),
+                        format!(
+                            "`{name}` is not a parameter name (1 to 16 letters, digits, `_`; SPEC B1.4)"
+                        ),
                     ));
                 }
                 let raw = c.take(4, "parameter value")?;
@@ -1289,6 +1306,105 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn version_parameter_name_and_array_length_limits_are_named() {
+        let mut b = sample().bytes;
+        b[7] = 2;
+        let e = read(&b[..], &mut Collect::default()).expect_err("version 2");
+        assert!(
+            e.to_string()
+                .contains("version 2 (versions 0 and 1 are read; SPEC B1.4)"),
+            "{e}"
+        );
+        for v in [0u8, 1] {
+            let mut b = sample().bytes;
+            b[7] = v;
+            read(&b[..], &mut Collect::default()).expect("versions 0 and 1");
+        }
+
+        let at = Builder::new(0).flags(&[]).param_f(&"P".repeat(16), 1.0);
+        read(&at.bytes[..], &mut Collect::default()).expect("16 characters");
+        let over = Builder::new(0).flags(&[]).param_f(&"P".repeat(17), 1.0);
+        let e = read(&over.bytes[..], &mut Collect::default()).expect_err("17 characters");
+        assert!(
+            e.to_string()
+                .contains("is not a parameter name (1 to 16 letters, digits, `_`; SPEC B1.4)"),
+            "{e}"
+        );
+
+        let at = Builder::new(0).flags(&[]).format("b:uint8_t[65535] x;");
+        read(&at.bytes[..], &mut Collect::default()).expect("array length 65,535");
+        for n in ["65536", "100000"] {
+            let over = Builder::new(0)
+                .flags(&[])
+                .format(&format!("b:uint8_t[{n}] x;"));
+            let e = read(&over.bytes[..], &mut Collect::default()).expect_err(n);
+            assert!(
+                e.to_string().contains("is outside 1 to 65535 (SPEC B1.4)"),
+                "{n}: {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn nesting_and_name_limits_hold_exactly_at_the_limit() {
+        // `t` holds n0, n0 holds n1, and so on: `levels` nested types below `t`.
+        let nested = |levels: usize| {
+            let mut b = Builder::new(0).flags(&[]);
+            for k in 0..levels {
+                let inner = if k + 1 < levels {
+                    format!("n{} c;", k + 1)
+                } else {
+                    String::new()
+                };
+                b = b.format(&format!("n{k}:uint8_t v;{inner}"));
+            }
+            b.format("t:uint64_t timestamp;n0 c;").sub(0, 0, "t")
+        };
+        read(&nested(MAX_NESTING).bytes[..], &mut Collect::default()).expect("8 levels");
+        let e = read(&nested(MAX_NESTING + 1).bytes[..], &mut Collect::default())
+            .expect_err("9 levels");
+        assert!(
+            e.to_string()
+                .contains("format nesting exceeds the input limit of 8 levels"),
+            "{e}"
+        );
+
+        // Flattened names of exactly 255 bytes: a plain field, an array element, a nested field.
+        for (field, ok) in [
+            (format!("uint8_t {}", "a".repeat(255)), true),
+            (format!("uint8_t {}", "a".repeat(256)), false),
+            (format!("uint8_t[1] {}", "a".repeat(252)), true),
+            (format!("uint8_t[1] {}", "a".repeat(253)), false),
+            (format!("uint8_t[11] {}", "a".repeat(251)), true),
+            (format!("uint8_t[11] {}", "a".repeat(252)), false),
+            // `<name>.v`: 253 + 2 bytes.
+            (format!("c {}", "a".repeat(253)), true),
+            (format!("c {}", "a".repeat(254)), false),
+        ] {
+            let b = Builder::new(0)
+                .flags(&[])
+                .format("c:uint8_t v;")
+                .format(&format!("t:uint64_t timestamp;{field};"))
+                .sub(0, 0, "t");
+            let r = read(&b.bytes[..], &mut Collect::default());
+            assert_eq!(r.is_ok(), ok, "{}: {r:?}", field.len());
+            if let Err(e) = r {
+                assert!(
+                    e.to_string()
+                        .contains("a flattened field name exceeds the input limit of 255 bytes"),
+                    "{e}"
+                );
+            }
+        }
+        let topic = "t".repeat(MAX_NAME_LEN);
+        let b = Builder::new(0)
+            .flags(&[])
+            .format(&format!("{topic}:uint64_t timestamp;"))
+            .sub(0, 0, &topic);
+        read(&b.bytes[..], &mut Collect::default()).expect("255-byte subscription name");
+    }
+
+    #[test]
     fn format_size_and_definition_limits_are_named() {
         // 8 bytes of timestamp and 65,528 bytes of array: 65,536 bytes, one over.
         let b = Builder::new(0)
@@ -1307,13 +1423,18 @@ pub(crate) mod tests {
             .sub(0, 0, "wide");
         read(&b.bytes[..], &mut Collect::default()).expect("65,535 bytes");
 
-        // 223 formats of 4,500 definitions each (under 64 KiB per message): 1,003,500 in all.
-        let defs: String = (0..4_500).map(|i| format!("uint8_t f{i};")).collect();
+        // 222 formats of 4,500 definitions (under 64 KiB per message) and one of 1,000:
+        // exactly 1,000,000 definitions. One more is over the limit.
+        let defs = |n: usize| -> String { (0..n).map(|i| format!("uint8_t f{i};")).collect() };
         let mut b = Builder::new(0).flags(&[]);
-        for k in 0..223 {
-            b = b.format(&format!("t{k}:{defs}"));
+        let wide = defs(4_500);
+        for k in 0..222 {
+            b = b.format(&format!("t{k}:{wide}"));
         }
-        let e = read(&b.bytes[..], &mut Collect::default()).expect_err("over 1,000,000");
+        let at = b.format(&format!("last:{}", defs(1_000)));
+        read(&at.bytes[..], &mut Collect::default()).expect("exactly 1,000,000");
+        let b = at.format("one_more:uint8_t f;");
+        let e = read(&b.bytes[..], &mut Collect::default()).expect_err("1,000,001");
         assert!(
             e.to_string().contains(
                 "the number of fields across all formats exceeds the input limit of 1000000 fields"
@@ -1324,11 +1445,11 @@ pub(crate) mod tests {
 
     #[test]
     fn total_flattened_fields_are_capped() {
-        // One format with 60,001 fields, subscribed 20 times: 1.2 million fields in all.
+        // One format with 50,000 fields, subscribed 21 times: 1,050,000 fields in all.
         let mut b = Builder::new(0)
             .flags(&[])
-            .format("wide:uint64_t timestamp;uint8_t[60000] x;");
-        for id in 0..20u16 {
+            .format("wide:uint64_t timestamp;uint8_t[49999] x;");
+        for id in 0..21u16 {
             b = b.sub(0, id, "wide");
         }
         let err = read(&b.bytes[..], &mut Collect::default()).expect_err("over the cap");
@@ -1337,14 +1458,14 @@ pub(crate) mod tests {
                 .contains("across all subscriptions exceeds the input limit of 1000000 fields"),
             "{err}"
         );
-        // Sixteen subscriptions (960,016 fields) are still accepted.
+        // Twenty subscriptions are exactly 1,000,000 fields and are accepted.
         let mut b = Builder::new(0)
             .flags(&[])
-            .format("wide:uint64_t timestamp;uint8_t[60000] x;");
-        for id in 0..16u16 {
+            .format("wide:uint64_t timestamp;uint8_t[49999] x;");
+        for id in 0..20u16 {
             b = b.sub(0, id, "wide");
         }
-        read(&b.bytes[..], &mut Collect::default()).expect("under the cap");
+        read(&b.bytes[..], &mut Collect::default()).expect("exactly at the cap");
     }
 
     #[test]
