@@ -1030,6 +1030,164 @@ mod tests {
         FlagDef::for_test(name)
     }
 
+    fn fs_row(ts: u64, index: u64, active: &[bool]) -> FailsafeRow {
+        FailsafeRow {
+            id: RowId {
+                ts,
+                instance: 0,
+                index,
+            },
+            active: active.to_vec(),
+            mode_req: vec![0; active.len()],
+        }
+    }
+
+    fn quadchute_flag(ev: &[Event]) -> Vec<Option<bool>> {
+        ev.iter()
+            .filter_map(|e| match e.kind {
+                EventKind::Quadchute {
+                    fixed_wing_system_failure,
+                } => Some(fixed_wing_system_failure),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn failsafe_flags_named(ev: &[Event]) -> Vec<String> {
+        ev.iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::FailsafeSet { flag, .. } => Some(format!("SET {flag}")),
+                EventKind::FailsafeClear { flag } => Some(format!("CLEAR {flag}")),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// SPEC B1.5: several events from one row keep the order ARM or DISARM,
+    /// NAV_STATE_CHANGE, FAILSAFE_* by flag name, VTOL END, ABORT or QUADCHUTE, then START.
+    #[test]
+    fn events_from_one_row_keep_the_spec_order() {
+        // Flags as ingest delivers them: sorted by name.
+        let fs = FailsafeFlags {
+            flags: vec![flag("a_flag"), flag("b_flag")],
+            rows: vec![fs_row(0, 0, &[false, false]), fs_row(25, 1, &[true, true])],
+        };
+        let rows = vec![
+            vs(0, 0, 2, 4, false, false, false, 1),
+            vs(10, 1, 2, 4, false, true, true, 1),
+            vs(20, 2, 2, 4, false, false, false, 2),
+            vs(30, 3, 2, 4, true, false, false, 2),
+            // Disarms, changes nav_state, clears the failsafe, and goes FW to MC at once.
+            vs(40, 4, 1, 18, false, false, false, 1),
+        ];
+        let flight = FlightLog {
+            vehicle_status: rows,
+            failsafe_flags: fs,
+            ..FlightLog::default()
+        };
+        let ev = build(&flight, &Config::default()).unwrap();
+        let at_40: Vec<String> = ev
+            .iter()
+            .filter(|e| e.boot_us == 40)
+            .map(|e| match &e.kind {
+                EventKind::FailsafeClear { flag } => format!("FAILSAFE_CLEAR {flag}"),
+                k => k.name().to_string(),
+            })
+            .collect();
+        assert_eq!(
+            at_40,
+            [
+                "DISARM",
+                "NAV_STATE_CHANGE",
+                "FAILSAFE_CLEAR a_flag",
+                "FAILSAFE_CLEAR b_flag",
+                "QUADCHUTE"
+            ]
+        );
+        // vtol_fixed_wing_system_failure is not in this format: null.
+        assert_eq!(quadchute_flag(&ev), [None]);
+    }
+
+    /// SPEC B1.5: the failsafe_flags value "at that moment" is the latest sample at or before
+    /// the vehicle_status sample, in timestamp order; on equal timestamps the later one in
+    /// the file. With no such sample the flag is null and a FAILSAFE edge is unattributed.
+    #[test]
+    fn failsafe_flags_at_a_moment_follow_timestamp_then_file_order() {
+        let quadchute = |fs_rows: Vec<FailsafeRow>| {
+            let fs = FailsafeFlags {
+                flags: vec![flag("vtol_fixed_wing_system_failure")],
+                rows: fs_rows,
+            };
+            let rows = vec![
+                vs(0, 0, 2, 4, false, false, false, 1),
+                vs(10, 1, 2, 4, false, true, true, 1),
+                vs(20, 2, 2, 4, false, false, false, 2),
+                vs(30, 3, 2, 4, false, false, false, 1),
+            ];
+            let flight = FlightLog {
+                vehicle_status: rows,
+                failsafe_flags: fs,
+                ..FlightLog::default()
+            };
+            quadchute_flag(&build(&flight, &Config::default()).unwrap())
+        };
+        // A sample with the edge's own timestamp counts, even listed first in the file.
+        assert_eq!(
+            quadchute(vec![fs_row(30, 1, &[true]), fs_row(0, 0, &[false])]),
+            [Some(true)]
+        );
+        // A later sample does not.
+        assert_eq!(
+            quadchute(vec![fs_row(0, 0, &[false]), fs_row(31, 1, &[true])]),
+            [Some(false)]
+        );
+        // Two samples at the same timestamp: the later one in the file wins.
+        assert_eq!(
+            quadchute(vec![fs_row(30, 1, &[true]), fs_row(30, 2, &[false])]),
+            [Some(false)]
+        );
+        // No sample at or before the edge: null.
+        assert_eq!(quadchute(vec![fs_row(35, 0, &[true])]), [None]);
+
+        // A failsafe edge with no failsafe_flags sample at or before it is unattributed.
+        let fs = FailsafeFlags {
+            flags: vec![flag("x_flag")],
+            rows: vec![fs_row(50, 0, &[true])],
+        };
+        let flight = FlightLog {
+            vehicle_status: vec![
+                vs(0, 0, 2, 4, false, false, false, 1),
+                vs(30, 1, 2, 4, true, false, false, 1),
+            ],
+            failsafe_flags: fs,
+            ..FlightLog::default()
+        };
+        let ev = build(&flight, &Config::default()).unwrap();
+        assert_eq!(failsafe_flags_named(&ev), ["SET unattributed"]);
+    }
+
+    /// SPEC B1.5: with no failsafe_flags sample at or before the most recent ARM, the
+    /// reference is the sample with the earliest timestamp.
+    #[test]
+    fn failsafe_reference_falls_back_to_the_earliest_sample() {
+        let fs = FailsafeFlags {
+            flags: vec![flag("x_flag")],
+            rows: vec![fs_row(20, 1, &[true]), fs_row(10, 0, &[true])],
+        };
+        let flight = FlightLog {
+            vehicle_status: vec![
+                vs(0, 0, 1, 4, false, false, false, 1),
+                vs(5, 1, 2, 4, false, false, false, 1),
+                vs(30, 2, 2, 4, true, false, false, 1),
+            ],
+            failsafe_flags: fs,
+            ..FlightLog::default()
+        };
+        let ev = build(&flight, &Config::default()).unwrap();
+        // x_flag was already true in the earliest sample (t = 10), so it is not new.
+        assert_eq!(failsafe_flags_named(&ev), ["SET unattributed"]);
+    }
+
     #[test]
     fn failsafe_attribution_names_required_or_new_flags() {
         let fs = FailsafeFlags {

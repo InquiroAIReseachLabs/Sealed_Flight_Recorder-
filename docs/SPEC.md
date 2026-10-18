@@ -37,21 +37,22 @@ Every command supports `--json` for machine-readable output. `sfr --version` pri
 | 0 | Seal: all rules PASS or N/A. Verify: VERIFIED. |
 | 1 | Seal: one or more rules FAIL (record is still written). Verify: verification failed. |
 | 2 | Required topic missing from the log (record written with status FAIL and the missing topic named). |
-| 3 | Malformed or truncated input file (log, rules, or baseline), including a log with no data records and an input over a limit (Input limits below); the message names the file and the byte offset or line, except for limits on whole-log totals and file sizes, which name the file only. |
+| 3 | Malformed or truncated input file (log, rules, or baseline), including a log with no data records and an input over a limit (Input limits below); the message names the file and the byte offset or line, except as Input limits below says. |
 | 4 | Usage, key, or file I/O error, including a key file or public key over its limit, a missing `--evaluation-only`, a hardware key source that fails, a signature that does not verify against the signing key, and a FIPS module that reports it is not in approved mode. |
 
 If the FIPS module fails a power-on self-test or its integrity check, the module aborts the process before `sfr` can choose an exit code (SIGABRT; a shell reports 134). Nothing is written.
 
 #### Input limits
 
-Every input is bounded by the limits below. An input over a limit is refused, never truncated. A message for a count or a size reads `... exceeds the input limit of N <unit> (SPEC B1.4)`; a message for a name, version, or length rule states the rule and ends with `(SPEC B1.4)`. A limit met while reading names the byte offset or line; a limit on a total over the whole log (parameters at log start, `failsafe_flags` flag fields, events) or on a file's size names the file only. `seal` exits 3 for the log, the rules file, and the baseline, including a log whose record would be over the record limit, and 4 for the key file. `verify` exits 4 for the public key, and 1 (verification failed) for any limit in the record or in the `--ulog` log. `docs/LIMITS.md` gives the reason for each limit.
+Every input except the log's total size is bounded by the limits below, and an input over a limit is refused, never truncated. A message for a count or a size reads `... exceeds the input limit of N <unit> (SPEC B1.4)`; a message for a name, version, or length rule ends with a parenthesis that states the rule and cites SPEC B1.4. `seal` names the byte offset (log) or line (rules file, baseline) where it met the limit, except for counts over the whole log or one format (parameters at log start, `failsafe_flags` flag fields, events), file sizes, and TOML dotted-key depth, which name the file only. `seal` exits 3 for the log, the rules file, and the baseline, including a log whose record would be over the record limit (`seal --dry-run` writes no record and does not apply that limit), and 4 for the key file. `verify` exits 4 for the public key and reports any limit in the record or in the `--ulog` log as its first mismatch (exit 1). `docs/LIMITS.md` gives the reason for each limit.
 
 | Input | Limit |
 |---|---|
 | Log: ULog file format version | 0 or 1 |
 | Log: format nesting | 8 levels of nested types below a subscribed format |
 | Log: one flattened format | 65,535 bytes and 65,535 fields; array length 1 to 65,535 |
-| Log: fields across all format definitions | 1,000,000 |
+| Log: field definitions across all formats | 1,000,000 (a format with no fields counts as one) |
+| Log: format name, field name, field type name | 255 bytes |
 | Log: flattened fields across all subscriptions | 1,000,000 |
 | Log: flattened field name (with its nested prefixes and `[i]` index), subscription name | 255 bytes |
 | Log: parameter name | 1 to 16 letters, digits, `_` |
@@ -66,7 +67,7 @@ Every input is bounded by the limits below. An input over a limit is refused, ne
 | Baseline: parameters | 65,536 |
 | Record (`seal` output, `verify` input) | 512 MiB (536,870,912 bytes); JSON with at most 64 nested arrays and objects |
 
-The log has no size limit. It is read once, as a stream. The reader keeps the records the events and rules use (for example `vehicle_status`, `failsafe_flags`, commands and acks, warning messages, and parameter records) and hashes and drops every other record, so memory grows with the number of kept records: a log made mostly of them needs memory in proportion to its size. One limit truncates instead of refusing: R4, R5, R6, X2, and X3 list at most 1,000 `detail` lines, then one line `and N more; ...` that says where the rest are counted (the events, or for X3 its sample count). R3 lists every differing parameter (B1.6), at most 131,072 lines under the two parameter limits.
+The log has no size limit. It is read once, as a stream. The reader keeps format definitions, subscriptions, and the parameters at log start, each bounded by the limits above, and the data records the events and rules use (for example `vehicle_status`, `failsafe_flags`, commands and acks, warning messages, and data-section parameter records); it hashes and drops every other record. The number of kept data records has no limit, so memory grows with them: a log made mostly of them needs memory in proportion to its size. The detail cap limits output, not input: R4, R5, R6, X2, and X3 list at most 1,000 `detail` lines, then one line `and N more; ...` that says where the rest are counted (the events, or for X3 its sample count). R3 lists every differing parameter (B1.6), so at most the two parameter limits together.
 
 ### B1.5 What is extracted from the log
 
@@ -77,11 +78,12 @@ Supported: PX4 v1.14 through v1.17 ULog. Exact topic and field names per version
 - **Events (the timeline), each with a sequence number, boot-time microseconds, UTC microseconds when GPS time is available, and its source (topic, instance, message index):** UTC comes only from the first GPS sample (`vehicle_gps_position`, else `sensor_gps` instance 0) with `fix_type` of at least 2 and a nonzero `time_utc_usec`, never from `boot_time_utc_us` or a host clock.
   - ARM, DISARM: edges of `vehicle_status.arming_state == 2`, with the reason decoded from PX4's events enum. A log that starts armed reports ARM at its first sample, marked `initial`.
   - NAV_STATE_CHANGE (old, new): edges of `vehicle_status.nav_state`, with per-version names; the first sample is reported with `old` null.
-  - FAILSAFE_SET, FAILSAFE_CLEAR (flag name; from `failsafe_flags`): edges of `vehicle_status.failsafe`. Each edge names the `failsafe_flags` booleans (and `battery_warning` above 0) that are true at that moment and are either required by the current `nav_state` (the flag's `mode_req_*` bit is set) or were not true at the most recent ARM (the first `failsafe_flags` sample when no ARM precedes the edge); one event per named flag, or one event with flag `unattributed`. A log that starts in failsafe reports FAILSAFE_SET at its first sample, marked `initial`.
+  - FAILSAFE_SET, FAILSAFE_CLEAR (flag name; from `failsafe_flags`): edges of `vehicle_status.failsafe`. Each edge names the `failsafe_flags` booleans (and `battery_warning` above 0) that are true at that moment and are either required by the current `nav_state` (the flag's `mode_req_*` bit is set) or were not true at the most recent ARM (the latest `failsafe_flags` sample at or before that ARM; when there is none, or no ARM precedes the edge, the sample with the earliest timestamp); one event per named flag, or one event with flag `unattributed`. A log that starts in failsafe reports FAILSAFE_SET at its first sample, marked `initial`.
   - COMMAND (command id, source system and component, result from the matching `vehicle_command_ack`, or `NO_ACK`): the matching ack is the earliest unused ack with the same command id, a timestamp not before the command's and before the next identical command from the same source, and target system and component equal to the command's source; a final result is preferred over IN_PROGRESS.
   - VTOL_TRANSITION_START, VTOL_TRANSITION_END, VTOL_TRANSITION_ABORT (direction): from the VTOL state derived from `vehicle_status` (in transition to fixed wing, in transition to multicopter, fixed wing, multicopter). START when a transition state is entered; END on transition-to-fixed-wing then fixed wing, or transition-to-multicopter then multicopter; ABORT when a transition state is left any other way. A quadchute (fixed wing straight to multicopter) is not a transition; R4 reports it.
-  - QUADCHUTE (`vtol_fixed_wing_system_failure` true, false, or null when not logged): the VTOL state goes from fixed wing straight to multicopter without a transition state; the flag is the `failsafe_flags` value at that moment. R6 does not count it; R4 fails on it while armed.
-  - A `failsafe_flags` value "at that moment" (FAILSAFE_*, QUADCHUTE) comes from the latest `failsafe_flags` sample whose timestamp is at or before the `vehicle_status` sample's, in timestamp order whatever the file order; with no such sample the flag is null, and a FAILSAFE edge is `unattributed`.
+  - QUADCHUTE (`vtol_fixed_wing_system_failure` true, false, or null when not logged): the VTOL state goes from fixed wing straight to multicopter without a transition state; the flag is the `failsafe_flags` value at that moment. R6 does not count it; R4 fails on it in flight (B1.6).
+  - A `failsafe_flags` value "at that moment" (FAILSAFE_*, QUADCHUTE) comes from the latest `failsafe_flags` sample whose timestamp is at or before the `vehicle_status` sample's, in timestamp order whatever the file order, and among samples with that timestamp the one later in the file; with no such sample the flag is null, and a FAILSAFE edge is `unattributed`.
+  - Edges (ARM, DISARM, NAV_STATE_CHANGE, FAILSAFE_*, VTOL_*, QUADCHUTE) compare consecutive `vehicle_status` samples in file order; the timeline then orders the events as below.
   - PARAM_CHANGED_IN_FLIGHT (name, old, new): a data-section 'P' record whose value differs from the last known value of that parameter, between ARM and DISARM (ARM time < its time <= DISARM time, so the timeline shows it after ARM and before DISARM); its time is the last data timestamp before it. Firmware-written changes count like any other.
   - LOG_MESSAGE (flight stack messages at warning level or above): 'L' and 'C' records at levels 0 to 4 (emergency to warning), text kept verbatim. PX4 events (the `event` topic) are not decoded in v1.
   - LOG_DROPOUT (duration): an 'O' record, in milliseconds; its time is the last data timestamp before it.
@@ -98,7 +100,7 @@ Rules file format: TOML (Rust TOML tooling is actively maintained; the common Ru
 | R1 | Required topics present (the rules file lists them), each with at least one data record, plus the `vehicle_status` and `failsafe_flags` fields the core rules read | FAIL names each missing topic or `topic.field`; exit 2 |
 | R2 | Firmware matches baseline | FAIL shows expected and found |
 | R3 | Parameters match baseline, excluding the ignore list | FAIL lists every differing parameter with baseline and flown values |
-| R4 | No failsafe raised during flight: `vehicle_status.failsafe` never true between ARM and DISARM, and no quadchute (fixed wing straight to multicopter, B1.5) while armed | FAIL lists each flag and time, and each quadchute |
+| R4 | No failsafe raised during flight: `vehicle_status.failsafe` never true from ARM through the `vehicle_status` sample that disarms, and no quadchute (fixed wing straight to multicopter, B1.5) in that window | FAIL lists each flag and time, and each quadchute |
 | R5 | Arm and disarm consistency: every ARM has a DISARM, log does not end armed | FAIL names the unmatched event |
 | R6 | VTOL transitions completed: every start has an end, none aborted | N/A if the vehicle is not VTOL |
 
