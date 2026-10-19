@@ -289,7 +289,9 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
         assert_eq!(o.status.code(), Some(0), "{log}: {}", text(&o));
         let t = text(&o);
         assert!(
-            t.starts_with("EVALUATION KEY: not for operational use\nVERIFIED (record and log)"),
+            t.starts_with(
+                "EVALUATION KEY: not for operational use\nIntegrity: VERIFIED (record and log)"
+            ),
             "{t}"
         );
         let o = sfr(&["verify", &record, "--pubkey", &public]);
@@ -444,7 +446,7 @@ fn hostile_log_text_and_file_names_give_a_literal_report_and_a_working_verify_co
             .unwrap();
         assert_eq!(o.status.code(), Some(0), "{name}: {command}: {}", text(&o));
         assert!(
-            text(&o).contains("VERIFIED (record and log)"),
+            text(&o).contains("Integrity: VERIFIED (record and log)"),
             "{}",
             text(&o)
         );
@@ -859,7 +861,7 @@ fn mismatches_are_named_precisely() {
     let t = text(&o);
     assert!(
         t.contains(
-            "FAILED: event seq 2 (COMMAND) field `result`: sealed \"ACCEPTEE\", found \"ACCEPTED\""
+            "Integrity: FAILED: event seq 2 (COMMAND) field `result`: sealed \"ACCEPTEE\", found \"ACCEPTED\""
         ),
         "{t}"
     );
@@ -867,8 +869,9 @@ fn mismatches_are_named_precisely() {
     assert_eq!(o.status.code(), Some(1));
     // The record declares an evaluation key: the warning comes first even when it fails.
     assert!(
-        String::from_utf8_lossy(&o.stdout)
-            .starts_with("EVALUATION KEY: not for operational use\nFAILED: Merkle root mismatch"),
+        String::from_utf8_lossy(&o.stdout).starts_with(
+            "EVALUATION KEY: not for operational use\nIntegrity: FAILED: Merkle root mismatch"
+        ),
         "{}",
         text(&o)
     );
@@ -885,7 +888,7 @@ fn mismatches_are_named_precisely() {
         text(&j)
     );
     assert!(
-        text(&o).contains("FAILED: Merkle root mismatch"),
+        text(&o).contains("Integrity: FAILED: Merkle root mismatch"),
         "{}",
         text(&o)
     );
@@ -907,7 +910,8 @@ fn mismatches_are_named_precisely() {
     ]);
     assert_eq!(o.status.code(), Some(1));
     assert!(
-        text(&o).contains("FAILED: parameter MPC_XY_VEL_MAX: sealed f32:12, found f32:9.5"),
+        text(&o)
+            .contains("Integrity: FAILED: parameter MPC_XY_VEL_MAX: sealed f32:12, found f32:9.5"),
         "{}",
         text(&o)
     );
@@ -931,7 +935,7 @@ fn mismatches_are_named_precisely() {
     ]);
     assert_eq!(o.status.code(), Some(1), "{topic}");
     assert!(
-        text(&o).contains("FAILED: log digest mismatch: sha256 sealed"),
+        text(&o).contains("Integrity: FAILED: log digest mismatch: sha256 sealed"),
         "{}",
         text(&o)
     );
@@ -1037,4 +1041,79 @@ fn seal_key_sources_and_seal_time_are_checked() {
     let rec = std::fs::read_to_string(out.join("mc_flight_1.sfr")).unwrap();
     assert!(rec.contains("\"time_utc\":\"2026-10-18T15:00:00Z\""));
     assert!(rec.contains("\"key_custody\":\"file-evaluation\""));
+}
+
+/// `verify` reports integrity and the flight rules on separate lines: a record that verifies and
+/// whose rules failed is `Integrity: VERIFIED` and `Flight rules: FAIL (<ids>)`, exit 0, in text
+/// and in JSON.
+#[test]
+fn integrity_and_flight_rules_are_reported_apart() {
+    let record = "examples/reports/gz_x500_vision_hover.sfr";
+    let key = "examples/reports/sfr.pub";
+    let o = sfr(&["verify", record, "--pubkey", key]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let out = String::from_utf8_lossy(&o.stdout).to_string();
+    assert!(
+        out.starts_with(
+            "EVALUATION KEY: not for operational use\nIntegrity: VERIFIED (record)\nFlight rules: FAIL (R7)\n"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("\nstatus "), "{out}");
+    let o = sfr(&["verify", record, "--pubkey", key, "--json"]);
+    let json = String::from_utf8_lossy(&o.stdout).to_string();
+    for part in [
+        "\"integrity\": \"VERIFIED\"",
+        "\"flight_rules\": \"FAIL\"",
+        "\"R7\"",
+    ] {
+        assert!(json.contains(part), "{part} in {json}");
+    }
+    // A record whose rules all pass.
+    let o = sfr(&[
+        "verify",
+        "examples/reports/vtol_transition.sfr",
+        "--pubkey",
+        key,
+    ]);
+    assert!(
+        String::from_utf8_lossy(&o.stdout).contains("\nFlight rules: PASS\n"),
+        "{}",
+        text(&o)
+    );
+    // A record that fails its integrity check says nothing about its rules but that they are
+    // unknown.
+    let dir = scratch();
+    let sealed = std::fs::read_to_string(root().join(record)).unwrap();
+    let bad = dir.join("changed.sfr");
+    std::fs::write(&bad, sealed.replacen("\"command\":", "\"command\":1", 1)).unwrap();
+    let o = sfr(&["verify", bad.to_str().unwrap(), "--pubkey", key]);
+    assert_eq!(o.status.code(), Some(1));
+    let out = String::from_utf8_lossy(&o.stdout).to_string();
+    assert!(out.contains("\nIntegrity: FAILED: "), "{out}");
+    assert!(
+        out.ends_with("Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)\n"),
+        "{out}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Without `--pubkey` nothing is verified: exit 4, and the message says the signer is not checked
+/// against a trusted key, names the key the record claims, and says how to check it.
+#[test]
+fn verify_without_pubkey_says_the_signer_is_not_checked() {
+    let record = "examples/reports/vtol_transition.sfr";
+    let o = sfr(&["verify", record]);
+    assert_eq!(o.status.code(), Some(4));
+    assert!(o.stdout.is_empty(), "{}", text(&o));
+    let err = String::from_utf8_lossy(&o.stderr).to_string();
+    for part in [
+        "Signer: NOT CHECKED against a trusted key: no --pubkey was given, so nothing was verified.",
+        "the key the record names, sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f",
+        "through a channel you trust",
+        "sfr verify examples/reports/vtol_transition.sfr --pubkey <sfr.pub>",
+    ] {
+        assert!(err.contains(part), "{part} in {err}");
+    }
+    assert!(!err.contains("VERIFIED"), "{err}");
 }

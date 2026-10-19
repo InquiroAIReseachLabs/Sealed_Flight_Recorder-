@@ -322,8 +322,8 @@ async function verifyOnPage(page, record, pubkey, log) {
   };
 }
 
-// The FAILED line of a verify output, without the prefix.
-const failedLine = (text) => (/^FAILED: (.*)$/m.exec(text) || [])[1];
+// The Integrity: FAILED line of a verify output, without the prefix.
+const failedLine = (text) => (/^Integrity: FAILED: (.*)$/m.exec(text) || [])[1];
 
 // Peak resident memory of one Chromium, in MiB, by process type as Chromium reports it
 // (SystemInfo.getProcessInfo): "browser" (which also holds the page's Blob data), "renderer"

@@ -8,7 +8,7 @@ Only the record, `<name>.sfr`, is signed: the Ed25519 signature covers its Merkl
 
 ## What a seal proves
 
-A record that `sfr verify` reports VERIFIED proves that this record, signed by the key with this fingerprint, holds these rule results, this configuration and these events; with `--ulog`, that they match these log bytes (SHA-256 and BLAKE3 of the whole file) and that the embedded rules and baseline give the same results from them. The format is in [RECORD_FORMAT.md](RECORD_FORMAT.md).
+A record that `sfr verify` reports `Integrity: VERIFIED` proves that this record, signed by the key with this fingerprint, holds these rule results, this configuration and these events; with `--ulog`, that they match these log bytes (SHA-256 and BLAKE3 of the whole file) and that the embedded rules and baseline give the same results from them. The format is in [RECORD_FORMAT.md](RECORD_FORMAT.md).
 
 ## What a seal does not prove
 

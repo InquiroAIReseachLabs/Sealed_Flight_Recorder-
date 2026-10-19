@@ -41,6 +41,8 @@ pub struct Verified {
     pub crypto_crates: String,
     /// Sealed overall status.
     pub status: String,
+    /// The ids of the rules whose sealed result is FAIL, in rule-id order.
+    pub failed_rules: Vec<String>,
     /// Number of events.
     pub events: usize,
     /// Number of Merkle leaves.
@@ -81,6 +83,76 @@ pub fn check_record_size(len: usize) -> Result<(), String> {
         ))
     } else {
         Ok(())
+    }
+}
+
+/// The `Integrity:` line of `sfr verify`: the seal check alone, apart from the flight rules.
+pub fn integrity_line(v: &Verified) -> String {
+    format!(
+        "Integrity: VERIFIED ({})",
+        if v.deep { "record and log" } else { "record" }
+    )
+}
+
+/// The `Flight rules:` line of `sfr verify` for a record that verified: the sealed overall
+/// status, with the ids of the rules that failed.
+pub fn flight_rules_line(v: &Verified) -> String {
+    if v.failed_rules.is_empty() {
+        format!("Flight rules: {}", v.status)
+    } else {
+        format!("Flight rules: {} ({})", v.status, v.failed_rules.join(", "))
+    }
+}
+
+/// The `Flight rules:` line of `sfr verify` for a record that did not verify.
+pub const FLIGHT_RULES_UNKNOWN: &str = "Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)";
+
+/// What `sfr verify` prints for a record that verified, after any evaluation key line.
+pub fn verified_text(record_path: &str, v: &Verified) -> String {
+    format!(
+        "{}\n{}\nrecord    {record_path}\ncustody   {}\nkey       {}\ncrypto    {} (crate versions)\nsealed    {} (stated by the sealer, not checked)\nevents    {}\n",
+        integrity_line(v),
+        flight_rules_line(v),
+        v.custody.as_str(),
+        v.fingerprint,
+        v.crypto_crates,
+        v.time_utc,
+        v.events
+    )
+}
+
+/// The `Integrity:` line of `sfr verify` for a record that did not verify: the first mismatch.
+pub fn failed_line(m: &Mismatch) -> String {
+    format!("Integrity: FAILED: {}", m.first)
+}
+
+/// What `sfr verify` prints for a record that did not verify, after any evaluation key line:
+/// the first mismatch, up to 20 others, and the flight rules line.
+pub fn failed_text(m: &Mismatch) -> String {
+    let mut t = failed_line(m);
+    t.push('\n');
+    for other in m.also.iter().take(20) {
+        t.push_str(&format!("  also: {other}\n"));
+    }
+    if m.also.len() > 20 {
+        t.push_str(&format!("  and {} more\n", m.also.len() - 20));
+    }
+    t.push_str(FLIGHT_RULES_UNKNOWN);
+    t.push('\n');
+    t
+}
+
+/// The key fingerprint a record names (`seal.key_fingerprint`), read without verifying anything:
+/// only what the record claims. `None` when the record is not canonical or has no such field.
+pub fn claimed_key_fingerprint(bytes: &[u8]) -> Option<String> {
+    let spans = scan_canonical(bytes).ok()?;
+    let seal = spans.iter().find(|m| m.key == "seal")?;
+    match parse(bytes.get(seal.value.clone())?).ok()? {
+        Value::Object(m) => match m.get("key_fingerprint") {
+            Some(Value::Str(s)) => Some(s.clone()),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -254,14 +326,21 @@ fn standalone(
 
     // Leaf order (SPEC B1.7): results by rule id, events by sequence number.
     let mut last_id: Option<(char, u32)> = None;
+    let mut failed_rules = Vec::new();
     for r in results {
-        let id = match r {
-            Value::Object(m) => match m.get("id") {
-                Some(Value::Str(s)) => s.as_str(),
-                _ => "",
-            },
-            _ => "",
+        let (id, failed) = match r {
+            Value::Object(m) => (
+                match m.get("id") {
+                    Some(Value::Str(s)) => s.as_str(),
+                    _ => "",
+                },
+                m.get("status") == Some(&Value::str("FAIL")),
+            ),
+            _ => ("", false),
         };
+        if failed {
+            failed_rules.push(id.to_string());
+        }
         let Some(key) = rule_id_key(id) else {
             problems.push(format!("result id `{id}` is not a rule id"));
             break;
@@ -410,6 +489,7 @@ fn standalone(
         time_utc: string(seal, "time_utc")?.to_string(),
         crypto_crates: crates.join(", "),
         status: status.to_string(),
+        failed_rules,
         events: event_count,
         leaf_count,
         deep: false,

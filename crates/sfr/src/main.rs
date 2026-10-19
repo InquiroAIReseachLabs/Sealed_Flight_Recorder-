@@ -19,7 +19,10 @@ use sfr_core::params::{Baseline, parse_baseline};
 use sfr_core::record::dry_run_json;
 use sfr_core::rules::{Rules, parse_rules};
 use sfr_core::seal::{SealParams, format_utc, parse_seal_time, seal, this_tool};
-use sfr_core::verify::{MAX_RECORD_BYTES, VerifyError, check_record_size, verify};
+use sfr_core::verify::{
+    MAX_RECORD_BYTES, VerifyError, check_record_size, claimed_key_fingerprint, failed_text,
+    verified_text, verify,
+};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -666,14 +669,14 @@ fn verify_cmd(
             "--trust-anchor and --crl (certificate chains) are not available in this build; use --pubkey",
         ));
     }
-    let pub_path = a
-        .value("--pubkey")
-        .ok_or_else(|| usage("--pubkey <sfr.pub> is required"))?;
-    let public = parse_public_key_pem(&read_text(pub_path, "public key", exit_code::USAGE)?)
-        .map_err(|e| fail(exit_code::USAGE, format!("public key {pub_path}: {e}")))?;
     // One byte over the limit is read so that `verify` reports the oversize record as a
     // verification failure (exit 1) naming the limit, the same way for every oversize record.
     let record = read_capped(&record_path, "record", MAX_RECORD_BYTES as u64 + 1)?;
+    let Some(pub_path) = a.value("--pubkey") else {
+        return Err(no_pubkey(&record_path, &record));
+    };
+    let public = parse_public_key_pem(&read_text(pub_path, "public key", exit_code::USAGE)?)
+        .map_err(|e| fail(exit_code::USAGE, format!("public key {pub_path}: {e}")))?;
     let mut log_file = match a.value("--ulog") {
         Some(p) => Some(
             File::open(p)
@@ -698,6 +701,17 @@ fn verify_cmd(
                 json::pretty(
                     &Obj::new()
                         .field("verified", Value::Bool(true))
+                        .field("integrity", Value::str("VERIFIED"))
+                        .field("flight_rules", Value::str(v.status.clone()))
+                        .field(
+                            "failed_rules",
+                            Value::Array(
+                                v.failed_rules
+                                    .iter()
+                                    .map(|r| Value::str(r.clone()))
+                                    .collect(),
+                            ),
+                        )
                         .field("record", Value::str(record_path.clone()))
                         .field("deep", Value::Bool(v.deep))
                         .field("key_custody", Value::str(v.custody.as_str()))
@@ -714,16 +728,7 @@ fn verify_cmd(
                     t.push_str(EVALUATION_LINE);
                     t.push('\n');
                 }
-                t.push_str(&format!(
-                    "VERIFIED{}\nrecord    {record_path}\ncustody   {}\nkey       {}\ncrypto    {} (crate versions)\nsealed    {}\nstatus    {}\nevents    {}\n",
-                    if v.deep { " (record and log)" } else { " (record)" },
-                    v.custody.as_str(),
-                    v.fingerprint,
-                    v.crypto_crates,
-                    v.time_utc,
-                    v.status,
-                    v.events
-                ));
+                t.push_str(&verified_text(&record_path, &v));
                 t
             };
             write_out(stdout, &text)?;
@@ -734,6 +739,8 @@ fn verify_cmd(
                 json::pretty(
                     &Obj::new()
                         .field("verified", Value::Bool(false))
+                        .field("integrity", Value::str("FAILED"))
+                        .field("flight_rules", Value::str("UNKNOWN"))
                         .field("record", Value::str(record_path.clone()))
                         .field("deep", Value::Bool(deep))
                         .field(
@@ -761,19 +768,33 @@ fn verify_cmd(
                     t.push_str(EVALUATION_LINE);
                     t.push('\n');
                 }
-                t.push_str(&format!("FAILED: {}\n", m.first));
-                for other in m.also.iter().take(20) {
-                    t.push_str(&format!("  also: {other}\n"));
-                }
-                if m.also.len() > 20 {
-                    t.push_str(&format!("  and {} more\n", m.also.len() - 20));
-                }
+                t.push_str(&failed_text(&m));
                 t
             };
             write_out(stdout, &text)?;
             Ok(exit_code::RULE_FAIL)
         }
     }
+}
+
+/// `verify` without `--pubkey`: nothing is checked, because the record names its signing key
+/// only by fingerprint and its signature can be checked only with that key's public half. Says
+/// so, names the fingerprint the record claims, and says how to check the signer (exit 4).
+fn no_pubkey(record_path: &str, record: &[u8]) -> Failure {
+    let claimed = claimed_key_fingerprint(record).map_or_else(
+        || "the record's signing key".to_string(),
+        |fp| format!("the key the record names, {fp}"),
+    );
+    fail(
+        exit_code::USAGE,
+        format!(
+            "Signer: NOT CHECKED against a trusted key: no --pubkey was given, so nothing was verified.\n\
+             The signature can be checked only with the public half of {claimed}.\n\
+             To check who signed it, get the signer's public key (sfr.pub) from the signer through a channel you trust, \
+             confirm its fingerprint with them, and run:\n  \
+             sfr verify {record_path} --pubkey <sfr.pub>"
+        ),
+    )
 }
 
 // ---------------------------------------------------------------------------------------------

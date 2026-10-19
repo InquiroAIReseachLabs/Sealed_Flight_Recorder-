@@ -9,7 +9,7 @@ use crate::{SealOutput, VerifyOutput};
 use sfr_core::json::{Obj, Value, pretty};
 
 /// One mismatch, split into its parts. `text` is always the whole line `sfr verify` prints
-/// after `FAILED: ` or `also: `; the other parts are set where the kind has them.
+/// after `Integrity: FAILED: ` or `also: `; the other parts are set where the kind has them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mismatch {
     /// What changed (docs/SANDBOX.md, "Mismatch kinds"): `event`, `parameter`, `result`,
@@ -351,6 +351,17 @@ pub fn verify_json(v: &VerifyOutput) -> String {
             .field("cryptoCrates", s(|x| x.crypto_crates.clone()))
             .field("sealedUtc", s(|x| x.sealed_utc.clone()))
             .field("status", s(|x| x.status.clone()))
+            .field(
+                "failedRules",
+                summary.map_or(Value::Null, |x| {
+                    Value::Array(
+                        x.failed_rules
+                            .iter()
+                            .map(|r| Value::str(r.clone()))
+                            .collect(),
+                    )
+                }),
+            )
             .field(
                 "eventCount",
                 summary.map_or(Value::Null, |x| Value::count(x.events as u64)),
