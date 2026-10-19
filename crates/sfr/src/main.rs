@@ -41,7 +41,7 @@ const USAGE: &str = "usage:
   sfr seal <flight.ulg> --rules <rules.toml> --baseline <baseline.params>
            (--key-uri pkcs11:... | --key-uri tpm-sealed:<dir> | --key <sfr.key> --evaluation-only | --dry-run)
            [--out <dir>] [--seal-time <RFC3339>] [--allow-untested-version] [--json]
-  sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> [--crl <crl>]...)
+  sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> ([--crl <crl>]... | --no-crl-check))
              [--ulog <flight.ulg>] [--report <name.sfr.md>] [--require-hardware-key] [--json]
   sfr pubkey --key-uri (pkcs11:... | tpm-sealed:<dir>) [--json]
   sfr --version [--json]";
@@ -835,11 +835,34 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
 enum Trust {
     /// A public key file given with `--pubkey`.
     PublicKey([u8; 32]),
-    /// Trust anchors given with `--trust-anchor`, and CRLs given with `--crl`.
+    /// Trust anchors given with `--trust-anchor`, CRLs given with `--crl`, and whether
+    /// revocation is checked at all (`--no-crl-check` turns it off).
     Anchors {
         anchors: Vec<Vec<u8>>,
         crls: Vec<Vec<u8>>,
+        crl_check: certs::CrlCheck,
     },
+}
+
+/// The `trust` line of a record whose certificate chain reached an anchor, with a `crl` line for
+/// each CRL used, or the notice that revocation was not checked.
+fn chain_trust_line(ok: &certs::ChainOk) -> String {
+    if !ok.crl_check {
+        return format!(
+            "certificate chain to the trust anchor {} at the seal time; revocation NOT CHECKED (--no-crl-check): a revoked certificate would still verify",
+            ok.anchor
+        );
+    }
+    let mut t = format!(
+        "certificate chain to the trust anchor {} at the seal time; {} CRL(s) checked",
+        ok.anchor,
+        ok.crls.len()
+    );
+    for c in &ok.crls {
+        t.push_str("\ncrl       ");
+        t.push_str(&c.line());
+    }
+    t
 }
 
 fn verify_cmd(
@@ -850,10 +873,17 @@ fn verify_cmd(
     let a = Args::parse(
         args,
         &["--pubkey", "--ulog", "--trust-anchor", "--crl", "--report"],
-        &["--require-hardware-key", "--json"],
+        &["--require-hardware-key", "--no-crl-check", "--json"],
     )?;
     let record_path = a.one_positional("record")?.to_string();
     let json_out = a.flag("--json");
+    // The verifier's clock: certificates are judged at the record's claimed seal time, but a CRL's
+    // nextUpdate is judged here, because the claimed time says nothing about how current a CRL is.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| fail(exit_code::USAGE, format!("system clock: {e}")))
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))?;
+    let no_crl_check = a.flag("--no-crl-check");
     // The report to check: --report, or <name>.sfr.md beside <name>.sfr when it exists.
     let report_path = match a.value("--report") {
         Some(p) => {
@@ -876,8 +906,10 @@ fn verify_cmd(
             ));
         }
         (Some(pub_path), None) => {
-            if !crl_paths.is_empty() {
-                return Err(usage("--crl applies only to --trust-anchor"));
+            if !crl_paths.is_empty() || no_crl_check {
+                return Err(usage(
+                    "--crl and --no-crl-check apply only to --trust-anchor",
+                ));
             }
             Some(Trust::PublicKey(
                 parse_public_key_pem(&read_text(pub_path, "public key", exit_code::USAGE)?)
@@ -885,6 +917,19 @@ fn verify_cmd(
             ))
         }
         (None, Some(anchor_path)) => {
+            if no_crl_check && !crl_paths.is_empty() {
+                return Err(usage(
+                    "--no-crl-check and --crl contradict each other: give CRLs to check revocation, or --no-crl-check to skip it",
+                ));
+            }
+            if no_crl_check {
+                // To stderr as well as in the output: a verify that skips revocation must say so
+                // wherever it is read.
+                let _ = writeln!(
+                    io::stderr().lock(),
+                    "sfr: warning: --no-crl-check: revocation is NOT checked, so a record signed with a revoked certificate would verify"
+                );
+            }
             let anchors = certs::read_certificates(anchor_path, "trust anchor")
                 .map_err(|e| fail(exit_code::USAGE, e))?;
             let crls = crl_paths
@@ -892,11 +937,21 @@ fn verify_cmd(
                 .map(|p| certs::read_crl(p))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| fail(exit_code::USAGE, e))?;
-            Some(Trust::Anchors { anchors, crls })
+            Some(Trust::Anchors {
+                anchors,
+                crls,
+                crl_check: if no_crl_check {
+                    certs::CrlCheck::Off
+                } else {
+                    certs::CrlCheck::Required
+                },
+            })
         }
         (None, None) => {
-            if !crl_paths.is_empty() {
-                return Err(usage("--crl applies only to --trust-anchor"));
+            if !crl_paths.is_empty() || no_crl_check {
+                return Err(usage(
+                    "--crl and --no-crl-check apply only to --trust-anchor",
+                ));
             }
             None
         }
@@ -955,7 +1010,14 @@ fn verify_cmd(
     };
     // With a trust anchor, a record that verified must also chain to it at its seal time.
     let outcome = match (outcome, &trust) {
-        (Ok(v), Trust::Anchors { anchors, crls }) => {
+        (
+            Ok(v),
+            Trust::Anchors {
+                anchors,
+                crls,
+                crl_check,
+            },
+        ) => {
             let chained = claimed
                 .as_ref()
                 .and_then(|c| c.signer_certificate.as_deref())
@@ -965,7 +1027,7 @@ fn verify_cmd(
                     let chain = claimed
                         .as_ref()
                         .map_or(&[][..], |c| c.certificate_chain.as_slice());
-                    certs::check_chain(signer, chain, anchors, crls, seconds)
+                    certs::check_chain(signer, chain, anchors, crls, seconds, now, *crl_check)
                 });
             match chained {
                 Ok(ok) => Ok((v, Some(ok))),
@@ -1001,10 +1063,7 @@ fn verify_cmd(
             let (trust_line, custody_note) = match &chain {
                 None => (TRUST_PUBKEY.to_string(), "declared".to_string()),
                 Some(ok) => (
-                    format!(
-                        "certificate chain to the trust anchor {} at the seal time; {} CRL(s) checked",
-                        ok.anchor, ok.crls
-                    ),
+                    chain_trust_line(ok),
                     format!(
                         "declared; the key's certificate chains to the trust anchor {}",
                         ok.anchor
@@ -1045,6 +1104,31 @@ fn verify_cmd(
                         )
                         .field("key_custody", Value::str(v.custody.as_str()))
                         .field("key_custody_proven", Value::Bool(false))
+                        .field(
+                            "crl_check",
+                            chain
+                                .as_ref()
+                                .map_or(Value::Null, |c| Value::Bool(c.crl_check)),
+                        )
+                        .field(
+                            "crls",
+                            Value::Array(
+                                chain
+                                    .as_ref()
+                                    .map(|c| c.crls.as_slice())
+                                    .unwrap_or_default()
+                                    .iter()
+                                    .map(|c| {
+                                        Obj::new()
+                                            .field("issuer", Value::str(c.issuer.clone()))
+                                            .field("number", Value::str(c.number.clone()))
+                                            .field("this_update", Value::str(c.this_update.clone()))
+                                            .field("next_update", Value::str(c.next_update.clone()))
+                                            .build()
+                                    })
+                                    .collect(),
+                            ),
+                        )
                         .field("key_fingerprint", Value::str(v.fingerprint.clone()))
                         .field("crypto_crates", Value::str(v.crypto_crates.clone()))
                         .field("sealed_utc", Value::str(v.time_utc.clone()))

@@ -16,14 +16,23 @@
 #   inter.pem         intermediate CA, issued by root
 #   signer.pem        signer, issued by inter, code signing, valid 2026-01-01 to 2036-01-01
 #   signer_expired.pem   another signer, valid 2020-01-01 to 2021-01-01
+#   signer_lapsed.pem    another signer, valid 2025-02-01 to 2025-12-31: expired now, but inside
+#                        the validity of inter and root, so a seal time backdated into 2025 would
+#                        revive it if a verifier trusted the seal time
 #   signer_server.pem    another signer whose only extended key usage is server authentication
 #   signer_revoked.pem   another signer, revoked in inter.crl
-#   inter.crl         CRL issued by inter, listing signer_revoked.pem
+#   inter.crl         CRL issued by inter, number 1, listing signer_revoked.pem
+#   root.crl          CRL issued by root, number 1, listing nothing (inter is not revoked)
+#   inter_older.crl   CRL issued by inter, number 0, listing nothing: older than inter.crl
+#   inter_stale.crl   CRL issued by inter, number 0, listing nothing, valid 2025-06-01 to
+#                     2025-07-01: older than inter.crl and past its nextUpdate
+#   inter_same.crl    CRL issued by inter with the same number as inter.crl (1) and other content
+#   other_root.crl    CRL issued by the unrelated other_root, number 99, listing nothing
 set -euo pipefail
 export LC_ALL=C TZ=UTC
 
 # name|seed byte (the 32-byte seed repeats it)
-SEEDS="root|10 other_root|40 inter|20 signer|30 signer_expired|31 signer_server|32 signer_revoked|33"
+SEEDS="root|10 other_root|40 inter|20 signer|30 signer_expired|31 signer_server|32 signer_revoked|33 signer_lapsed|34"
 
 die() { echo "make_test_pki.sh: $*" >&2; exit 1; }
 command -v openssl > /dev/null || die "openssl 3 is required"
@@ -116,6 +125,7 @@ EOF
   issue signer_expired inter v3_signer 20200101000000Z 20210101000000Z
   issue signer_server inter v3_server 20260101000000Z 20360101000000Z
   issue signer_revoked inter v3_signer 20260101000000Z 20360101000000Z
+  issue signer_lapsed inter v3_signer 20250201000000Z 20251231000000Z
   # Revoke signer_revoked as of 2026-06-01, then a CRL by inter with fixed dates. Only
   # inter's entries go into inter's CRL.
   openssl ca -batch -config "$work/ca.cnf" -cert "$out/inter.pem" -keyfile "$work/inter.key" \
@@ -123,9 +133,21 @@ EOF
   sed -i -E 's/^R\t([0-9]+Z)\t[0-9]+Z,/R\t\1\t260601000000Z,/' "$work/index.txt"
   grep -v -E "CN=sfr test (root|other_root|inter)$" "$work/index.txt" > "$work/index.inter"
   mv "$work/index.inter" "$work/index.txt"
-  openssl ca -batch -config "$work/ca.cnf" -gencrl -cert "$out/inter.pem" \
-    -keyfile "$work/inter.key" -crlexts crl -crl_lastupdate 20260601000000Z \
-    -crl_nextupdate 20460101000000Z -out "$out/inter.crl" 2> /dev/null
+  cp "$work/index.txt" "$work/index.with_revoked"
+  : > "$work/index.empty"
+  # gencrl <issuer> <crl number, hex> <index file> <lastUpdate> <nextUpdate> <file>
+  gencrl() {
+    echo "$2" > "$work/crlnumber"
+    cp "$3" "$work/index.txt"
+    openssl ca -batch -config "$work/ca.cnf" -gencrl -cert "$out/$1.pem" -keyfile "$work/$1.key" \
+      -crlexts crl -crl_lastupdate "$4" -crl_nextupdate "$5" -out "$out/$6" 2> /dev/null
+  }
+  gencrl inter 01 "$work/index.with_revoked" 20260601000000Z 20460101000000Z inter.crl
+  gencrl root 01 "$work/index.empty" 20260601000000Z 20460101000000Z root.crl
+  gencrl inter 00 "$work/index.empty" 20260101000000Z 20460101000000Z inter_older.crl
+  gencrl inter 00 "$work/index.empty" 20250601000000Z 20250701000000Z inter_stale.crl
+  gencrl inter 01 "$work/index.empty" 20260601000000Z 20460101000000Z inter_same.crl
+  gencrl other_root 63 "$work/index.empty" 20260601000000Z 20460101000000Z other_root.crl
 }
 
 case "${1:-}" in
