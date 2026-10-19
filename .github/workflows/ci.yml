@@ -86,6 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           rustup toolchain install
+          rustup target add armv7-unknown-linux-musleabihf
           sudo apt-get update -q
           sudo apt-get install -y -q qemu-user-static
           # Run 32-bit ARM executables through QEMU, so the tests can start the armv7 sfr.
@@ -269,6 +270,7 @@ jobs:
             > playwright-install.log 2>&1 &
           browsers=$!
           rustup toolchain install
+          rustup target add wasm32-unknown-unknown
           name="wasm-bindgen-$WASM_BINDGEN_VERSION-x86_64-unknown-linux-musl"
           curl -sSfL -o "$RUNNER_TEMP/wb.tar.gz" \
             "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$WASM_BINDGEN_VERSION/$name.tar.gz"
@@ -317,8 +319,11 @@ jobs:
         target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, armv7-unknown-linux-musleabihf]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Install the pinned toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
+      - name: Install the pinned toolchain (rust-toolchain.toml) and this target
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          rustup target add "${{ matrix.target }}"
       # rust-lld and the target's own musl startup files; readelf shows no INTERP and no NEEDED,
       # file reports static. Two builds from clean must give identical bytes.
       - name: Build with rust-lld twice from clean; check static; compare binaries and tarballs
@@ -482,9 +487,17 @@ jobs:
           key="$RUNNER_TEMP/test-release.key" pub="$RUNNER_TEMP/test-release.pub"
           openssl genpkey -algorithm ed25519 -out "$key"
           openssl pkey -in "$key" -pubout -out "$pub"
-          scripts/release_sign.sh sign dist/SHA256SUMS "$key" --pubkey "$pub"
-          (cd dist && openssl pkeyutl -verify -pubin -inkey "$pub" -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig && sha256sum -c SHA256SUMS)
-          rm -f "$key" dist/SHA256SUMS.sig
+          # The signing script signs the GitHub release's list: the three tarballs and the three
+          # SBOMs (.github/workflows/release.yml), not the benchmark kit and the demo image.
+          version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          mkdir gh
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf; do
+            cp "dist/sfr-$version-$t.tar.gz" "dist/sfr-$version-$t.cdx.json" gh/
+          done
+          scripts/release_assemble.sh --set github gh > /dev/null
+          scripts/release_sign.sh sign gh/SHA256SUMS "$key" --pubkey "$pub"
+          (cd gh && openssl pkeyutl -verify -pubin -inkey "$pub" -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig && sha256sum --check --strict SHA256SUMS)
+          rm -f "$key"
           { echo "### SHA256SUMS (unsigned)"; echo; echo '```'; cat dist/SHA256SUMS; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:

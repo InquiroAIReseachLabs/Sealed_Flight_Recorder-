@@ -12,9 +12,11 @@
 #   4. Attacks, each of which must fail at the step that docs/RELEASE.md says catches it:
 #        a tarball changed after signing; SHA256SUMS changed after signing; a signature cut short;
 #        a signature from a different key; an attacker's own SHA256SUMS, signature and key (the
-#        signature verifies, the fingerprint does not match); a file the signed SHA256SUMS does not
-#        list (swapped in under another name); an extra file in a directory checked as a whole;
-#        a SHA256SUMS that lists a file twice with different sums.
+#        signature verifies, the fingerprint does not match); a self-consistent forged set whose key
+#        file differs from the repository's copy at the tag; a signed list that does not name the
+#        tarball next to it; a file the signed SHA256SUMS does not list (swapped in under another
+#        name); an extra file in a directory checked as a whole; a SHA256SUMS that lists a file
+#        twice with different sums.
 #
 # Usage: scripts/check_release_flow.sh
 set -euo pipefail
@@ -30,10 +32,15 @@ fingerprint() { openssl pkey -pubin -in "$1" -outform DER | sha256sum | cut -d' 
 # The two commands of docs/RELEASE.md, in a directory that holds the download. $1 is the public key file.
 verify_signature() { openssl pkeyutl -verify -pubin -inkey "$1" -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig > /dev/null 2>&1; }
 verify_files() { sha256sum --check --strict SHA256SUMS > /dev/null 2>&1; }
-verify_one() { sha256sum --check --strict --ignore-missing SHA256SUMS > /dev/null 2>&1; }
-# The whole check an engineer makes: key fingerprint, signature, checksums.
+# One downloaded tarball: the line of SHA256SUMS that names it must exist, exactly once, and match.
+verify_one() { local f="sfr-$version-x86_64-unknown-linux-musl.tar.gz" l
+  l="$(awk -v f="$f" '$2 == f' SHA256SUMS)"; [ -n "$l" ] && [ "$(printf '%s\n' "$l" | wc -l)" -eq 1 ] \
+    && [ -f "$f" ] && printf '%s\n' "$l" | sha256sum --check --strict - > /dev/null 2>&1; }
+# The whole check an engineer makes: the key file equals the one in the repository at the tag
+# ($t/repo-key stands for that copy), its fingerprint is the published one, the signature, the checksums.
 engineer() { # engineer <dir> <expected fingerprint> [all|one]
-  (cd "$1" && [ "$(fingerprint sfr-release.pub)" = "$2" ] && verify_signature sfr-release.pub && if [ "${3:-all}" = one ]; then verify_one; else verify_files; fi)
+  (cd "$1" && cmp -s sfr-release.pub "$t/repo-key" && [ "$(fingerprint sfr-release.pub)" = "$2" ] \
+    && verify_signature sfr-release.pub && if [ "${3:-all}" = one ]; then verify_one; else verify_files; fi)
 }
 
 # 1. CI side
@@ -52,6 +59,7 @@ cp "$ci/SHA256SUMS" "$founder/"
 openssl pkey -in "$t/release.key" -pubout -out "$t/sfr-release.pub"
 scripts/release_sign.sh sign "$founder/SHA256SUMS" "$t/release.key" --pubkey "$t/sfr-release.pub" > /dev/null
 published_fp="$(fingerprint "$t/sfr-release.pub")"
+cp "$t/sfr-release.pub" "$t/repo-key"
 
 # 3. Engineer side
 download() { # download <dir>: what the published release holds
@@ -84,6 +92,23 @@ download "$e"; (umask 077 && openssl genpkey -algorithm ed25519 -out "$t/other.k
 openssl pkeyutl -sign -inkey "$t/other.key" -rawin -in "$e/SHA256SUMS" -out "$e/SHA256SUMS.sig"
 must_fail "a signature from a different key, checked against the real key" "$e" "$published_fp"
 
+# release assets swapped for a self-consistent forged set (files, SHA256SUMS, signature and key all the
+# attacker's): the signature verifies against the forged key; the key file differs from the repository's copy
+download "$e"; echo tampered >> "$e/sfr-$version-x86_64-unknown-linux-musl.tar.gz"
+(cd "$e" && sha256sum "sfr-$version"-* > SHA256SUMS.new && mv SHA256SUMS.new SHA256SUMS)
+openssl pkeyutl -sign -inkey "$t/other.key" -rawin -in "$e/SHA256SUMS" -out "$e/SHA256SUMS.sig"
+openssl pkey -in "$t/other.key" -pubout -out "$e/sfr-release.pub"
+(cd "$e" && verify_signature sfr-release.pub && verify_files) || die "self-test setup: the forged set should be self-consistent"
+must_fail "a self-consistent forged set, key file differing from the repository's copy" "$e" "$(fingerprint "$e/sfr-release.pub")"
+
+# a signed SHA256SUMS that lists only the SBOM: the tarball sitting next to it was never checked
+download "$e"; mkdir "$e/one"; cp "$e/sfr-$version-x86_64-unknown-linux-musl.tar.gz" "$e/sfr-release.pub" "$e/one/"
+grep -F "sfr-$version-x86_64-unknown-linux-musl.cdx.json" "$ci/SHA256SUMS" > "$e/one/SHA256SUMS"
+openssl pkeyutl -sign -inkey "$t/release.key" -rawin -in "$e/one/SHA256SUMS" -out "$e/one/SHA256SUMS.sig"
+cp "$e/sfr-$version-x86_64-unknown-linux-musl.cdx.json" "$e/one/"
+(cd "$e/one" && verify_signature sfr-release.pub) || die "self-test setup: the short list should carry a good signature"
+must_fail "a signed list that does not name the tarball" "$e/one" "$published_fp" one
+
 # an attacker supplies their own files, signature and key: the signature verifies, the fingerprint does not
 download "$e"; echo tampered >> "$e/sfr-$version-x86_64-unknown-linux-musl.tar.gz"
 (cd "$e" && sha256sum "sfr-$version"-* > SHA256SUMS.new && mv SHA256SUMS.new SHA256SUMS)
@@ -110,4 +135,4 @@ must_fail "a file listed twice with different sums" "$e" "$published_fp"
 
 # no private key was written into the repository
 git -C "$repo" status --porcelain | grep -q -E '\.key$|release/' && die "the flow wrote a key or release file into the repository"
-echo "check_release_flow.sh: ok (honest release verifies; 8 attacks each fail where docs/RELEASE.md says)"
+echo "check_release_flow.sh: ok (honest release verifies; 10 attacks each fail where docs/RELEASE.md says)"

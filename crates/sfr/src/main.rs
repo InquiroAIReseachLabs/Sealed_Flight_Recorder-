@@ -33,6 +33,17 @@ const USAGE: &str = "usage:
   sfr verify <record.sfr> --pubkey <sfr.pub> [--ulog <flight.ulg>] [--require-hardware-key] [--json]
   sfr --version [--json]";
 
+/// A path as the output shows it. `Path::join` puts the platform's separator after a directory
+/// that was typed with `/`, which on Windows gives `try/out\file`; the output uses `/` throughout.
+fn shown(path: &Path) -> String {
+    with_slashes(&path.display().to_string(), std::path::MAIN_SEPARATOR)
+}
+
+/// `text` with every `separator` replaced by `/`.
+fn with_slashes(text: &str, separator: char) -> String {
+    text.replace(separator, "/")
+}
+
 /// Largest rules or baseline file read (real ones are a few kilobytes).
 const MAX_TEXT_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -257,15 +268,15 @@ fn keygen(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Resul
             &Obj::new()
                 .field("key_custody", Value::str(Custody::FileEvaluation.as_str()))
                 .field("fingerprint", Value::str(fp))
-                .field("private_key", Value::str(key_path.display().to_string()))
-                .field("public_key", Value::str(pub_path.display().to_string()))
+                .field("private_key", Value::str(shown(&key_path)))
+                .field("public_key", Value::str(shown(&pub_path)))
                 .build(),
         )
     } else {
         format!(
             "{EVALUATION_LINE}\nfingerprint  {fp}\nprivate key  {} (mode 0600)\npublic key   {}\n",
-            key_path.display(),
-            pub_path.display()
+            shown(&key_path),
+            shown(&pub_path)
         )
     };
     write_out(stdout, &text)?;
@@ -598,8 +609,8 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
     let text = if a.flag("--json") {
         json::pretty(
             &Obj::new()
-                .field("record", Value::str(out_path.display().to_string()))
-                .field("report", Value::str(report_path.display().to_string()))
+                .field("record", Value::str(shown(&out_path)))
+                .field("report", Value::str(shown(&report_path)))
                 .field("key_custody", Value::str(custody.as_str()))
                 .field("key_fingerprint", Value::str(sealed.fingerprint.clone()))
                 .field("merkle_root", Value::str(sfr_core::hex(&sealed.root)))
@@ -618,9 +629,9 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         t.push_str(&format!(
             "\n{:<10}{}\n{:<10}{}\n{:<10}{}\n{:<10}{} ({})\n{:<10}{}\n",
             "record",
-            out_path.display(),
+            shown(&out_path),
             "report",
-            report_path.display(),
+            shown(&report_path),
             "merkle",
             sfr_core::hex(&sealed.root),
             "key",
@@ -847,4 +858,33 @@ fn main() -> ExitCode {
 fn exit_with(code: i32) -> ExitCode {
     // Exit codes are 0 to 4, so the conversion cannot truncate.
     ExitCode::from(u8::try_from(code).unwrap_or(u8::MAX))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_windows_path_is_shown_with_forward_slashes() {
+        // The mixed path Windows gives for `--out try/out`: the typed `/`, then the joined `\`.
+        assert_eq!(
+            with_slashes("try/out\\vtol_transition.sfr", '\\'),
+            "try/out/vtol_transition.sfr"
+        );
+        assert_eq!(
+            with_slashes("C:\\work\\try\\keys\\sfr.key", '\\'),
+            "C:/work/try/keys/sfr.key"
+        );
+    }
+
+    #[test]
+    fn a_path_with_the_native_separator_only_is_unchanged() {
+        assert_eq!(with_slashes("try/out/a.sfr", '/'), "try/out/a.sfr");
+        assert_eq!(
+            shown(Path::new("try").join("out").join("a.sfr").as_path())
+                .matches('\\')
+                .count(),
+            0
+        );
+    }
 }

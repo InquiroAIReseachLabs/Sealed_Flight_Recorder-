@@ -52,6 +52,11 @@ flags=(
 )
 CARGO_ENCODED_RUSTFLAGS="$(IFS=$'\x1f'; printf '%s' "${flags[*]}")"
 export CARGO_ENCODED_RUSTFLAGS SFR_BUILD_COMMIT="$commit" CARGO_TARGET_DIR="$target_dir"
+# rust-toolchain.toml lists no cross targets, so this one is added on purpose.
+if command -v rustup > /dev/null && ! rustup target list --installed | grep -q -x -F wasm32-unknown-unknown; then
+  echo "build_engine.sh: the target wasm32-unknown-unknown is not installed: run  rustup target add wasm32-unknown-unknown" >&2
+  exit 1
+fi
 cargo build --release --locked -p sfr-wasm --target wasm32-unknown-unknown >&2
 
 rm -rf "$out"

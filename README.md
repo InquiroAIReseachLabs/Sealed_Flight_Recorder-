@@ -30,21 +30,22 @@ Evaluation release 0.1.0 (tag `v0.1.0`) is a pre-release at [github.com/InquiroA
    curl -fsSLO "$BASE/sfr-release.pub"
    ```
 
-2. Compare the key's fingerprint with the one in the Release files section below (and in [docs/RELEASE.md](docs/RELEASE.md), and anywhere else you trust). The signature proves only that the holder of this key signed `SHA256SUMS`, so stop here if the fingerprints differ. The post-release check runs this step and compares its output with the committed key:
+2. Check the release key. The first command fails unless the key you downloaded is byte for byte the key committed in this repository at the release tag, a second channel that someone who can only edit release files cannot change. Then compare every hex digit of the printed fingerprint with the one in the Release files section below and in [docs/RELEASE.md](docs/RELEASE.md), and anywhere else you trust. The signature proves only that the holder of this key signed `SHA256SUMS`, so stop here if anything differs. The post-release check runs this step and compares its output with the committed key:
 
    ```sh doc-release
+   curl -fsSL "https://raw.githubusercontent.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-/v$VERSION/release/sfr-release.pub" | cmp - sfr-release.pub
    FINGERPRINT="$(openssl pkey -pubin -in sfr-release.pub -outform DER | sha256sum | cut -d' ' -f1)"
    echo "release key fingerprint sha256:$FINGERPRINT"
    ```
 
-3. Verify the signature on `SHA256SUMS`, then the tarball against it. The first command prints `Signature Verified Successfully`; the second prints the tarball's name and `OK`, and fails if the tarball is not listed or does not match. The post-release check runs both:
+3. Verify the signature on `SHA256SUMS`, then your tarball against its line in it. The first command prints `Signature Verified Successfully`; the second prints the tarball's name and `OK`, and fails if `SHA256SUMS` has no line for your tarball or the line does not match. The `&&` stops the second command when the signature fails. The post-release check runs both:
 
    ```sh doc-release
-   openssl pkeyutl -verify -pubin -inkey sfr-release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
-   sha256sum --check --strict --ignore-missing SHA256SUMS
+   openssl pkeyutl -verify -pubin -inkey sfr-release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig &&
+     awk -v f="sfr-$VERSION-$TARGET.tar.gz" '$2 == f' SHA256SUMS | sha256sum --check --strict -
    ```
 
-4. Optionally check the build provenance attestation, which says which workflow (the release workflow of this repository) built this exact file from which tag. It needs the GitHub CLI (`gh`) logged in to GitHub. The post-release check runs it:
+4. Recommended: check the build provenance attestation, which says which workflow (the release workflow of this repository) built this exact file from which tag. It is a second witness, independent of the key above. It needs the GitHub CLI (`gh`) logged in to GitHub. The post-release check runs it:
 
    ```sh doc-release
    gh attestation verify "sfr-$VERSION-$TARGET.tar.gz" --repo InquiroAIReseachLabs/Sealed_Flight_Recorder- \
@@ -78,12 +79,20 @@ What the signature, the checksums and the attestation each prove, and what they 
 
 ### Path 2: build from source
 
-You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essential`), and [rustup](https://rustup.rs). `rust-toolchain.toml` pins the Rust version, and `cargo` installs it on the first build. The first build downloads the dependencies from crates.io; after that, `sfr` needs no network. CI builds and tests on Linux `x86_64`; other systems have not been tested.
+You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essential`; on Windows, the Visual Studio C++ Build Tools that rustup asks for, and Git for Windows, whose Git Bash runs the commands below). The first build downloads the dependencies from crates.io; after that, `sfr` needs no network. CI builds and tests on Linux `x86_64`; other systems have not been tested here.
 
-1. Get the source. Not run in CI, which tests the checkout it already has:
+0. Install Rust with rustup, unless `rustup` is already installed. `rust-toolchain.toml` pins Rust 1.97.0 with the `rustfmt` and `clippy` components and no other target, and the first `cargo build` in the checkout installs exactly that. Not run in CI, which installs the pinned toolchain its own way:
 
    ```sh doc-syntax
-   git clone https://github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-.git
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+   On Windows, download and run `rustup-init.exe` from [rustup.rs](https://rustup.rs) instead, then open a new Git Bash.
+
+1. Get the source. `--depth 1` leaves out the history; most of the download is the golden test logs in `testdata/`. Not run in CI, which tests the checkout it already has:
+
+   ```sh doc-syntax
+   git clone --depth 1 https://github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-.git
    cd Sealed_Flight_Recorder-
    ```
 
@@ -112,7 +121,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    events    22
    ```
 
-4. Change one field of a copy of that record. Verify names what no longer matches and exits 1:
+4. Change one field of a copy of that record, then verify the copy twice. First with the public key alone: verify can say only that the signed Merkle root no longer matches some leaf. Then with the log as well: verify reads the log again, finds the event that differs, and names the event, the field and both values. Each exits 1:
 
    ```sh doc-test
    mkdir -p try
@@ -125,6 +134,20 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    ```text doc-output
    EVALUATION KEY: not for operational use
    FAILED: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
+   exit 1
+   ```
+
+   ```sh doc-test
+   rc=0
+   target/release/sfr verify try/changed.sfr --pubkey examples/reports/sfr.pub \
+     --ulog testdata/sitl/v1.17.0/vtol_transition.ulg || rc=$?
+   echo "exit $rc"
+   ```
+
+   ```text doc-output
+   EVALUATION KEY: not for operational use
+   FAILED: event seq 1 (COMMAND) field `command`: sealed 311, found 211
+     also: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
    exit 1
    ```
 

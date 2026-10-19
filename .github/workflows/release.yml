@@ -102,8 +102,11 @@ jobs:
         target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, armv7-unknown-linux-musleabihf]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Install the pinned toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
+      - name: Install the pinned toolchain (rust-toolchain.toml) and this target
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          rustup target add "${{ matrix.target }}"
       # --locked in scripts/build_release.sh; rust-lld; the build paths are remapped; two builds
       # from clean must give identical bytes (scripts/check_reproducible.sh).
       - name: Build twice from clean, check static, compare binaries and tarballs
@@ -144,8 +147,11 @@ jobs:
         with:
           name: release-x86_64-unknown-linux-musl
           path: first
-      - name: Install the pinned toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
+      - name: Install the pinned toolchain (rust-toolchain.toml) and the x86_64 musl target
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
       - name: Build here and compare with the first runner's tarball
         run: |
           set -euo pipefail
@@ -289,12 +295,13 @@ jobs:
     if: ${{ needs.meta.outputs.dry_run == 'false' }}
     needs: [meta, assemble]
     runs-on: ubuntu-24.04
+    # The founder adds a required reviewer to this environment (docs/RELEASE.md): the job then
+    # waits until a person approves it, after checking the run's commit.
+    environment: release
     permissions:
       contents: write
       id-token: write
       attestations: write
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
@@ -311,6 +318,8 @@ jobs:
         with:
           subject-path: files/sfr-*.tar.gz
       - name: Each attestation is there and names the file
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           for f in files/sfr-*.tar.gz; do
@@ -320,6 +329,7 @@ jobs:
           done
       - name: Create the draft pre-release
         env:
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
