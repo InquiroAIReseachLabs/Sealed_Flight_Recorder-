@@ -201,6 +201,8 @@ pub struct VerifiedSummary {
     pub sealed_utc: String,
     /// The sealed overall status.
     pub status: String,
+    /// The ids of the rules whose sealed result is FAIL.
+    pub failed_rules: Vec<String>,
     /// The number of events.
     pub events: usize,
 }
@@ -220,7 +222,8 @@ pub struct VerifyRequest<'a> {
 pub struct VerifyOutput {
     /// SPEC B1.4: 0 VERIFIED, 1 verification failed.
     pub exit_code: i32,
-    /// `VERIFIED (record)`, `VERIFIED (record and log)`, or `FAILED: <first mismatch>`.
+    /// `Integrity: VERIFIED (record)`, `Integrity: VERIFIED (record and log)`, or
+    /// `Integrity: FAILED: <first mismatch>`.
     pub headline: String,
     /// What `sfr verify` prints on standard output, with the file name in place of the path.
     pub text: String,
@@ -645,28 +648,13 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
     match sfr_core::verify::verify(req.record.bytes, log, &crypto, &public, false) {
         Err(VerifyError::Io(e)) => Err(fail(exit_code::USAGE, format!("log: {e}"))),
         Ok(v) => {
-            let headline = format!(
-                "VERIFIED{}",
-                if v.deep {
-                    " (record and log)"
-                } else {
-                    " (record)"
-                }
-            );
+            let headline = sfr_core::verify::integrity_line(&v);
             let mut t = String::new();
             if v.custody == Custody::FileEvaluation {
                 t.push_str(EVALUATION_LINE);
                 t.push('\n');
             }
-            t.push_str(&format!(
-                "{headline}\nrecord    {record_path}\ncustody   {}\nkey       {}\ncrypto    {} (crate versions)\nsealed    {}\nstatus    {}\nevents    {}\n",
-                v.custody.as_str(),
-                v.fingerprint,
-                v.crypto_crates,
-                v.time_utc,
-                v.status,
-                v.events
-            ));
+            t.push_str(&sfr_core::verify::verified_text(record_path, &v));
             Ok(VerifyOutput {
                 exit_code: exit_code::OK,
                 headline,
@@ -678,6 +666,7 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
                     crypto_crates: v.crypto_crates,
                     sealed_utc: v.time_utc,
                     status: v.status,
+                    failed_rules: v.failed_rules,
                     events: v.events,
                 }),
                 mismatches: Vec::new(),
@@ -686,20 +675,13 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
         Err(VerifyError::Mismatch(m)) => {
             // SPEC B1.3: a record sealed with an evaluation key says so first, verified or not
             // (the custody of a record that fails is only what it claims).
-            let headline = format!("FAILED: {}", m.first);
+            let headline = sfr_core::verify::failed_line(&m);
             let mut t = String::new();
             if m.custody == Some(Custody::FileEvaluation) {
                 t.push_str(EVALUATION_LINE);
                 t.push('\n');
             }
-            t.push_str(&headline);
-            t.push('\n');
-            for other in m.also.iter().take(20) {
-                t.push_str(&format!("  also: {other}\n"));
-            }
-            if m.also.len() > 20 {
-                t.push_str(&format!("  and {} more\n", m.also.len() - 20));
-            }
+            t.push_str(&sfr_core::verify::failed_text(&m));
             Ok(VerifyOutput {
                 exit_code: exit_code::RULE_FAIL,
                 headline,

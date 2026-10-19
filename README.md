@@ -62,7 +62,7 @@ Evaluation release 0.1.0 (tag `v0.1.0`) is a pre-release at [github.com/InquiroA
    bin/sfr keygen --evaluation-only --out keys > /dev/null
    bin/sfr seal examples/sample/sample.ulg --rules examples/rules.default.toml \
      --baseline examples/sample/sample.params --key keys/sfr.key --evaluation-only --out out | grep -E '^(status|record)'
-   bin/sfr verify out/sample.sfr --pubkey keys/sfr.pub --ulog examples/sample/sample.ulg | grep -E '^(VERIFIED|status)'
+   bin/sfr verify out/sample.sfr --pubkey keys/sfr.pub --ulog examples/sample/sample.ulg | grep -E '^(Integrity|Flight rules)'
    ```
 
 6. Tamper, then verify. Change one parameter value in a copy of the record, and one byte of a copy of the log. Each verify exits 1 and says what no longer matches. The post-release check runs these commands and requires both exits to be 1:
@@ -102,7 +102,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    cargo build --release --locked
    ```
 
-3. Verify a record sealed earlier, against its log. `examples/reports/` holds four records sealed from golden SITL logs, with the public key `examples/reports/sfr.pub`:
+3. Verify a record sealed earlier, against its log. `examples/reports/` holds four records sealed from golden SITL logs, with the public key `examples/reports/sfr.pub`. `Integrity:` says whether the record and the log are unchanged since sealing; `Flight rules:` gives the rule results sealed in the record. They are separate: a record whose rules failed still verifies, and the exit code follows integrity only:
 
    ```sh doc-test
    target/release/sfr verify examples/reports/vtol_transition.sfr --pubkey examples/reports/sfr.pub \
@@ -111,13 +111,13 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
 
    ```text doc-output
    EVALUATION KEY: not for operational use
-   VERIFIED (record and log)
+   Integrity: VERIFIED (record and log)
+   Flight rules: PASS
    record    examples/reports/vtol_transition.sfr
    custody   file-evaluation
    key       sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f
    crypto    blake3 1.8.7, ed25519-dalek 3.0.0, sha2 0.11.1 (crate versions)
-   sealed    2026-10-18T15:00:00Z
-   status    PASS
+   sealed    2026-10-18T15:00:00Z (stated by the sealer, not checked)
    events    22
    ```
 
@@ -133,7 +133,8 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
 
    ```text doc-output
    EVALUATION KEY: not for operational use
-   FAILED: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
+   Integrity: FAILED: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
+   Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
    exit 1
    ```
 
@@ -146,8 +147,9 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
 
    ```text doc-output
    EVALUATION KEY: not for operational use
-   FAILED: event seq 1 (COMMAND) field `command`: sealed 311, found 211
+   Integrity: FAILED: event seq 1 (COMMAND) field `command`: sealed 311, found 211
      also: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
+   Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
    exit 1
    ```
 
@@ -183,13 +185,13 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
 
    ```sh doc-test
    target/release/sfr verify try/out/vtol_transition.sfr --pubkey try/keys/sfr.pub \
-     --ulog testdata/sitl/v1.17.0/vtol_transition.ulg | grep -E '^(EVALUATION|VERIFIED|status)'
+     --ulog testdata/sitl/v1.17.0/vtol_transition.ulg | grep -E '^(EVALUATION|Integrity|Flight rules)'
    ```
 
    ```text doc-output
    EVALUATION KEY: not for operational use
-   VERIFIED (record and log)
-   status    PASS
+   Integrity: VERIFIED (record and log)
+   Flight rules: PASS
    ```
 
 To seal your own log you need a rules file (start from `examples/rules.default.toml`) and a baseline: the parameter file QGroundControl exports, plus one line `# Firmware: <version>` ([docs/RULES.md](docs/RULES.md)). Not run in CI: it needs your files.
@@ -206,8 +208,8 @@ From `crates/sfr-core/src/lib.rs` (`exit_code`):
 
 | Exit | `sfr seal` | `sfr verify` |
 |---|---|---|
-| 0 | every rule PASS or N/A; record written | VERIFIED |
-| 1 | a rule FAIL; the record is still written | verification failed: the record, or the log with `--ulog`, does not match, or is over an input limit |
+| 0 | every rule PASS or N/A; record written | `Integrity: VERIFIED`, whatever the `Flight rules:` line says |
+| 1 | a rule FAIL; the record is still written | `Integrity: FAILED`: the record, or the log with `--ulog`, does not match, or is over an input limit |
 | 2 | a required topic or field is missing (R1 FAIL); the record is still written | not used |
 | 3 | the log, rules file or baseline is malformed, truncated, or over an input limit; nothing written | not used |
 | 4 | a usage, key or file error; nothing written | a usage, key or file error |

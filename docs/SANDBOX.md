@@ -89,15 +89,16 @@ When nothing was written: `{ sealed: false, exitCode: 3 or 4, message, text }`, 
 | `exitCode` | 0 VERIFIED, 1 verification failed, 4 the record, the public key or the log could not be used, or a file is over the limit (`message` says why) |
 | `verified` | `true` for exit 0 |
 | `checked` | `record`, or `record and log` |
-| `headline` | `VERIFIED (record)`, `VERIFIED (record and log)`, or `FAILED: <first mismatch>` |
+| `headline` | `Integrity: VERIFIED (record)`, `Integrity: VERIFIED (record and log)`, or `Integrity: FAILED: <first mismatch>` |
 | `text` | exactly what `sfr verify` prints, with the record's file name in place of its path; for exit 4, what it prints on standard error |
 | `message` | for exit 4, the reason; otherwise `null` |
 | `keyCustody` | the record's custody, or what a record that failed claims (`null` if unreadable) |
 | `keyFingerprint`, `cryptoCrates`, `sealedUtc`, `status`, `eventCount` | what a verified record says; `null` otherwise |
+| `failedRules` | for a verified record, the ids of the rules whose sealed result is FAIL (empty when `status` is `PASS`); `null` otherwise |
 | `mismatch` | the first mismatch, or `null` |
 | `mismatches` | every mismatch, the first first (the text lists at most 21) |
 
-**A mismatch.** Every field is present; a field the kind does not have is `null`. `text` is always the whole line `sfr verify` prints after `FAILED: ` or `also: `. `sealed` and `found` are the values exactly as that line prints them (a typed parameter such as `f32:12`, or the JSON of an event or result field).
+**A mismatch.** Every field is present; a field the kind does not have is `null`. `text` is always the whole line `sfr verify` prints after `Integrity: FAILED: ` or `also: `. `sealed` and `found` are the values exactly as that line prints them (a typed parameter such as `f32:12`, or the JSON of an event or result field).
 
 | Field | Value |
 |---|---|

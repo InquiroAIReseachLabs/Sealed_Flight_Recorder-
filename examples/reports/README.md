@@ -46,19 +46,19 @@ Each report gives the `sfr verify` command for a directory that holds the record
 ```sh doc-test
 for name in vtol_transition failsafe_gps_loss gz_quadtailsitter_transition gz_x500_vision_hover; do
   target/release/sfr verify "examples/reports/$name.sfr" --pubkey examples/reports/sfr.pub \
-    --ulog "testdata/sitl/v1.17.0/$name.ulg" | grep -E '^(VERIFIED|status)'
+    --ulog "testdata/sitl/v1.17.0/$name.ulg" | grep -E '^(Integrity|Flight rules)'
 done
 ```
 
 ```text doc-output
-VERIFIED (record and log)
-status    PASS
-VERIFIED (record and log)
-status    FAIL
-VERIFIED (record and log)
-status    PASS
-VERIFIED (record and log)
-status    FAIL
+Integrity: VERIFIED (record and log)
+Flight rules: PASS
+Integrity: VERIFIED (record and log)
+Flight rules: FAIL (R4)
+Integrity: VERIFIED (record and log)
+Flight rules: PASS
+Integrity: VERIFIED (record and log)
+Flight rules: FAIL (R7)
 ```
 
 `crates/sfr/tests/seal_verify.rs` checks that each report is exactly what its record renders to, that every fact in it comes from the record, and that each record verifies against its log. When a record or report format change makes that test fail, run `scripts/make_example_reports.sh` again and commit the new files.
