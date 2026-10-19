@@ -12,6 +12,8 @@ This is the evaluation release 0.1.0 process. The founder makes each release. CI
 | Signing script | `scripts/release_sign.sh` | Run by the founder, offline: `keygen`, `sign`, `verify`, and a self-test. |
 | Tests of the above | `scripts/check_release_flow.sh`, `scripts/check_release_hygiene.sh`, `scripts/check_workflows.sh` | The whole offline signing flow and eight attacks on it, the hygiene scan, and the rules every workflow must keep (actions pinned by commit, no secret, no signing in CI, only the draft job writes). |
 
+`rust-toolchain.toml` lists no cross targets, so a plain `cargo build --release --locked` installs only the host toolchain. The release workflow, the benchmark workflow, the armv7 and sandbox CI jobs, and `scripts/build_release.sh` and `scripts/build_engine.sh` each add (or ask for) the target they build with, `rustup target add <target>`.
+
 Every commit's CI run (`.github/workflows/ci.yml`) also builds the release files unsigned, as the `sfr-release-unsigned` artifact, and runs these checks:
 
 | Job | Script | What it checks |

@@ -40,6 +40,10 @@ esac
 for tool in cargo rustc git readelf file sha256sum tar gzip; do
   command -v "$tool" > /dev/null || die "$tool is required"
 done
+# rust-toolchain.toml lists no cross targets, so a plain build installs only the host's.
+if command -v rustup > /dev/null && ! rustup target list --installed | grep -q -x -F "$target"; then
+  die "the target $target is not installed: run  rustup target add $target"
+fi
 
 version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
 [ -n "$version" ] || die "no [workspace.package] version in Cargo.toml"

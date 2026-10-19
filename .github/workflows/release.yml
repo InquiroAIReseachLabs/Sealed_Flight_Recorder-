@@ -102,8 +102,11 @@ jobs:
         target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, armv7-unknown-linux-musleabihf]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Install the pinned toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
+      - name: Install the pinned toolchain (rust-toolchain.toml) and this target
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          rustup target add "${{ matrix.target }}"
       # --locked in scripts/build_release.sh; rust-lld; the build paths are remapped; two builds
       # from clean must give identical bytes (scripts/check_reproducible.sh).
       - name: Build twice from clean, check static, compare binaries and tarballs
@@ -144,8 +147,11 @@ jobs:
         with:
           name: release-x86_64-unknown-linux-musl
           path: first
-      - name: Install the pinned toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
+      - name: Install the pinned toolchain (rust-toolchain.toml) and the x86_64 musl target
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
       - name: Build here and compare with the first runner's tarball
         run: |
           set -euo pipefail

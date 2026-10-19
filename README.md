@@ -79,12 +79,20 @@ What the signature, the checksums and the attestation each prove, and what they 
 
 ### Path 2: build from source
 
-You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essential`), and [rustup](https://rustup.rs). `rust-toolchain.toml` pins the Rust version, and `cargo` installs it on the first build. The first build downloads the dependencies from crates.io; after that, `sfr` needs no network. CI builds and tests on Linux `x86_64`; other systems have not been tested.
+You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essential`; on Windows, the Visual Studio C++ Build Tools that rustup asks for, and Git for Windows, whose Git Bash runs the commands below). The first build downloads the dependencies from crates.io; after that, `sfr` needs no network. CI builds and tests on Linux `x86_64`; other systems have not been tested here.
 
-1. Get the source. Not run in CI, which tests the checkout it already has:
+0. Install Rust with rustup, unless `rustup` is already installed. `rust-toolchain.toml` pins Rust 1.97.0 with the `rustfmt` and `clippy` components and no other target, and the first `cargo build` in the checkout installs exactly that. Not run in CI, which installs the pinned toolchain its own way:
 
    ```sh doc-syntax
-   git clone https://github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-.git
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+   On Windows, download and run `rustup-init.exe` from [rustup.rs](https://rustup.rs) instead, then open a new Git Bash.
+
+1. Get the source. `--depth 1` leaves out the history; most of the download is the golden test logs in `testdata/`. Not run in CI, which tests the checkout it already has:
+
+   ```sh doc-syntax
+   git clone --depth 1 https://github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-.git
    cd Sealed_Flight_Recorder-
    ```
 
@@ -113,7 +121,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    events    22
    ```
 
-4. Change one field of a copy of that record. Verify names what no longer matches and exits 1:
+4. Change one field of a copy of that record, then verify the copy twice. First with the public key alone: verify can say only that the signed Merkle root no longer matches some leaf. Then with the log as well: verify reads the log again, finds the event that differs, and names the event, the field and both values. Each exits 1:
 
    ```sh doc-test
    mkdir -p try
@@ -126,6 +134,20 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    ```text doc-output
    EVALUATION KEY: not for operational use
    FAILED: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
+   exit 1
+   ```
+
+   ```sh doc-test
+   rc=0
+   target/release/sfr verify try/changed.sfr --pubkey examples/reports/sfr.pub \
+     --ulog testdata/sitl/v1.17.0/vtol_transition.ulg || rc=$?
+   echo "exit $rc"
+   ```
+
+   ```text doc-output
+   EVALUATION KEY: not for operational use
+   FAILED: event seq 1 (COMMAND) field `command`: sealed 311, found 211
+     also: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
    exit 1
    ```
 
