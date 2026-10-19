@@ -182,6 +182,8 @@ pub fn seal(
         }),
         key,
         seal_time,
+        // The page seals only the versions sfr is tested on.
+        allow_untested_version: false,
     };
     match crate::seal(request) {
         Ok(s) => Outcome {

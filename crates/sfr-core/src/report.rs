@@ -21,6 +21,10 @@ pub const EVALUATION_LINE: &str = "EVALUATION KEY: not for operational use";
 /// Report file extension, appended to the record's file stem (SPEC B1.8).
 pub const REPORT_EXTENSION: &str = "sfr.md";
 
+/// The report line of a record sealed with `--allow-untested-version` (schema 2).
+pub const UNTESTED_VERSION_LINE: &str = "**Untested PX4 version.** Sealed with `--allow-untested-version`: \
+sfr is tested on PX4 v1.14 to v1.17 logs only, and this log's version is outside them or could not be read.";
+
 /// Hex digits of a sealed topic digest shown in the report.
 pub const DIGEST_PREFIX_LEN: usize = 16;
 
@@ -266,6 +270,11 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         escape(&s(tool, "version", "tool")?),
         escape(&record_file_name(&file_name)),
     ));
+    // Schema 2: a log sealed although its PX4 version is one sfr is not tested on.
+    if seal.get("allow_untested_version") == Some(&Value::Bool(true)) {
+        out.push_str(UNTESTED_VERSION_LINE);
+        out.push_str("\n\n");
+    }
 
     // Rules.
     out.push_str("## Rules\n\n");

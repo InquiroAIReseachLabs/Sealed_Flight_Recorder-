@@ -40,7 +40,7 @@ A schema 1 record holds exactly these thirteen fields, no more and no fewer (`RE
 | `merkle` | object | `algorithm`, `leaf_count`, `root` |
 | `results` | array | one result per rule, in rule-id order |
 | `rules` | object | the rules file: `sha256`, `text` |
-| `schema_version` | integer | `1` |
+| `schema_version` | integer | `2`; `sfr` still verifies `1`, the schema before `seal.allow_untested_version` |
 | `seal` | object | who sealed, when, and how the key is held |
 | `sealed_topics` | array | one digest per instance of each sealed topic; empty without `[sealed_topics]` |
 | `signature` | object | `algorithm`, `value` |
@@ -55,6 +55,7 @@ A schema 1 record holds exactly these thirteen fields, no more and no fewer (`RE
 
 | Member | Value |
 |---|---|
+| `allow_untested_version` | schema 2 only: `true` when the log's PX4 version is outside v1.14 to v1.17, or could not be read, and `seal` sealed it because it was given `--allow-untested-version` (the report then says so); `false` otherwise |
 | `certificate_chain` | `null`, or, beside a signer certificate, an array of the intermediate CA certificates given with `seal --chain`, nearest the signer first, each the standard base64 (RFC 4648, padded) of its DER |
 | `crypto_crates` | array of `{"name": ..., "version": ...}`, one per crate that computed the record, sorted by name: `blake3`, `ed25519-dalek`, `sha2` with their crate versions (`RUSTCRYPTO_CRATES` in `crates/sfr-core/src/crypto.rs`) |
 | `key_custody` | `pkcs11-token`, `tpm-sealed` or `file-evaluation` (below) |
@@ -168,7 +169,7 @@ The signed payload is, byte for byte (`signed_payload` in `crates/sfr-core/src/s
 |---|---|
 | ASCII `SFR-RECORD-V1` | the domain separation prefix |
 | `0x00` | a separator |
-| `0x00 0x00 0x00 0x01` | `schema_version` as a 4-byte big-endian unsigned integer |
+| `0x00 0x00 0x00 0x02` | `schema_version` as a 4-byte big-endian unsigned integer (`0x01` for a schema 1 record) |
 | the Merkle root | its raw bytes, not hex |
 
 The signature is Ed25519 (RFC 8032, pure Ed25519, no prehash) over that payload, stored as the lowercase hex of its raw bytes. `sfr` checks it with `ed25519-dalek`'s `verify_strict`, which also refuses the weak public keys and malleable signature forms that RFC 8032 verification alone accepts. `seal` verifies every signature it makes before it writes anything, so a record it writes always passes `verify_strict`; a verifier that is less strict accepts everything `sfr` accepts, and possibly more.
@@ -182,7 +183,7 @@ The signature is Ed25519 (RFC 8032, pure Ed25519, no prehash) over that payload,
 `sfr verify --pubkey <sfr.pub>` (standalone) checks, in this order (`standalone` in `crates/sfr-core/src/verify.rs`):
 
 1. The size is at most `MAX_RECORD_BYTES`.
-2. `schema_version` is `1`. A verifier must reject any other value and must never guess; `sfr` reports an unknown version as such when the file parses within the value subset, even if it is not canonical, and otherwise reports the parse error.
+2. `schema_version` is `1` or `2`. A verifier must reject any other value and must never guess; `sfr` reports an unknown version as such when the file parses within the value subset, even if it is not canonical, and otherwise reports the parse error.
 3. The bytes are canonical, and the object holds exactly the thirteen fields.
 4. Every `results` element is an object whose `id` is a rule id (above), in strictly increasing order; every `sealed_topics` element is an object with a string `topic` and an integer `multi_id`, in strictly increasing order; event `i` has the integer `seq` `i`.
 5. `merkle` holds exactly its three members, its algorithm is `sha256-rfc6962`, its `leaf_count` and `root` equal the ones recomputed from the leaves.
@@ -296,7 +297,8 @@ root=$(grep -o '"merkle":{"algorithm":"sha256-rfc6962","leaf_count":[0-9]*,"root
 sig=$(grep -o '"signature":{"algorithm":"ed25519","value":"[0-9a-f]\{128\}"}' "$rec" | sed 's/.*"value":"\([0-9a-f]*\)".*/\1/')
 unhex() { printf '%b' "$(printf '%s' "$1" | sed 's/../\\x&/g')"; }
 mkdir -p try
-{ printf 'SFR-RECORD-V1\000\000\000\000\001'; unhex "$root"; } > try/payload.bin
+version=$(grep -o '"schema_version":[0-9]*' "$rec" | cut -d: -f2)
+{ printf 'SFR-RECORD-V1\000\000\000\000'; printf "\\$(printf '%03o' "$version")"; unhex "$root"; } > try/payload.bin
 unhex "$sig" > try/signature.bin
 wc -c < try/payload.bin
 openssl pkeyutl -verify -pubin -inkey examples/reports/sfr.pub -rawin -in try/payload.bin -sigfile try/signature.bin
@@ -360,14 +362,14 @@ def mth(h):  # RFC 6962 Merkle tree hash of leaf hashes
 def check(path):
     raw = open(path, "rb").read()
     r = json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_float=no_float, parse_constant=no_float)
-    if r.get("schema_version") != 1:
-        return "unknown schema_version %r; this checker knows only 1" % r.get("schema_version")
+    if r.get("schema_version") not in (1, 2):
+        return "unknown schema_version %r; this checker knows 1 and 2" % r.get("schema_version")
     if jcs(r).encode("utf-8") != raw:
         return "not in canonical form"
     fields = {"schema_version", "tool", "seal", "log", "config", "baseline", "rules", "results",
               "sealed_topics", "events", "status", "merkle", "signature"}
     if set(r) != fields:
-        return "fields differ from schema 1: %s" % sorted(set(r) ^ fields)
+        return "fields differ from the schema: %s" % sorted(set(r) ^ fields)
     obj = lambda v, *keys: isinstance(v, dict) and all(k in v for k in keys)
     if not (obj(r["seal"], "key_custody", "key_fingerprint", "time_utc", "crypto_crates")
             and obj(r["merkle"]) and obj(r["signature"], "value") and obj(r["rules"], "text", "sha256")
@@ -398,6 +400,8 @@ def check(path):
         return "status disagrees with the results"
     if seal["key_custody"] not in ("pkcs11-token", "tpm-sealed", "file-evaluation"):
         return "unknown key custody"
+    if (r["schema_version"] == 2) != isinstance(seal.get("allow_untested_version"), bool):
+        return "seal.allow_untested_version must be a boolean in schema 2 and absent in schema 1"
     context = {"schema_version": r["schema_version"], "tool": r["tool"], "seal": r["seal"]}
     leaves = [context, r["log"], r["config"], r["baseline"], r["rules"]]
     leaves += r["results"] + r["sealed_topics"] + r["events"]

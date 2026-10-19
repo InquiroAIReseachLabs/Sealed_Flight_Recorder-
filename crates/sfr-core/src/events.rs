@@ -299,7 +299,13 @@ pub fn reason_name(reason: u8, fw: &Firmware) -> Option<&'static str> {
 }
 
 fn supported_series(fw: &Firmware) -> Option<(u8, u8)> {
-    fw.series().filter(|s| (1, 14) <= *s && *s <= (1, 17))
+    let (low, high) = crate::TESTED_PX4_SERIES;
+    fw.series().filter(|s| low <= *s && *s <= high)
+}
+
+/// Whether `sfr` is tested on this firmware: a PX4 version it can read, v1.14 to v1.17.
+pub fn tested_firmware(fw: &Firmware) -> bool {
+    supported_series(fw).is_some()
 }
 
 /// NAVIGATION_STATE_* names per version (PX4 `VehicleStatus.msg`). `None` outside v1.14 to v1.17.

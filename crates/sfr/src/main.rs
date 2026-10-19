@@ -40,7 +40,7 @@ const USAGE: &str = "usage:
   sfr keygen --tpm-sealed --out <dir> [--tpm-parent <handle>] [--tpm-pcrs <bank:list>] [--json]
   sfr seal <flight.ulg> --rules <rules.toml> --baseline <baseline.params>
            (--key-uri pkcs11:... | --key-uri tpm-sealed:<dir> | --key <sfr.key> --evaluation-only | --dry-run)
-           [--out <dir>] [--seal-time <RFC3339>] [--json]
+           [--out <dir>] [--seal-time <RFC3339>] [--allow-untested-version] [--json]
   sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> [--crl <crl>]...)
              [--ulog <flight.ulg>] [--report <name.sfr.md>] [--require-hardware-key] [--json]
   sfr pubkey --key-uri (pkcs11:... | tpm-sealed:<dir>) [--json]
@@ -538,7 +538,12 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             "--out",
             "--seal-time",
         ],
-        &["--dry-run", "--json", "--evaluation-only"],
+        &[
+            "--dry-run",
+            "--json",
+            "--evaluation-only",
+            "--allow-untested-version",
+        ],
     )?;
     let log = a.one_positional("log file")?.to_string();
     let rules_path = a
@@ -666,23 +671,18 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             }
         })?;
     let eval = evaluate(&ing, &rules, &baseline);
-    let mut stderr = io::stderr().lock();
-    if ing
-        .identity
-        .firmware
-        .series()
-        .is_none_or(|s| !((1, 14)..=(1, 17)).contains(&s))
-    {
-        let _ = writeln!(
-            stderr,
-            "sfr: note: log {log}: firmware {} is outside the supported range PX4 v1.14 to v1.17; \
-             version-dependent names are null",
-            ing.identity
-                .firmware
-                .version
-                .as_deref()
-                .unwrap_or("unknown")
-        );
+    // seal.allow_untested_version is true only for a log sealed because of the flag.
+    let untested = !sfr_core::events::tested_firmware(&ing.identity.firmware);
+    let allow_untested = a.flag("--allow-untested-version") && untested;
+    if untested {
+        let (refusal, warning) =
+            sfr_core::seal::untested_version_messages(&log, &ing.identity.firmware);
+        if !a.flag("--allow-untested-version") {
+            // SPEC B1.5: sfr is tested on PX4 v1.14 to v1.17 only; anything else needs consent,
+            // and the record says it was given.
+            return Err(fail(exit_code::USAGE, refusal));
+        }
+        let _ = writeln!(io::stderr().lock(), "{warning}");
     }
 
     let Some(key) = key else {
@@ -720,6 +720,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         time_utc,
         signer_certificate,
         certificate_chain,
+        allow_untested_version: allow_untested,
     };
     let sealed = seal(
         &ing,

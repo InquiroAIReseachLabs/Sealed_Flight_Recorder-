@@ -9,6 +9,7 @@
 //! parameter with its sealed and found values, an event sequence number and field, a result
 //! and field, or "log digest mismatch".
 
+#[cfg(test)]
 use crate::SCHEMA_VERSION;
 use crate::crypto::{CryptoBackend, Custody, Sha256Stream};
 use crate::evaluate::evaluate;
@@ -237,6 +238,16 @@ pub fn claimed_key_fingerprint(bytes: &[u8]) -> Option<String> {
     claimed_seal(bytes).and_then(|c| c.fingerprint)
 }
 
+/// What a verifier says about a schema version it does not know.
+const KNOWN_SCHEMAS: &str = "this verifier knows schema 1 and 2";
+
+/// The schema version, if it is one this verifier knows (`crate::KNOWN_SCHEMA_VERSIONS`).
+fn known_schema(v: i64) -> Option<u32> {
+    u32::try_from(v)
+        .ok()
+        .filter(|v| crate::KNOWN_SCHEMA_VERSIONS.contains(v))
+}
+
 /// The sort key of a rule id: its letter, then its number (`R2` < `R10` < `X1`).
 fn rule_id_key(id: &str) -> Option<(char, u32)> {
     let mut chars = id.chars();
@@ -306,10 +317,10 @@ fn standalone(
             // when its record is not in this version's canonical form.
             if let Ok(Value::Object(m)) = parse(bytes) {
                 match m.get("schema_version") {
-                    Some(Value::Int(v)) if *v == i64::from(SCHEMA_VERSION) => {}
+                    Some(Value::Int(v)) if known_schema(*v).is_some() => {}
                     Some(other) => {
                         return Err(fail(format!(
-                            "unknown schema_version {}; this verifier knows only {SCHEMA_VERSION}",
+                            "unknown schema_version {}; {KNOWN_SCHEMAS}",
                             canonical(other)
                         )));
                     }
@@ -327,19 +338,19 @@ fn standalone(
         }
     };
     let find = |k: &str| spans.iter().find(|m| m.key == k);
-    match find("schema_version")
+    let schema = match find("schema_version")
         .map(|m| member(bytes, &m.value))
         .transpose()?
     {
-        Some(Value::Int(v)) if v == i64::from(SCHEMA_VERSION) => {}
+        Some(Value::Int(v)) if known_schema(v).is_some() => known_schema(v).unwrap_or(1),
         Some(other) => {
             return Err(fail(format!(
-                "unknown schema_version {}; this verifier knows only {SCHEMA_VERSION}",
+                "unknown schema_version {}; {KNOWN_SCHEMAS}",
                 canonical(&other)
             )));
         }
         None => return Err(fail("record has no schema_version")),
-    }
+    };
     for m in &spans {
         if !RECORD_FIELDS.contains(&m.key.as_str()) {
             return Err(fail(format!("unknown field `{}`", m.key)));
@@ -539,12 +550,27 @@ fn standalone(
     let signed_root = hex_decode::<32>(recorded_root);
     match (sig, signed_root) {
         (Some(sig), Some(r)) => {
-            if !crypto.ed25519_verify(public_key, &signed_payload(SCHEMA_VERSION, &r), &sig) {
+            if !crypto.ed25519_verify(public_key, &signed_payload(schema, &r), &sig) {
                 problems.push("signature does not verify".to_string());
             }
         }
         _ => problems
             .push("signature or Merkle root is not lowercase hex of the right length".to_string()),
+    }
+
+    // seal.allow_untested_version: a boolean in schema 2, absent in schema 1.
+    match (schema, seal.get("allow_untested_version")) {
+        (1, None) | (2.., Some(Value::Bool(_))) => {}
+        (1, Some(_)) => {
+            return Err(fail(
+                "`seal.allow_untested_version` is not a schema 1 field",
+            ));
+        }
+        _ => {
+            return Err(fail(
+                "`seal.allow_untested_version` must be true or false in schema 2",
+            ));
+        }
     }
 
     // Signer certificate and chain: null, or standard base64 (the DER is checked by
@@ -933,6 +959,7 @@ mod tests {
             time_utc: "2026-10-18T15:00:00Z".into(),
             signer_certificate: None,
             certificate_chain: Vec::new(),
+            allow_untested_version: false,
         };
         let sealed = seal(&ing, &eval, &rules, &baseline, &params, &TestBackend, &key).unwrap();
         (log, sealed.bytes, key)
@@ -1080,6 +1107,7 @@ mod tests {
             time_utc: "2026-10-18T15:00:00Z".into(),
             signer_certificate: None,
             certificate_chain: Vec::new(),
+            allow_untested_version: false,
         };
         let sealed = seal(&ing, &eval, &rules, &baseline, &params, &TestBackend, &key).unwrap();
         let pk = key.public_key();

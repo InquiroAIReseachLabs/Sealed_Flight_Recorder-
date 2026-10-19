@@ -210,6 +210,34 @@ pub struct SealParams {
     /// Intermediate CA certificates (DER), given with `seal --chain`, nearest the signer first.
     /// Recorded as `seal.certificate_chain`, each base64; null when empty.
     pub certificate_chain: Vec<Vec<u8>>,
+    /// True when the log's PX4 version is one `sfr` is not tested on (or cannot read) and it was
+    /// sealed only because of `seal --allow-untested-version`. Recorded as
+    /// `seal.allow_untested_version` (schema 2).
+    pub allow_untested_version: bool,
+}
+
+/// What `seal` says about a log whose PX4 version `sfr` is not tested on
+/// ([`crate::events::tested_firmware`] false): the refusal without `--allow-untested-version`,
+/// and the warning with it.
+pub fn untested_version_messages(
+    log: &str,
+    firmware: &crate::ingest::Firmware,
+) -> (String, String) {
+    let what = firmware.version.as_deref().map_or_else(
+        || "the log does not give a PX4 version sfr can read".to_string(),
+        |v| format!("PX4 firmware {v} is outside v1.14 to v1.17"),
+    );
+    (
+        format!(
+            "log {log}: {what}, and sfr is tested on PX4 v1.14 to v1.17 only; nothing written. \
+             To seal it anyway, add --allow-untested-version: the record and its report will say so, \
+             and version-dependent names in its events are left empty"
+        ),
+        format!(
+            "sfr: warning: log {log}: {what}, and sfr is tested on PX4 v1.14 to v1.17 only; \
+             sealed under --allow-untested-version, and version-dependent names are null"
+        ),
+    )
 }
 
 /// A sealed record.
@@ -256,6 +284,10 @@ pub fn seal(
         "seal".to_string(),
         Obj::new()
             .field("time_utc", Value::str(params.time_utc.clone()))
+            .field(
+                "allow_untested_version",
+                Value::Bool(params.allow_untested_version),
+            )
             .field("key_fingerprint", Value::str(fp.clone()))
             .field("key_label", Value::str(signer.label()))
             .field("key_custody", Value::str(signer.custody().as_str()))

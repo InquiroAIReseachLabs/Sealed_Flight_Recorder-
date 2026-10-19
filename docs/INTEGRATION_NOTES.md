@@ -4,7 +4,7 @@ How `sfr` fits into a flight operation: which parts of a PX4 log it reads, how t
 
 ## What `sfr` reads from a log
 
-`sfr` reads a PX4 ULog file (PX4 v1.14 to v1.17; tested on v1.14.4 and v1.17.0 logs; other versions are accepted with a warning but not tested, [RULES.md](RULES.md)) once, as a stream, and hashes every byte. The decoders are in `crates/sfr-core/src/ingest.rs`; [RULES.md](RULES.md) says which rule reads what.
+`sfr` reads a PX4 ULog file (PX4 v1.14 to v1.17; tested on v1.14.4 and v1.17.0 logs; other versions are refused unless sealed with `--allow-untested-version`, which the record and report then state, [RULES.md](RULES.md)) once, as a stream, and hashes every byte. The decoders are in `crates/sfr-core/src/ingest.rs`; [RULES.md](RULES.md) says which rule reads what.
 
 | Topic | Fields | Why | Needed |
 |---|---|---|---|

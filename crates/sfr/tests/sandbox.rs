@@ -76,6 +76,7 @@ fn sandbox_seal(
     log: &str,
     rules: &str,
     baseline: Option<&str>,
+    allow_untested_version: bool,
 ) -> Result<sfr_wasm::SealOutput, sfr_wasm::Failure> {
     let log_bytes = read(dir, log);
     let rules_bytes = read(dir, rules);
@@ -99,35 +100,45 @@ fn sandbox_seal(
             bytes: &key,
         }),
         seal_time: SEAL_TIME,
+        allow_untested_version,
     })
 }
 
 /// The CLI's seal in `dir`, writing into `dir/cli/`. Its stdout names `cli/<name>`; the sandbox
 /// names `<name>`.
-fn cli_seal(dir: &Path, log: &str, rules: &str, baseline: &str) -> Output {
+fn cli_seal(dir: &Path, log: &str, rules: &str, baseline: &str, allow_untested: bool) -> Output {
+    let allow: &[&str] = if allow_untested {
+        &["--allow-untested-version"]
+    } else {
+        &[]
+    };
     sfr(
         dir,
         &[
-            "seal",
-            log,
-            "--rules",
-            rules,
-            "--baseline",
-            baseline,
-            "--key",
-            "sfr.key",
-            "--evaluation-only",
-            "--seal-time",
-            SEAL_TIME,
-            "--out",
-            "cli",
-        ],
+            &[
+                "seal",
+                log,
+                "--rules",
+                rules,
+                "--baseline",
+                baseline,
+                "--key",
+                "sfr.key",
+                "--evaluation-only",
+                "--seal-time",
+                SEAL_TIME,
+                "--out",
+                "cli",
+            ],
+            allow,
+        ]
+        .concat(),
     )
 }
 
 /// Golden logs, each with what it covers: (name, log, rules).
 const CASES: &[(&str, &str, &str)] = &[
-    // R1 fails (exit 2) and the firmware is outside v1.14 to v1.17 (a note on stderr).
+    // R1 fails (exit 2) and its PX4 version cannot be read: sealed with --allow-untested-version.
     (
         "pyulog_sample",
         "testdata/pyulog/sample.ulg",
@@ -172,10 +183,12 @@ fn the_sandbox_seals_the_cli_record_report_exit_code_and_text() {
             &format!("testdata/baselines/{name}.params"),
             "baseline.params",
         );
-        let cli = cli_seal(&dir, log_name, "rules.toml", "baseline.params");
+        // The pyulog sample's PX4 version cannot be read: both need --allow-untested-version.
+        let allow = *name == "pyulog_sample";
+        let cli = cli_seal(&dir, log_name, "rules.toml", "baseline.params", allow);
         let code = cli.status.code().unwrap();
         assert!(code <= 2, "{name}: {}", stderr(&cli));
-        let s = sandbox_seal(&dir, log_name, "rules.toml", Some("baseline.params")).unwrap();
+        let s = sandbox_seal(&dir, log_name, "rules.toml", Some("baseline.params"), allow).unwrap();
         assert_eq!(s.exit_code, code, "{name}");
         assert_eq!(
             s.record,
@@ -207,9 +220,15 @@ fn without_a_baseline_the_sandbox_seals_what_the_cli_seals_from_the_no_baseline_
     link(&dir, "testdata/sitl/v1.17.0/mc_flight_1.ulg", "flight.ulg");
     link(&dir, "examples/rules.default.toml", "rules.toml");
     std::fs::write(dir.join(sfr_wasm::NO_BASELINE_NAME), sfr_wasm::NO_BASELINE).unwrap();
-    let cli = cli_seal(&dir, "flight.ulg", "rules.toml", sfr_wasm::NO_BASELINE_NAME);
+    let cli = cli_seal(
+        &dir,
+        "flight.ulg",
+        "rules.toml",
+        sfr_wasm::NO_BASELINE_NAME,
+        false,
+    );
     assert_eq!(cli.status.code(), Some(1), "{}", stderr(&cli));
-    let s = sandbox_seal(&dir, "flight.ulg", "rules.toml", None).unwrap();
+    let s = sandbox_seal(&dir, "flight.ulg", "rules.toml", None, false).unwrap();
     assert_eq!(s.exit_code, 1);
     assert_eq!(s.record, read(&dir, "cli/flight.sfr"));
     assert_eq!(s.report.as_bytes(), read(&dir, "cli/flight.sfr.md"));
@@ -249,6 +268,7 @@ fn the_in_browser_key_seals_an_evaluation_record_the_cli_verifies() {
         }),
         key: Key::Seed(&seed),
         seal_time: "2026-10-19T12:00:00+02:00",
+        allow_untested_version: false,
     })
     .unwrap();
     assert_eq!(s.exit_code, 0, "{}", s.text);
@@ -343,7 +363,7 @@ fn the_sandbox_verify_prints_what_the_cli_prints_verified_or_not() {
         "testdata/baselines/v1.17.0_mc_flight_1.params",
         "baseline.params",
     );
-    let cli = cli_seal(&dir, "flight.ulg", "rules.toml", "baseline.params");
+    let cli = cli_seal(&dir, "flight.ulg", "rules.toml", "baseline.params", false);
     assert_eq!(cli.status.code(), Some(0), "{}", stderr(&cli));
     std::fs::copy(dir.join("cli/flight.sfr"), dir.join("flight.sfr")).unwrap();
     // A changed command id in a copy of the record, as scripts/run_demo.sh step d does.
@@ -509,17 +529,17 @@ fn the_sandbox_refuses_bad_input_with_the_cli_exit_code_and_message() {
         ("c.ulg", "latin1.toml", "baseline.params", 3),
         ("truncated.ulg", "rules.toml", "baseline.params", 3),
     ] {
-        let cli = cli_seal(&dir, log, rules, baseline);
+        let cli = cli_seal(&dir, log, rules, baseline, false);
         assert_eq!(cli.status.code(), Some(code), "{rules} {baseline}");
-        let f = sandbox_seal(&dir, log, rules, Some(baseline)).unwrap_err();
+        let f = sandbox_seal(&dir, log, rules, Some(baseline), false).unwrap_err();
         assert_eq!(f.code, code, "{}", f.message);
         assert_eq!(format!("sfr: {}\n", f.message), stderr(&cli));
     }
     // A key file that is no key: exit 4 from both, naming the file.
     std::fs::write(dir.join("sfr.key"), "not a key\n").unwrap();
-    let cli = cli_seal(&dir, "c.ulg", "rules.toml", "baseline.params");
+    let cli = cli_seal(&dir, "c.ulg", "rules.toml", "baseline.params", false);
     assert_eq!(cli.status.code(), Some(4));
-    let f = sandbox_seal(&dir, "c.ulg", "rules.toml", Some("baseline.params")).unwrap_err();
+    let f = sandbox_seal(&dir, "c.ulg", "rules.toml", Some("baseline.params"), false).unwrap_err();
     assert_eq!(f.code, 4);
     assert_eq!(format!("sfr: {}\n", f.message), stderr(&cli));
 }

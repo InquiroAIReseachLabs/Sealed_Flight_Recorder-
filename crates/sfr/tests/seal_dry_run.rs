@@ -41,8 +41,17 @@ fn dry_run(log: &str, rules: &str, baseline: &str, json: bool) -> Output {
     if json {
         args.push("--json");
     }
+    if UNTESTED_VERSION_LOGS.contains(&log) {
+        args.push("--allow-untested-version");
+    }
     sfr(&args)
 }
+
+/// Test logs whose PX4 version sfr cannot read: `seal` needs `--allow-untested-version`.
+const UNTESTED_VERSION_LOGS: [&str; 2] = [
+    "testdata/pyulog/sample.ulg",
+    "fuzz/seeds/ulog_ingest/subscription_amplification.ulg",
+];
 
 /// A fresh scratch directory under the system temp dir, removed by the caller.
 fn scratch() -> PathBuf {
