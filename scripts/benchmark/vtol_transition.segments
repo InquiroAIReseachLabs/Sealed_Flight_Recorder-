@@ -1,0 +1,48 @@
+# Segments of the golden VTOL flight that scripts/benchmark.sh repeats to build its large
+# logs. Written by scripts/benchmark/make_segments.py; do not edit by hand.
+# segment <offset> <length>: whole records of the data section, no 'A', 'I' or 'M' record.
+source testdata/sitl/v1.17.0/vtol_transition.ulg
+sha256 86d64e54d1261991f4035355550f64e017f8a486c5c665848d6e68ae67fc9bf3
+size 24295307
+segment 110885 53870
+segment 164780 4810
+segment 169621 2429
+segment 172075 6413
+segment 178525 81412
+segment 259971 34770
+segment 294763 572
+segment 295348 37113
+segment 332477 179044
+segment 511544 27247
+segment 538819 349515
+segment 888354 32168
+segment 920551 999892
+segment 1920443 999992
+segment 2920435 30658
+segment 2951120 999941
+segment 3951061 999961
+segment 4951022 999983
+segment 5951005 999857
+segment 6950862 422952
+segment 7373847 843
+segment 7374728 1955
+segment 7376723 722
+segment 7377480 86404
+segment 7463918 766104
+segment 8230032 999969
+segment 9230001 999939
+segment 10229940 999991
+segment 11229931 999998
+segment 12229929 999884
+segment 13229813 999979
+segment 14229792 999981
+segment 15229773 999999
+segment 16229772 999865
+segment 17229637 999952
+segment 18229589 999986
+segment 19229575 999983
+segment 20229558 999942
+segment 21229500 999944
+segment 22229444 999827
+segment 23229271 999901
+segment 24229172 53560
