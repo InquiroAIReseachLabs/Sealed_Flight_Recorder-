@@ -27,11 +27,15 @@ use zeroize::Zeroizing;
 
 #[cfg(target_arch = "wasm32")]
 mod bindings;
+pub mod result;
+
+pub use result::{Mismatch, parse_mismatch};
 
 pub use sfr_core::SCHEMA_VERSION;
 
-/// Largest log or record the sandbox reads: 100 MiB (docs/LIMITS.md, "Sandbox"). Larger files
-/// are refused before they are read; the `sfr` command line has no such limit on the log.
+/// Largest log or record the sandbox reads: 100 MiB (docs/LIMITS.md, "The sandbox's limit").
+/// Larger files are refused before they are read; the `sfr` command line has no such limit on
+/// the log.
 pub const MAX_SANDBOX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 
 /// Largest rules file, baseline, key file or public key: the CLI's limit (SPEC B1.4).
@@ -132,6 +136,73 @@ pub struct SealOutput {
     /// What `sfr seal` prints on standard error besides a failure: notes, such as a firmware
     /// outside the supported range.
     pub notes: Vec<String>,
+    /// PASS or FAIL.
+    pub status: String,
+    /// The Merkle root, lowercase hex.
+    pub merkle_root: String,
+    /// The number of Merkle leaves.
+    pub leaf_count: usize,
+    /// The signing key's fingerprint.
+    pub key_fingerprint: String,
+    /// `file-evaluation`.
+    pub key_custody: String,
+    /// `seal.key_label`.
+    pub key_label: String,
+    /// The seal time, UTC, as the record holds it.
+    pub sealed_utc: String,
+    /// The number of events.
+    pub event_count: usize,
+    /// Each rule's result, in rule-id order, as the record holds them.
+    pub results: Vec<RuleSummary>,
+    /// The log's identity.
+    pub log: LogSummary,
+}
+
+/// One rule's result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleSummary {
+    /// R1 to R7, X1 to X5.
+    pub id: String,
+    /// Short name.
+    pub name: String,
+    /// PASS, FAIL or N/A.
+    pub status: String,
+    /// What the rule expects.
+    pub expected: String,
+    /// What the log shows.
+    pub found: String,
+    /// One line per finding.
+    pub detail: Vec<String>,
+}
+
+/// The log's identity, as the results table prints it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogSummary {
+    /// File name.
+    pub file_name: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// SHA-256, lowercase hex.
+    pub sha256: String,
+    /// BLAKE3, lowercase hex (supplementary).
+    pub blake3: String,
+    /// Firmware version and git hash, or `unknown`.
+    pub firmware: String,
+}
+
+/// What a successful verification established.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedSummary {
+    /// The signing key's fingerprint.
+    pub fingerprint: String,
+    /// The crypto crates and their crate versions, as one line.
+    pub crypto_crates: String,
+    /// The seal time, UTC.
+    pub sealed_utc: String,
+    /// The sealed overall status.
+    pub status: String,
+    /// The number of events.
+    pub events: usize,
 }
 
 /// `sfr verify <record> --pubkey <pub> [--ulog <log>]`.
@@ -153,6 +224,15 @@ pub struct VerifyOutput {
     pub headline: String,
     /// What `sfr verify` prints on standard output, with the file name in place of the path.
     pub text: String,
+    /// Whether the log was given (`--ulog`).
+    pub deep: bool,
+    /// The key custody: the record's when it verified, what it claims when it did not (if it
+    /// could be read).
+    pub custody: Option<String>,
+    /// What the record says, when it verified.
+    pub verified: Option<VerifiedSummary>,
+    /// Every mismatch, the first first, split into its parts; empty when it verified.
+    pub mismatches: Vec<Mismatch>,
 }
 
 /// The in-browser evaluation key's public half.
@@ -327,16 +407,21 @@ fn transition_tuning(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Stri
 }
 
 /// The results table `sfr seal` prints.
-fn table(ing: &Ingested, eval: &Evaluation, rules: &Rules, baseline: &Baseline) -> String {
-    let id = &ing.identity;
-    let fw = &id.firmware;
-    let mut out = String::new();
-    let firmware = match (&fw.version, &fw.git) {
+/// The firmware as the results table prints it.
+fn firmware_text(ing: &Ingested) -> String {
+    let fw = &ing.identity.firmware;
+    match (&fw.version, &fw.git) {
         (Some(v), Some(g)) => format!("{v} ({g})"),
         (Some(v), None) => v.clone(),
         (None, Some(g)) => format!("unknown version ({g})"),
         (None, None) => "unknown".into(),
-    };
+    }
+}
+
+fn table(ing: &Ingested, eval: &Evaluation, rules: &Rules, baseline: &Baseline) -> String {
+    let id = &ing.identity;
+    let mut out = String::new();
+    let firmware = firmware_text(ing);
     for (k, v) in [
         ("log", format!("{} ({} bytes)", id.file_name, id.size)),
         ("sha256", sfr_core::hex(&id.sha256)),
@@ -496,14 +581,42 @@ pub fn seal(req: SealRequest<'_>) -> Result<SealOutput, Failure> {
         "sealed",
         params.time_utc
     ));
+    let id = &ing.identity;
     Ok(SealOutput {
         exit_code: eval.exit_code,
-        record: sealed.bytes,
         report,
         record_name,
         report_name,
         text: t,
         notes,
+        status: eval.status.as_str().to_string(),
+        merkle_root: sfr_core::hex(&sealed.root),
+        leaf_count: sealed.leaf_count,
+        key_fingerprint: sealed.fingerprint.clone(),
+        key_custody: custody.as_str().to_string(),
+        key_label: key.label(),
+        sealed_utc: params.time_utc.clone(),
+        event_count: ing.events.len(),
+        results: eval
+            .results
+            .iter()
+            .map(|r| RuleSummary {
+                id: r.id.to_string(),
+                name: r.name.to_string(),
+                status: r.status.as_str().to_string(),
+                expected: r.expected.clone(),
+                found: r.found.clone(),
+                detail: r.detail.clone(),
+            })
+            .collect(),
+        log: LogSummary {
+            file_name: id.file_name.clone(),
+            size: id.size,
+            sha256: sfr_core::hex(&id.sha256),
+            blake3: sfr_core::hex(&id.blake3),
+            firmware: firmware_text(&ing),
+        },
+        record: sealed.bytes,
     })
 }
 
@@ -527,6 +640,7 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
             left: MAX_SANDBOX_FILE_BYTES,
         });
     }
+    let deep = capped.is_some();
     let log: Option<&mut dyn Read> = capped.as_mut().map(|c| c as &mut dyn Read);
     match sfr_core::verify::verify(req.record.bytes, log, &crypto, &public, false) {
         Err(VerifyError::Io(e)) => Err(fail(exit_code::USAGE, format!("log: {e}"))),
@@ -557,6 +671,16 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
                 exit_code: exit_code::OK,
                 headline,
                 text: t,
+                deep,
+                custody: Some(v.custody.as_str().to_string()),
+                verified: Some(VerifiedSummary {
+                    fingerprint: v.fingerprint,
+                    crypto_crates: v.crypto_crates,
+                    sealed_utc: v.time_utc,
+                    status: v.status,
+                    events: v.events,
+                }),
+                mismatches: Vec::new(),
             })
         }
         Err(VerifyError::Mismatch(m)) => {
@@ -580,6 +704,13 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
                 exit_code: exit_code::RULE_FAIL,
                 headline,
                 text: t,
+                deep,
+                custody: m.custody.map(|c| c.as_str().to_string()),
+                verified: None,
+                mismatches: std::iter::once(&m.first)
+                    .chain(&m.also)
+                    .map(|t| parse_mismatch(t))
+                    .collect(),
             })
         }
     }

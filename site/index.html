@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'none'; base-uri 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
-<title>Sealed Flight Record sandbox</title>
+<title>Sealed Flight Record engine test harness</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23245c8a'/%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' stroke='white' stroke-width='2' fill='none'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 <script type="module" src="app.js"></script>
@@ -14,10 +14,10 @@
 <body>
 <header class="top">
   <div class="wrap">
-    <h1>Sealed Flight Record sandbox</h1>
-    <p class="lede">v1.0 evaluation release. Seal a PX4 flight log into a signed record, verify a record, and watch a changed record and a changed log fail verification.</p>
-    <p class="privacy"><strong>Your files never leave this browser.</strong> The page loads its engine and two sample logs once. After that it makes no network request: every file you choose is read in this tab and nothing is uploaded.</p>
-    <p id="engine-status" class="engine" role="status" aria-live="polite">Loading the engine and the sample logs...</p>
+    <h1>Sealed Flight Record engine test harness</h1>
+    <p class="lede">v1.0 evaluation release. A plain page over the engine bundle (<code>engine/sfr.js</code>) for the browser tests in CI: seal a PX4 flight log, verify a record, run the tamper demo.</p>
+    <p class="privacy"><strong>Files you choose are read in this tab and never uploaded.</strong> The page fetches only its own files from this site: the engine when it loads, and the sample log when the tamper demo starts.</p>
+    <p id="engine-status" class="engine" role="status" aria-live="polite">Loading the engine...</p>
   </div>
 </header>
 
@@ -35,7 +35,7 @@
       <div class="drop" data-for="seal-log">
         <label for="seal-log">Flight log (<code>.ulg</code>)</label>
         <input type="file" id="seal-log" accept=".ulg">
-        <p class="hint">Drop a PX4 ULog file here or choose one. Up to 100 MiB in the sandbox; the command line has no limit.</p>
+        <p class="hint">Up to 100 MiB in the browser; the command line has no limit.</p>
       </div>
 
       <fieldset class="rules">
@@ -118,6 +118,10 @@
     <div id="verify-result" class="result" hidden aria-live="polite">
       <div id="verify-banner" class="banner"></div>
       <details class="cli" open>
+        <summary>Structured result (first mismatch)</summary>
+        <pre id="verify-json" class="output"></pre>
+      </details>
+      <details class="cli" open>
         <summary>What <code>sfr verify</code> prints</summary>
         <pre id="verify-output" class="output"></pre>
       </details>
@@ -126,7 +130,7 @@
 
   <section id="panel-demo" role="tabpanel" aria-labelledby="tab-demo" hidden>
     <h2>Tamper demo</h2>
-    <p class="intro">Runs the steps of <code>scripts/run_demo.sh</code> on two bundled golden logs from PX4 v1.17.0 simulation: a standard VTOL flight and a quad tailsitter flight. Each step shows the command it stands for, what the engine printed, and whether that is the expected result.</p>
+    <p class="intro">Runs the steps of <code>scripts/run_demo.sh</code> on the bundled sample log, a multicopter flight from PX4 v1.17.0 simulation (<code>mc_flight_1.ulg</code>), fetched compressed from this site when the demo starts: seal it, verify it, change a COMMAND event in a copy of the record, change a parameter in a copy of the log. Each step shows the command it stands for, what the engine printed, and whether that is the expected result.</p>
     <div class="actions">
       <button type="button" id="demo-run" class="primary" disabled>Run the demo</button>
       <span id="demo-busy" class="busy" hidden>Running...</span>
@@ -143,7 +147,7 @@
     <p>Fingerprint: <code id="key-fingerprint">not made yet</code></p>
     <p id="key-download" class="downloads"></p>
   </section>
-  <p class="small">Engine: <span id="engine-version">loading</span>. Sources and documentation: the Sealed Flight Record repository, <code>docs/SANDBOX.md</code>. Sample logs: <a href="samples/vtol_transition.provenance.md">VTOL flight provenance</a>, <a href="samples/gz_quadtailsitter_transition.provenance.md">tailsitter flight provenance</a>.</p>
+  <p class="small">Engine: <span id="engine-version">loading</span>. Documentation: <code>docs/SANDBOX.md</code> in the Sealed Flight Record repository. Sample log: <a href="engine/samples/mc_flight_1.provenance.md">provenance</a>, <a href="engine/samples/NOTICE.md">notices</a>.</p>
 </footer>
 </body>
 </html>

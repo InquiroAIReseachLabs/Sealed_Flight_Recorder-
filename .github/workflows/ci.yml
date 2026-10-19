@@ -187,11 +187,12 @@ jobs:
           scripts/check_no_emails.sh --self-test
           scripts/check_no_emails.sh
 
-  # The sandbox page (Chunk 6): built from this commit, then driven in three browser engines by
-  # tests/browser/sandbox.test.mjs. Safari itself cannot run on a Linux runner; WebKit is its
-  # engine. The built site is kept as the artifact the founder deploys (docs/SANDBOX.md).
+  # The engine bundle (Chunk 6): built from this commit, checked, then driven in three browser
+  # engines through its test harness page by tests/browser/sandbox.test.mjs. Safari itself
+  # cannot run on a Linux runner; WebKit is its engine. The bundle is kept as the artifact
+  # sfr-engine-<commit>, with SHA256SUMS and BUILDINFO inside (docs/SANDBOX.md).
   sandbox:
-    name: sandbox page in Chromium, Firefox and WebKit; same records as the CLI; no request after load (SPEC B1.10 Sandbox)
+    name: engine bundle in Chromium, Firefox and WebKit; same records as the CLI; user files never sent (SPEC B1.10 Sandbox)
     runs-on: ubuntu-24.04
     env:
       # wasm-bindgen-cli: the release binary of the version Cargo.lock pins, checked against the
@@ -200,8 +201,8 @@ jobs:
       WASM_BINDGEN_SHA256: 82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      # The browsers install in the background while the engine, the site and the CLI build.
-      - name: Install the toolchain, wasm-bindgen-cli and the browsers; build the site and the CLI from this commit
+      # The browsers install in the background while the engine, the harness and the CLI build.
+      - name: Install the toolchain, wasm-bindgen-cli and the browsers; build the bundle, the harness and the CLI from this commit
         run: |
           set -euo pipefail
           (cd tests/browser && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium firefox webkit) \
@@ -216,6 +217,8 @@ jobs:
           export WASM_BINDGEN="$RUNNER_TEMP/$name/wasm-bindgen"
           cargo clippy -p sfr-wasm --target wasm32-unknown-unknown --locked -- -D warnings
           scripts/build_site.sh dist/site
+          scripts/check_engine_bundle.sh --self-test
+          scripts/check_engine_bundle.sh dist/site/engine "$(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
           SFR_BUILD_COMMIT="$(git rev-parse HEAD)" cargo build --release --locked -p sfr
           wait "$browsers" || { cat playwright-install.log; exit 1; }
       # The "PASS"/"FAIL" lines and summary.md are the gate's evidence.
@@ -226,14 +229,14 @@ jobs:
           cat sandbox-test/summary.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
-          name: sfr-sandbox-site
-          path: dist/site/
+          name: sfr-engine-${{ github.sha }}
+          path: dist/site/engine/
           if-no-files-found: error
           retention-days: 30
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         if: always()
         with:
-          name: sandbox-screenshots
+          name: sandbox-test-screenshots
           path: |
             sandbox-test/*.png
             sandbox-test/summary.md

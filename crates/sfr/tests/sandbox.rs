@@ -370,12 +370,83 @@ fn the_sandbox_verify_prints_what_the_cli_prints_verified_or_not() {
         assert_eq!(out.text, stdout(&cli), "{record} {log:?}");
         assert!(out.headline.starts_with(headline), "{}", out.headline);
     }
+    // The structured results: each mismatch split into its parts, from the text sfr-core wrote.
     let (_, out) = both_verify(&dir, "tampered.sfr", Some("flight.ulg"));
+    let first = &out.mismatches[0];
+    assert_eq!(first.kind, "event", "{first:?}");
+    assert_eq!(first.event_kind.as_deref(), Some("COMMAND"), "{first:?}");
+    assert_eq!(first.field.as_deref(), Some("command"), "{first:?}");
+    let (sealed, found) = (first.sealed.clone().unwrap(), first.found.clone().unwrap());
+    assert_ne!(sealed, found);
     assert!(
-        out.text.contains("(COMMAND) field `command`: sealed "),
+        out.text.contains(&format!("FAILED: {}\n", first.text)),
         "{}",
         out.text
     );
+    assert!(
+        out.text.contains(&format!(
+            "event seq {} (COMMAND) field `command`: sealed {sealed}, found {found}",
+            first.seq.unwrap()
+        )),
+        "{}",
+        out.text
+    );
+    assert!(out.mismatches.iter().any(|m| m.kind == "merkle_root"));
+    let (_, out) = both_verify(&dir, "tampered.sfr", None);
+    assert_eq!(out.mismatches[0].kind, "merkle_root");
+    let (_, out) = both_verify(&dir, "flight.sfr", Some("changed.ulg"));
+    assert!(
+        out.mismatches.iter().all(|m| m.kind != "record"),
+        "{:?}",
+        out.mismatches
+    );
+    // A changed parameter at log start, as the demo changes it.
+    let mut log = read(&dir, "flight.ulg");
+    let key = b"float MPC_XY_VEL_MAX";
+    let at = log
+        .windows(key.len())
+        .enumerate()
+        .position(|(o, w)| w == key && o >= 2 && log[o - 2] == b'P')
+        .unwrap()
+        + key.len();
+    log[at..at + 4].copy_from_slice(&7.0f32.to_le_bytes());
+    std::fs::write(dir.join("param.ulg"), &log).unwrap();
+    let (cli, out) = both_verify(&dir, "flight.sfr", Some("param.ulg"));
+    assert_eq!(out.text, stdout(&cli));
+    let m = &out.mismatches[0];
+    assert_eq!(
+        (
+            m.kind,
+            m.parameter.as_deref(),
+            m.sealed.as_deref(),
+            m.found.as_deref()
+        ),
+        (
+            "parameter",
+            Some("MPC_XY_VEL_MAX"),
+            Some("f32:12"),
+            Some("f32:7")
+        ),
+        "{m:?}"
+    );
+    // A record verified with another key names both fingerprints.
+    let other = dir.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    keygen(&other);
+    std::fs::copy(other.join("sfr.pub"), dir.join("sfr.pub")).unwrap();
+    let (cli, out) = both_verify(&dir, "flight.sfr", None);
+    assert_eq!(out.text, stdout(&cli));
+    let m = out.mismatches.iter().find(|m| m.kind == "key").unwrap();
+    assert!(m.sealed.as_deref().unwrap().starts_with("sha256:"), "{m:?}");
+    assert_ne!(m.sealed, m.found);
+    // The JSON the page receives parses and carries the same parts.
+    let json = sfr_wasm::result::verify_json(&out);
+    let v = sfr_core::json::parse(json.as_bytes()).unwrap();
+    let Value::Object(v) = v else {
+        panic!("{json}")
+    };
+    assert_eq!(v.get("verified"), Some(&Value::Bool(false)));
+    assert_eq!(v.get("text"), Some(&Value::Str(out.text.clone())));
 }
 
 #[test]

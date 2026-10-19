@@ -1,11 +1,14 @@
-//! The functions the sandbox page calls (`site/worker.js`), through `wasm-bindgen`.
+//! The functions the engine bundle's worker calls (`crates/sfr-wasm/js/sfr-worker.js`), through
+//! `wasm-bindgen`.
 //!
-//! Each one returns an [`Outcome`] and never throws: a failure is an exit code and the CLI's
+//! Each one returns JSON (docs/SANDBOX.md, "JavaScript API"), with a seal's record and report
+//! beside it in an [`Outcome`], and never throws: a failure is an exit code and the CLI's
 //! message. Files reach the engine whole (`Uint8Array`) or, for the log, through a
 //! [`ByteSource`] the page reads on demand, so a 100 MiB log is never copied whole into this
 //! module's memory. A panic aborts, which the browser reports as a WebAssembly trap; the panic
 //! hook keeps its message for [`last_panic`], so the page can say what happened.
 
+use crate::result::{failure_json, seal_json, verify_json};
 use crate::{Input, Key, SealRequest, Stream, VerifyRequest};
 use std::io::{self, BufReader, Read};
 use std::sync::Mutex;
@@ -64,75 +67,32 @@ pub fn last_panic() -> String {
     LAST_PANIC.lock().map(|s| s.clone()).unwrap_or_default()
 }
 
-/// The result of a call: an exit code (SPEC B1.4) and what the CLI would print and write.
+/// A seal's result: its JSON (docs/SANDBOX.md, "JavaScript API") and, when it sealed, the
+/// record's bytes and the report.
 #[wasm_bindgen]
 #[derive(Debug, Default)]
 pub struct Outcome {
-    code: i32,
-    message: String,
-    headline: String,
-    text: String,
-    notes: String,
+    json: String,
     record: Vec<u8>,
-    record_name: String,
     report: String,
-    report_name: String,
 }
 
 #[wasm_bindgen]
 impl Outcome {
-    /// SPEC B1.4 exit code.
+    /// The result as JSON.
     #[wasm_bindgen(getter)]
-    pub fn code(&self) -> i32 {
-        self.code
+    pub fn json(&self) -> String {
+        self.json.clone()
     }
-    /// The CLI's message for a failure (exit 3 or 4, and 1 from verify); empty otherwise.
-    #[wasm_bindgen(getter)]
-    pub fn message(&self) -> String {
-        self.message.clone()
-    }
-    /// Verify: `VERIFIED (...)` or `FAILED: <first mismatch>`. Key: the fingerprint.
-    #[wasm_bindgen(getter)]
-    pub fn headline(&self) -> String {
-        self.headline.clone()
-    }
-    /// What the CLI prints on standard output. Key: the public key PEM. Version: the text.
-    #[wasm_bindgen(getter)]
-    pub fn text(&self) -> String {
-        self.text.clone()
-    }
-    /// Notes the CLI prints on standard error, one per line.
-    #[wasm_bindgen(getter)]
-    pub fn notes(&self) -> String {
-        self.notes.clone()
-    }
-    /// Seal: the record's bytes.
+    /// The record's bytes (`<log stem>.sfr`); empty when nothing was sealed.
     #[wasm_bindgen(getter)]
     pub fn record(&self) -> Vec<u8> {
         self.record.clone()
     }
-    /// Seal: `<log stem>.sfr`.
-    #[wasm_bindgen(getter, js_name = recordName)]
-    pub fn record_name(&self) -> String {
-        self.record_name.clone()
-    }
-    /// Seal: the Markdown report.
+    /// The Markdown report (`<log stem>.sfr.md`); empty when nothing was sealed.
     #[wasm_bindgen(getter)]
     pub fn report(&self) -> String {
         self.report.clone()
-    }
-    /// Seal: `<log stem>.sfr.md`.
-    #[wasm_bindgen(getter, js_name = reportName)]
-    pub fn report_name(&self) -> String {
-        self.report_name.clone()
-    }
-}
-
-fn failed(f: crate::Failure) -> Outcome {
-    Outcome {
-        code: f.code,
-        message: f.message,
-        ..Outcome::default()
     }
 }
 
@@ -165,17 +125,18 @@ pub fn max_text_bytes() -> f64 {
     crate::MAX_TEXT_BYTES as f64
 }
 
-/// The public key (in `text`) and fingerprint (in `headline`) of the in-browser evaluation key
-/// with this 32-byte seed.
+/// The public key and fingerprint of the in-browser evaluation key with this 32-byte seed, as
+/// JSON: `{"publicKeyPem", "fingerprint"}`, or a failure.
 #[wasm_bindgen(js_name = evaluationKey)]
-pub fn evaluation_key(seed: &[u8]) -> Outcome {
+pub fn evaluation_key(seed: &[u8]) -> String {
     match crate::evaluation_key(seed) {
-        Ok(k) => Outcome {
-            headline: k.fingerprint,
-            text: k.public_key_pem,
-            ..Outcome::default()
-        },
-        Err(f) => failed(f),
+        Ok(k) => sfr_core::json::pretty(
+            &sfr_core::json::Obj::new()
+                .field("publicKeyPem", sfr_core::json::Value::str(k.public_key_pem))
+                .field("fingerprint", sfr_core::json::Value::str(k.fingerprint))
+                .build(),
+        ),
+        Err(f) => failure_json(f.code, &f.message, true),
     }
 }
 
@@ -224,21 +185,20 @@ pub fn seal(
     };
     match crate::seal(request) {
         Ok(s) => Outcome {
-            code: s.exit_code,
-            text: s.text,
-            notes: s.notes.join("\n"),
+            json: seal_json(&s),
             record: s.record,
-            record_name: s.record_name,
             report: s.report,
-            report_name: s.report_name,
+        },
+        Err(f) => Outcome {
+            json: failure_json(f.code, &f.message, true),
             ..Outcome::default()
         },
-        Err(f) => failed(f),
     }
 }
 
-/// `sfr verify --pubkey`, and with `log` also `--ulog`. `record_size` is the record file's size:
-/// a record over the sandbox's limit is refused by it, and the page then passes no bytes.
+/// `sfr verify --pubkey`, and with `log` also `--ulog`, as JSON. `record_size` is the record
+/// file's size: a record over the sandbox's limit is refused by it, and the page then passes no
+/// bytes.
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
 pub fn verify(
@@ -250,9 +210,9 @@ pub fn verify(
     log: Option<ByteSource>,
     log_name: Option<String>,
     log_size: f64,
-) -> Outcome {
+) -> String {
     if let Err(f) = crate::check_sandbox_size("record", record_name, byte_count(record_size)) {
-        return failed(f);
+        return failure_json(f.code, &f.message, false);
     }
     let mut reader = log
         .as_ref()
@@ -273,17 +233,7 @@ pub fn verify(
         }),
     };
     match crate::verify(request) {
-        Ok(v) => Outcome {
-            code: v.exit_code,
-            message: if v.exit_code == 0 {
-                String::new()
-            } else {
-                v.headline.clone()
-            },
-            headline: v.headline,
-            text: v.text,
-            ..Outcome::default()
-        },
-        Err(f) => failed(f),
+        Ok(v) => verify_json(&v),
+        Err(f) => failure_json(f.code, &f.message, false),
     }
 }

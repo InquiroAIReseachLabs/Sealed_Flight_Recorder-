@@ -1,15 +1,17 @@
-// The engine's thread. It loads sfr-wasm once, when the page loads, and runs seal and verify
-// off the page's thread so the page stays responsive. Files arrive as Blob or File objects and
-// are read here, synchronously, a piece at a time (FileReaderSync), so a large log is never held
-// whole in memory. This worker makes no network request after it has loaded the engine.
+// sfr-worker.js: the engine's thread (docs/SANDBOX.md). sfr.js starts it; nothing else should.
+//
+// It loads the engine (pkg/sfr_wasm_bg.wasm) once and runs seal and verify off the page's
+// thread. Files arrive as Blob or File objects and are read here, synchronously, a piece at a
+// time (FileReaderSync), straight into the engine: a large log is never held whole in memory,
+// and nothing read here is sent anywhere. The worker's only request is the engine itself.
 import init, * as sfr from './pkg/sfr_wasm.js';
 
 let exports = null;
 let stopped = '';
-const keys = new Map(); // name -> { seed, fingerprint, publicKeyPem }
+const keys = new Map(); // keyId -> 32-byte seed of an in-browser evaluation key
 let limits = { file: 0, text: 0 };
 
-// A file read for the engine from start to end; read(buf) is called by the engine.
+// A file read for the engine from start to end; the engine calls read(buf).
 class BlobSource {
   constructor(blob, name) {
     this.blob = blob;
@@ -45,81 +47,61 @@ function readSmall(input, cap) {
   }
 }
 
-function plain(outcome, extra = {}) {
-  const out = {
-    code: outcome.code,
-    message: outcome.message,
-    headline: outcome.headline,
-    text: outcome.text,
-    notes: outcome.notes,
-    ...extra,
-  };
-  outcome.free();
-  return out;
-}
-
-function newKey(name) {
+function newKey() {
   const seed = crypto.getRandomValues(new Uint8Array(32));
-  const k = sfr.evaluationKey(seed);
-  const key = { seed, fingerprint: k.headline, publicKeyPem: k.text };
-  k.free();
-  keys.set(name, key);
-  return { fingerprint: key.fingerprint, publicKeyPem: key.publicKeyPem };
+  const key = JSON.parse(sfr.evaluationKey(seed));
+  const keyId = `k${keys.size + 1}`;
+  keys.set(keyId, seed);
+  return { keyId, fingerprint: key.fingerprint, publicKeyPem: key.publicKeyPem };
 }
 
 function seal(req) {
-  const rules = readSmall(req.rules, limits.text);
-  const baseline = readSmall(req.baseline, limits.text);
-  const keyFile = readSmall(req.keyFile, limits.text);
-  const key = keys.get(req.keyName || 'session');
+  const seed = req.keyFile ? undefined : keys.get(req.keyId);
+  if (!req.keyFile && !seed) throw new Error(`no in-browser key ${req.keyId}`);
   const out = sfr.seal(
     new BlobSource(req.log.blob, req.log.name),
     req.log.name,
     req.log.blob.size,
     req.rules.name,
-    rules,
+    readSmall(req.rules, limits.text),
     req.baseline ? req.baseline.name : undefined,
-    baseline,
+    readSmall(req.baseline, limits.text),
     req.keyFile ? req.keyFile.name : undefined,
-    keyFile,
-    key ? key.seed : undefined,
+    readSmall(req.keyFile, limits.text),
+    seed,
     req.sealTime,
   );
-  const record = out.record;
-  return plain(out, {
-    record,
-    recordName: out.recordName,
-    report: out.report,
-    reportName: out.reportName,
-  });
+  const result = JSON.parse(out.json);
+  if (result.sealed) {
+    result.record = out.record;
+    result.report = out.report;
+  }
+  out.free();
+  return result;
 }
 
 function verify(req) {
-  const pubkey = readSmall(req.pubkey, limits.text);
   // A record over the sandbox's limit is refused by its size, before it is read.
-  const record = req.record.blob.size > limits.file
-    ? new Uint8Array(0)
-    : readSmall(req.record, limits.file);
-  const out = sfr.verify(
+  const record = req.record.blob.size > limits.file ? new Uint8Array(0) : readSmall(req.record, limits.file);
+  return JSON.parse(sfr.verify(
     req.record.name,
     record,
     req.record.blob.size,
-    req.pubkey.name,
-    pubkey,
+    req.publicKey.name,
+    readSmall(req.publicKey, limits.text),
     req.log ? new BlobSource(req.log.blob, req.log.name) : undefined,
     req.log ? req.log.name : undefined,
     req.log ? req.log.blob.size : 0,
-  );
-  return plain(out);
+  ));
 }
 
 const ops = {
   async init() {
     exports = await init({ module_or_path: new URL('./pkg/sfr_wasm_bg.wasm', import.meta.url) });
     limits = { file: sfr.maxFileBytes(), text: sfr.maxTextBytes() };
-    return { version: sfr.version(), limits };
+    return { version: sfr.version(), limits: { fileBytes: limits.file, textBytes: limits.text } };
   },
-  newKey: (req) => newKey(req.name),
+  newKey,
   seal,
   verify,
 };
@@ -137,7 +119,7 @@ self.onmessage = async (event) => {
         // A trap (a panic, or memory exhausted) leaves the engine unusable.
         const panic = sfr.lastPanic();
         stopped = `The engine stopped: ${panic || e.message}. Nothing was written. `
-          + 'Reload the page to start it again; for a very large log, use the sfr command line.';
+          + 'Load the page again to start it again; for a very large log, use the sfr command line.';
         reply.error = stopped;
       } else {
         reply.error = `${e && e.message ? e.message : e}`;

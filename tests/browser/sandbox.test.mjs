@@ -1,27 +1,30 @@
-// sandbox.test.mjs: the headless browser gate for the sandbox page (SPEC B1.10 Sandbox, Chunk 6).
+// sandbox.test.mjs: the headless browser gate for the engine bundle and its test harness page
+// (SPEC B1.10 Sandbox; docs/SANDBOX.md).
 //
-// Serves a built site (scripts/build_site.sh) on 127.0.0.1 with the headers of its _headers
-// file, opens it in each browser, and checks, through the page's own controls:
+// Serves a built harness (scripts/build_site.sh: the page plus the engine bundle in engine/) on
+// 127.0.0.1, opens it in each browser, and checks, through the page's own controls:
 //
-//   network   after the page says Ready, sealing, verifying and the tamper demo make no network
-//             request: the server logs every request it gets, and the browser reports every
-//             http(s) request of the page and its worker
-//   records   every golden log, sealed on the page with its golden rules and baseline, the CLI's
-//             evaluation key file and one seal time, downloads a record and a report
-//             byte-identical to those of `sfr seal`, and the page shows what `sfr seal` prints;
-//             the same for a log sealed without a baseline (the bundled default rules)
+//   records   every golden log, sealed with its golden rules and baseline, the CLI's evaluation
+//             key file and one seal time, downloads a record and a report byte-identical to
+//             `sfr seal`'s, with the CLI's output text and exit code; the same without a baseline
 //   key       a record sealed with the in-browser key verifies with `sfr verify` and the page's
 //             sfr.pub
-//   verify    the verify panel prints what `sfr verify` prints, verified and failed
-//   demo      the tamper demo gives the exit codes and output of scripts/run_demo.sh, step by
-//             step (fingerprints, digests, times and directories aside: the demo makes its own
-//             key)
-//   limit     a log over the sandbox's 100 MiB limit is refused with its message, unread
-//   memory    Chromium only: the page's peak memory sealing, then verifying with the log, the
-//             largest log the sandbox allows (built like scripts/benchmark.sh's large logs)
+//   verify    the verify panel prints what `sfr verify` prints, verified and failed, and its
+//             structured first mismatch names the kind, event sequence number, event kind,
+//             field, sealed and found values of the text
+//   demo      the tamper demo gives the exit codes and output of `sfr` running the same steps on
+//             the same sample log (keys, digests and times aside: each side makes its own key),
+//             and its structured mismatches; the sample's transfer size is reported
+//   limit     a log over the 100 MiB limit is refused, unread, with its message
+//   network   user-file seal and verify make no request at all; the tamper demo makes only
+//             same-origin GET requests for the sample's files; no request has a body; no request
+//             goes to another host (the server logs every request; the browser reports every
+//             request of the page and its worker)
+//   memory    Chromium only: peak memory sealing, then verifying with the log, the largest log
+//             the browser engine allows (built like scripts/benchmark.sh's large logs)
 //
-// It saves screenshots of the three panels, light and dark, per browser, and writes summary.md
-// and summary.json to the output directory. Exits 1 on any failed check.
+// It saves screenshots of the harness's three panels, light and dark, per browser, and writes
+// summary.md and summary.json to the output directory. Exits 1 on any failed check.
 //
 // Usage: node sandbox.test.mjs --site <dir> --sfr <sfr built from the same commit> --out <dir>
 //          [--browsers chromium,firefox,webkit]
@@ -36,6 +39,9 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SEAL_TIME = '2026-10-18T15:00:00Z';
 const LIMIT = 100 * 1024 * 1024;
+// The policy the test server sends with every file: the browser may contact this server only.
+const CSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; "
+  + "style-src 'self'; img-src 'self' data:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'";
 
 function args() {
   const a = { browsers: 'chromium,firefox,webkit' };
@@ -107,7 +113,7 @@ function cliSeal(id, log, rules, baselineName, baselineText) {
   };
 }
 
-// The sandbox's no-baseline text, as crates/sfr-wasm states it.
+// The engine's no-baseline text, as crates/sfr-wasm states it.
 const lib = fs.readFileSync(path.join(root, 'crates/sfr-wasm/src/lib.rs'), 'utf8');
 const NO_BASELINE = JSON.parse(/pub const NO_BASELINE: &str = ("(?:[^"\\]|\\.)*");/.exec(lib)[1]);
 const NO_BASELINE_NAME = /pub const NO_BASELINE_NAME: &str = "([^"]+)";/.exec(lib)[1];
@@ -117,21 +123,34 @@ for (const g of golden) cli[g.name] = cliSeal(g.name, g.log, g.rules, g.baseline
 const noBaselineLog = 'testdata/sitl/v1.17.0/mc_flight_1.ulg';
 cli['no baseline'] = cliSeal('no-baseline', noBaselineLog, 'examples/rules.default.toml', NO_BASELINE_NAME, NO_BASELINE);
 
+// The demo's changes, as engine/sfr.js makes them (changeCommand, changeParameter).
+function changeCommand(record) {
+  const text = record.toString('latin1');
+  const kind = text.indexOf('"kind":"COMMAND"');
+  const at = text.lastIndexOf('"command":', kind - 10) + 10;
+  const t = Buffer.from(record);
+  t[at] = t[at] === 0x39 ? 0x31 : t[at] + 1;
+  return t;
+}
+function changeParameter(log, name, value) {
+  const key = Buffer.from(`float ${name}`);
+  let at = -1;
+  for (let o = log.indexOf(key); o >= 0 && at < 0; o = log.indexOf(key, o + 1)) if (log[o - 2] === 0x50) at = o + key.length;
+  const out = Buffer.from(log);
+  out.writeFloatLE(value, at);
+  return out;
+}
+
 // Verify cases: the CLI's own record of the golden VTOL flight, a copy with a changed command
-// id (scripts/run_demo.sh step d), and a copy of the log with one changed byte.
+// id, and a copy of the log with one changed byte.
 const vdir = path.join(work, 'verify');
 fs.mkdirSync(vdir);
 const vtol = cli['v1.17.0_vtol_transition'];
 fs.writeFileSync(path.join(vdir, 'vtol_transition.sfr'), vtol.record);
 fs.copyFileSync(path.join(keyDir, 'sfr.pub'), path.join(vdir, 'sfr.pub'));
 link(vdir, 'testdata/sitl/v1.17.0/vtol_transition.ulg', 'vtol_transition.ulg');
+fs.writeFileSync(path.join(vdir, 'tampered.sfr'), changeCommand(vtol.record));
 {
-  const text = vtol.record.toString('latin1');
-  const kind = text.indexOf('"kind":"COMMAND"');
-  const at = text.lastIndexOf('"command":', kind - 10) + 10;
-  const t = Buffer.from(vtol.record);
-  t[at] = t[at] === 0x39 ? 0x31 : t[at] + 1;
-  fs.writeFileSync(path.join(vdir, 'tampered.sfr'), t);
   const log = fs.readFileSync(path.join(root, 'testdata/sitl/v1.17.0/vtol_transition.ulg'));
   log[log.length >> 1] ^= 0x40;
   fs.writeFileSync(path.join(vdir, 'changed.ulg'), log);
@@ -147,51 +166,43 @@ const verifyCases = [
   return { record, log, code: r.code, stdout: r.stdout };
 });
 
-// scripts/run_demo.sh with this sfr, split into steps.
-const demo = spawnSync('sh', [path.join(root, 'scripts/run_demo.sh')], {
-  cwd: root, encoding: 'utf8', env: { ...process.env, SFR: opt.sfr }, maxBuffer: 64 << 20,
-});
-if (demo.status !== 0) throw new Error(`run_demo.sh failed:\n${demo.stdout}\n${demo.stderr}`);
-const demoSteps = parseDemo(demo.stdout);
-
-function parseDemo(text) {
+// The demo's steps with the CLI, on the bundle's sample log.
+const sample = JSON.parse(fs.readFileSync(path.join(opt.site, 'engine/samples/samples.json'), 'utf8')).sample;
+const demoCli = (() => {
+  const dir = path.join(work, 'demo');
+  fs.mkdirSync(dir);
+  link(dir, sample.path, sample.log);
+  link(dir, sample.baseline_path, sample.baseline);
+  link(dir, 'examples/rules.default.toml', 'rules.default.toml');
   const steps = {};
-  let step = null;
-  let cur = null;
-  for (const line of text.split('\n')) {
-    const h = /^=== ([a-f])\. .* ===$/.exec(line);
-    if (h) {
-      step = { runs: [], notes: [] };
-      steps[h[1]] = step;
-      cur = null;
-    } else if (!step) {
-      // before the first step
-    } else if (line.startsWith('$ sfr')) {
-      cur = { lines: [] };
-    } else if (cur && /^\(exit \d+\)$/.test(line)) {
-      step.runs.push({ code: Number(/\d+/.exec(line)[0]), text: cur.lines.join('\n') });
-      cur = null;
-    } else if (cur) {
-      cur.lines.push(line);
-    } else if (/^(events in the record|byte \d+|bytes \d+)/.test(line)) {
-      step.notes.push(line);
-    }
-  }
+  const s = sfr(dir, ['seal', sample.log, '--rules', 'rules.default.toml', '--baseline', sample.baseline,
+    '--key', path.join(keyDir, 'sfr.key'), '--evaluation-only', '--out', 'sealed']);
+  steps.b = [{ code: s.code, text: s.stdout }];
+  const recordName = sample.log.replace(/\.ulg$/, '.sfr');
+  const record = fs.readFileSync(path.join(dir, 'sealed', recordName));
+  fs.writeFileSync(path.join(dir, recordName), record);
+  fs.copyFileSync(path.join(keyDir, 'sfr.pub'), path.join(dir, 'sfr.pub'));
+  const v = (...a) => { const r = sfr(dir, ['verify', ...a, '--pubkey', 'sfr.pub']); return { code: r.code, text: r.stdout }; };
+  steps.c = [v(recordName), v(recordName, '--ulog', sample.log)];
+  fs.writeFileSync(path.join(dir, 'tampered.sfr'), changeCommand(record));
+  steps.d = [v('tampered.sfr'), v('tampered.sfr', '--ulog', sample.log)];
+  fs.writeFileSync(path.join(dir, 'changed.ulg'), changeParameter(fs.readFileSync(path.join(root, sample.path)), sample.parameter, 7.0));
+  steps.e = [v(recordName, '--ulog', 'changed.ulg')];
   return steps;
-}
+})();
 
 // Output with what differs between two runs masked: directories, digests and keys, times.
 function mask(text) {
   return text
-    .replace(/(^|\s)\/(?:[^\s/]+\/)+([^\s/]+)/gm, '$1$2')
+    .replace(/(^|\s)(?:\/|sealed\/)(?:[^\s/]+\/)*([^\s/]+)/gm, '$1$2')
     .replace(/[0-9a-f]{64}/g, '<hex>')
     .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/g, '<time>')
     .trimEnd();
 }
 
-// The largest log the sandbox allows: the golden VTOL flight, then its whole-record segments
-// (scripts/benchmark/vtol_transition.segments) in order, again and again, while the log stays
-// within the limit.
+// The largest log the browser engine allows: the golden VTOL flight, then its whole-record
+// segments (scripts/benchmark/vtol_transition.segments) in order, again and again, while the
+// log stays within the limit.
 function largestLog(dest) {
   const manifest = fs.readFileSync(path.join(root, 'scripts/benchmark/vtol_transition.segments'), 'utf8');
   const src = fs.readFileSync(path.join(root, 'testdata/sitl/v1.17.0/vtol_transition.ulg'));
@@ -214,13 +225,8 @@ function largestLog(dest) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The site
+// The server: every request is logged with its method, path, body size and the bytes sent.
 
-const headers = {};
-for (const line of fs.readFileSync(path.join(opt.site, '_headers'), 'utf8').split('\n')) {
-  const m = /^\s+([A-Za-z-]+):\s*(.+)$/.exec(line);
-  if (m) headers[m[1]] = m[2];
-}
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.wasm': 'application/wasm', '.json': 'application/json', '.gz': 'application/gzip', '.toml': 'text/plain; charset=utf-8',
@@ -228,20 +234,31 @@ const TYPES = {
 };
 const served = [];
 const server = http.createServer((req, res) => {
-  served.push({ at: Date.now(), url: req.url });
-  const url = new URL(req.url, 'http://x');
-  let file = path.join(opt.site, decodeURIComponent(url.pathname));
-  if (file.endsWith('/')) file = path.join(file, 'index.html');
-  if (!file.startsWith(opt.site) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
-    res.writeHead(404);
-    res.end();
-    return;
-  }
-  res.writeHead(200, { ...headers, 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
-  fs.createReadStream(file).pipe(res);
+  const entry = { at: Date.now(), method: req.method, url: req.url, bodyBytes: 0, sentBytes: 0 };
+  served.push(entry);
+  req.on('data', (chunk) => { entry.bodyBytes += chunk.length; });
+  req.on('end', () => {
+    const url = new URL(req.url, 'http://x');
+    let file = path.join(opt.site, decodeURIComponent(url.pathname));
+    if (file.endsWith('/')) file = path.join(file, 'index.html');
+    if (req.method !== 'GET' || !file.startsWith(opt.site) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      res.writeHead(req.method === 'GET' ? 404 : 405);
+      res.end();
+      return;
+    }
+    entry.sentBytes = fs.statSync(file).size;
+    res.writeHead(200, {
+      'Content-Security-Policy': CSP,
+      'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
+      'Content-Length': entry.sentBytes,
+      'Cache-Control': 'no-store',
+    });
+    fs.createReadStream(file).pipe(res);
+  });
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}/`;
+const origin = new URL(base).origin;
 
 // ---------------------------------------------------------------------------------------------
 // The checks
@@ -297,8 +314,16 @@ async function verifyOnPage(page, record, pubkey, log) {
   await page.setInputFiles('#verify-log', log || []);
   await page.click('#verify-run');
   await waitCount(page, 'verify', before);
-  return { banner: await page.textContent('#verify-banner'), output: await page.textContent('#verify-output') };
+  const json = await page.textContent('#verify-json');
+  return {
+    banner: await page.textContent('#verify-banner'),
+    output: await page.textContent('#verify-output'),
+    structured: json ? JSON.parse(json) : null,
+  };
 }
+
+// The FAILED line of a verify output, without the prefix.
+const failedLine = (text) => (/^FAILED: (.*)$/m.exec(text) || [])[1];
 
 // Peak resident memory of one Chromium, in MiB, by process type as Chromium reports it
 // (SystemInfo.getProcessInfo): "browser" (which also holds the page's Blob data), "renderer"
@@ -350,29 +375,37 @@ const mib = (p) => `browser ${p.browser.toFixed(0)}, renderer ${p.renderer.toFix
 
 const engines = { chromium, firefox, webkit };
 const memory = {};
+const transfer = {};
 for (const name of opt.browsers.split(',')) {
   const launchOpts = name === 'chromium' && process.env.CHROMIUM_EXECUTABLE ? { executablePath: process.env.CHROMIUM_EXECUTABLE } : {};
   const browser = await engines[name].launch(launchOpts);
   const version = browser.version();
   const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
-  const late = [];
-  let ready = false;
-  context.on('request', (r) => { if (ready && /^https?:/.test(r.url())) late.push(r.url()); });
+  // Every http(s) request the browser makes for the page and its worker, from the first one.
+  const seen = [];
+  context.on('request', (r) => {
+    if (!/^https?:/.test(r.url())) return;
+    const body = r.postDataBuffer();
+    seen.push({ at: Date.now(), method: r.method(), url: r.url(), body: body ? body.length : 0 });
+  });
   page.on('pageerror', (e) => console.log(`${name} page error: ${e.message}`));
   const dl = path.join(opt.out, name);
   fs.mkdirSync(dl);
+  const servedFrom = served.length;
+  const mark = () => ({ server: served.length, browser: seen.length });
+  const since = (w) => ({ server: served.slice(w.server), browser: seen.slice(w.browser) });
+  const userFile = []; // [phase, requests] during user-file seal and verify: each must be empty
 
   let t = Date.now();
-  const servedBefore = served.length;
   await page.goto(base);
   await page.waitForSelector('body[data-ready="true"]', { timeout: 180000 });
-  check(name, 'loads', true, `${version}, Ready after ${served.length - servedBefore} requests to this site`, (Date.now() - t) / 1000);
-  const servedAtReady = served.length;
-  ready = true;
+  const loadServed = served.slice(servedFrom);
+  check(name, 'loads', true, `${version}, Ready after ${loadServed.length} requests to this site (${loadServed.map((s) => s.url).join(', ')})`, (Date.now() - t) / 1000);
 
   // records
   t = Date.now();
+  let w = mark();
   let same = 0;
   const differ = [];
   const cases = [...golden.map((g) => ({ id: g.name, log: g.log, rulesFile: g.rules, baseline: g.baseline })),
@@ -398,10 +431,12 @@ for (const name of opt.browsers.split(',')) {
     if (problems.length) differ.push(`${c.id}: ${problems.join(', ')} differ`);
     else same += 1;
   }
+  userFile.push(['seal of every golden log', since(w)]);
   check(name, 'records', differ.length === 0, `byte-identical records and reports, output and exit code: ${same} of ${cases.length} (${golden.length} golden logs and the no-baseline case)${differ.length ? `; ${differ.join('; ')}` : ''}`, (Date.now() - t) / 1000);
 
   // key: the in-browser key, as a person uses the page (no key file, no seal time)
   t = Date.now();
+  w = mark();
   {
     const r = await sealOnPage(page, {
       log: path.join(root, 'testdata/sitl/v1.17.0/gz_quadtailsitter_transition.ulg'),
@@ -417,6 +452,7 @@ for (const name of opt.browsers.split(',')) {
     check(name, 'in-browser key', r.banner.includes('PASS.') && v.code === 0 && v.stdout.includes('VERIFIED (record and log)') && label && label[1].startsWith('EVALUATION KEY'),
       `sealed with the in-browser key (label "${label ? label[1] : '?'}"); sfr verify --ulog with the page's sfr.pub: exit ${v.code}, ${v.stdout.split('\n')[1] || v.stdout.split('\n')[0]}`, (Date.now() - t) / 1000);
   }
+  userFile.push(['seal with the in-browser key', since(w)]);
   for (const scheme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme: scheme });
     await page.screenshot({ path: path.join(opt.out, `${name}-seal-${scheme}.png`), fullPage: true });
@@ -425,57 +461,33 @@ for (const name of opt.browsers.split(',')) {
 
   // verify
   t = Date.now();
+  w = mark();
   const vbad = [];
   for (const c of verifyCases) {
     const r = await verifyOnPage(page, path.join(vdir, c.record), path.join(vdir, 'sfr.pub'), c.log ? path.join(vdir, c.log) : null);
-    if (r.output !== c.stdout) vbad.push(`${c.record}${c.log ? ` with ${c.log}` : ''}: page printed ${JSON.stringify(r.output.split('\n').slice(0, 2))}, CLI ${JSON.stringify(c.stdout.split('\n').slice(0, 2))}`);
+    const where = `${c.record}${c.log ? ` with ${c.log}` : ''}`;
+    if (r.output !== c.stdout) vbad.push(`${where}: page printed ${JSON.stringify(r.output.split('\n').slice(0, 2))}, CLI ${JSON.stringify(c.stdout.split('\n').slice(0, 2))}`);
+    const m = r.structured && r.structured.mismatch;
+    if (c.code === 0 && (m || !r.structured.verified)) vbad.push(`${where}: structured result says not verified`);
+    if (c.code === 1 && (!m || m.text !== failedLine(c.stdout))) vbad.push(`${where}: structured mismatch text ${m && m.text} is not the FAILED line`);
   }
-  check(name, 'verify', vbad.length === 0, `the verify panel prints what sfr verify prints: ${verifyCases.length - vbad.length} of ${verifyCases.length} cases (VERIFIED standalone and deep, a changed record standalone and deep, a changed log)${vbad.length ? `; ${vbad.join('; ')}` : ''}`, (Date.now() - t) / 1000);
-  await verifyOnPage(page, path.join(vdir, 'tampered.sfr'), path.join(vdir, 'sfr.pub'), path.join(vdir, 'vtol_transition.ulg'));
+  const deep = await verifyOnPage(page, path.join(vdir, 'tampered.sfr'), path.join(vdir, 'sfr.pub'), path.join(vdir, 'vtol_transition.ulg'));
+  const m = deep.structured.mismatch;
+  const parts = m && `kind ${m.kind}, seq ${m.seq}, event kind ${m.eventKind}, field ${m.field}, sealed ${m.sealed}, found ${m.found}`;
+  const shaped = m && m.kind === 'event' && Number.isInteger(m.seq) && m.eventKind === 'COMMAND' && m.field === 'command'
+    && m.sealed !== m.found && m.text === `event seq ${m.seq} (COMMAND) field \`command\`: sealed ${m.sealed}, found ${m.found}`;
+  if (!shaped) vbad.push(`the changed record with its log: structured mismatch ${JSON.stringify(m)}`);
+  userFile.push(['verify', since(w)]);
+  check(name, 'verify', vbad.length === 0, `the verify panel prints what sfr verify prints: ${verifyCases.length - vbad.length} of ${verifyCases.length} cases; structured first mismatch of the changed record with its log: ${parts}${vbad.length ? `; ${vbad.join('; ')}` : ''}`, (Date.now() - t) / 1000);
   for (const scheme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme: scheme });
     await page.screenshot({ path: path.join(opt.out, `${name}-verify-${scheme}.png`), fullPage: true });
   }
   await page.emulateMedia({ colorScheme: 'light' });
 
-  // demo
-  t = Date.now();
-  await page.click('#tab-demo');
-  const before = await count(page, 'demo');
-  await page.click('#demo-run');
-  await waitCount(page, 'demo', before);
-  const steps = await page.$$eval('#demo-steps li', (lis) => lis.map((li) => ({
-    step: li.dataset.step,
-    ok: li.dataset.ok,
-    runs: [...li.querySelectorAll('pre.output[data-code]')].map((p) => ({ code: Number(p.dataset.code), text: p.textContent.replace(/\n?\(exit \d+\)$/, '') })),
-    notes: [...li.querySelectorAll('p')].map((p) => p.textContent),
-  })));
-  const summary = await page.textContent('#demo-summary');
-  const dbad = [];
-  for (const letter of ['a', 'b', 'c', 'd', 'e']) {
-    const mine = steps.find((s) => s.step === letter);
-    const theirs = demoSteps[letter];
-    if (!mine || mine.ok !== 'true') { dbad.push(`step ${letter} not passed on the page`); continue; }
-    if (mine.runs.length !== theirs.runs.length) { dbad.push(`step ${letter}: ${mine.runs.length} commands, run_demo.sh ${theirs.runs.length}`); continue; }
-    mine.runs.forEach((run, i) => {
-      const other = theirs.runs[i];
-      if (run.code !== other.code) dbad.push(`step ${letter} command ${i + 1}: exit ${run.code}, run_demo.sh ${other.code}`);
-      // Step a: keygen writes files the page does not; its first line is compared.
-      const a = letter === 'a' ? run.text.split('\n')[0] : mask(run.text);
-      const b = letter === 'a' ? other.text.split('\n')[0] : mask(other.text);
-      if (a !== b) dbad.push(`step ${letter} command ${i + 1}: output differs:\n--- page\n${a}\n--- run_demo.sh\n${b}`);
-    });
-    for (const note of theirs.notes) if (!mine.notes.includes(note)) dbad.push(`step ${letter}: run_demo.sh says "${note}", the page does not`);
-  }
-  check(name, 'demo', dbad.length === 0 && summary.includes('DEMO PASSED'), `${summary.trim()} Steps a to e: the same exit codes and output as run_demo.sh${dbad.length ? `; ${dbad.join('; ')}` : ''}`, (Date.now() - t) / 1000);
-  for (const scheme of ['light', 'dark']) {
-    await page.emulateMedia({ colorScheme: scheme });
-    await page.screenshot({ path: path.join(opt.out, `${name}-demo-${scheme}.png`), fullPage: true });
-  }
-  await page.emulateMedia({ colorScheme: 'light' });
-
   // limit: a file one byte over the limit, refused by its size (a sparse file; never read)
   t = Date.now();
+  w = mark();
   {
     const big = path.join(work, `over-${name}.ulg`);
     fs.closeSync(fs.openSync(big, 'w'));
@@ -485,13 +497,74 @@ for (const name of opt.browsers.split(',')) {
     check(name, 'limit', r.banner.includes('Not sealed (exit 4).') && r.banner.includes(want), r.banner.trim(), (Date.now() - t) / 1000);
     fs.rmSync(big);
   }
+  userFile.push(['refused oversize log', since(w)]);
 
-  // network: nothing after Ready, at the server or in the browser
-  const after = served.slice(servedAtReady);
-  check(name, 'network', after.length === 0 && late.length === 0,
-    `requests after Ready: ${after.length} at the server, ${late.length} seen by the browser${after.length + late.length ? `: ${[...after.map((s) => s.url), ...late].join(', ')}` : ''}`);
+  // demo: fetches the sample on demand
+  t = Date.now();
+  w = mark();
+  await page.click('#tab-demo');
+  const before = await count(page, 'demo');
+  await page.click('#demo-run');
+  await waitCount(page, 'demo', before);
+  const demoRequests = since(w);
+  const steps = await page.$$eval('#demo-steps li', (lis) => lis.map((li) => ({
+    step: li.dataset.step,
+    ok: li.dataset.ok,
+    runs: [...li.querySelectorAll('pre.output[data-code]')].map((p) => ({ code: Number(p.dataset.code), text: p.textContent.replace(/\(exit \d+\)$/, '') })),
+    mismatches: [...li.querySelectorAll('p.mismatch')].map((p) => JSON.parse(p.dataset.mismatch)),
+  })));
+  const summary = await page.textContent('#demo-summary');
+  const dbad = [];
+  for (const letter of ['b', 'c', 'd', 'e']) {
+    const mine = steps.find((s) => s.step === letter);
+    const theirs = demoCli[letter];
+    if (!mine || mine.ok !== 'true') { dbad.push(`step ${letter} not passed on the page`); continue; }
+    if (mine.runs.length !== theirs.length) { dbad.push(`step ${letter}: ${mine.runs.length} commands, the CLI ${theirs.length}`); continue; }
+    mine.runs.forEach((run, i) => {
+      const other = theirs[i];
+      if (run.code !== other.code) dbad.push(`step ${letter} command ${i + 1}: exit ${run.code}, the CLI ${other.code}`);
+      if (mask(run.text) !== mask(other.text)) dbad.push(`step ${letter} command ${i + 1}: output differs:\n--- page\n${mask(run.text)}\n--- sfr\n${mask(other.text)}`);
+    });
+  }
+  const stepOf = (id) => steps.find((s) => s.step === id) || { mismatches: [] };
+  const d2 = stepOf('d').mismatches[1];
+  const e1 = stepOf('e').mismatches[0];
+  if (!d2 || d2.kind !== 'event' || d2.eventKind !== 'COMMAND' || d2.field !== 'command') dbad.push(`step d: structured mismatch ${JSON.stringify(d2)}`);
+  if (!e1 || e1.kind !== 'parameter' || e1.parameter !== sample.parameter || e1.found !== 'f32:7') dbad.push(`step e: structured mismatch ${JSON.stringify(e1)}`);
+  const sampleTransfer = await page.evaluate(async () => (await (await import('./engine/sfr.js')).loadSample()).transfer);
+  const gzServed = demoRequests.server.find((s) => s.url.endsWith('.ulg.gz'));
+  transfer[name] = { ...sampleTransfer, servedBytes: gzServed ? gzServed.sentBytes : null, logBytes: sample.size };
+  check(name, 'demo', dbad.length === 0 && summary.includes('DEMO PASSED'),
+    `${summary.trim()} Steps b to e give the exit codes and output of sfr running the same steps on ${sample.log}; step d's structured mismatch: ${d2 && `${d2.kind} seq ${d2.seq} ${d2.eventKind} field ${d2.field}, sealed ${d2.sealed}, found ${d2.found}`}; step e's: ${e1 && `${e1.kind} ${e1.parameter}, sealed ${e1.sealed}, found ${e1.found}`}. Sample: ${sample.size} bytes, served compressed as ${gzServed ? gzServed.sentBytes : '?'} bytes${sampleTransfer.transferBytes ? `, ${sampleTransfer.transferBytes} bytes on the wire as the browser reports it` : ''}${dbad.length ? `; ${dbad.join('; ')}` : ''}`, (Date.now() - t) / 1000);
+  for (const scheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.screenshot({ path: path.join(opt.out, `${name}-demo-${scheme}.png`), fullPage: true });
+  }
+  await page.emulateMedia({ colorScheme: 'light' });
+
+  // After the demo: user-file seal and verify again, with the sample in memory.
+  w = mark();
+  await sealOnPage(page, { log: path.join(root, noBaselineLog), baseline: path.join(root, 'testdata/baselines/v1.17.0_mc_flight_1.params') });
+  await verifyOnPage(page, path.join(vdir, 'vtol_transition.sfr'), path.join(vdir, 'sfr.pub'), path.join(vdir, 'vtol_transition.ulg'));
+  userFile.push(['seal and verify after the demo', since(w)]);
+
+  // network
+  const sampleFiles = new Set(['samples.json', sample.gz, sample.baseline].map((f) => `/engine/samples/${f}`));
+  const nbad = [];
+  for (const [phase, reqs] of userFile) {
+    if (reqs.server.length || reqs.browser.length) nbad.push(`${phase}: ${reqs.server.length + reqs.browser.length} requests (${[...reqs.server.map((s) => s.url), ...reqs.browser.map((b) => b.url)].join(', ')})`);
+  }
+  for (const s of demoRequests.server) if (s.method !== 'GET' || !sampleFiles.has(s.url)) nbad.push(`demo: ${s.method} ${s.url} is not a GET of the sample's files`);
+  for (const b of demoRequests.browser) if (b.method !== 'GET' || new URL(b.url).origin !== origin || !sampleFiles.has(new URL(b.url).pathname)) nbad.push(`demo: ${b.method} ${b.url}`);
+  const all = { server: served.slice(servedFrom), browser: seen };
+  for (const s of all.server) if (s.bodyBytes || s.method !== 'GET') nbad.push(`${s.method} ${s.url} with a ${s.bodyBytes}-byte body`);
+  for (const b of all.browser) {
+    if (b.body) nbad.push(`${b.method} ${b.url} with a body`);
+    if (new URL(b.url).origin !== origin) nbad.push(`a request to another host: ${b.url}`);
+  }
+  check(name, 'network', nbad.length === 0,
+    `user-file seal and verify (${userFile.map(([p]) => p).join('; ')}): no request; the demo: ${demoRequests.server.length} same-origin GET requests, all for the sample (${demoRequests.server.map((s) => s.url).join(', ')}); whole session: ${all.server.length} requests at the server and ${all.browser.length} seen by the browser, none with a body, none to another host${nbad.length ? `; ${nbad.join('; ')}` : ''}`);
   await context.close();
-
   await browser.close();
 
   // memory (Chromium): a fresh browser, so the peaks below are this one page's alone
@@ -514,7 +587,8 @@ for (const name of opt.browsers.split(',')) {
     });
     const sealSeconds = (Date.now() - t) / 1000;
     const inSeal = await sampler.phase();
-    const engineSeal = Number(await p.evaluate(() => document.body.dataset.engineBytes)) / 1048576;
+    const engineMiB = () => p.evaluate(async () => (await import('./engine/sfr.js')).engineMemoryBytes() / 1048576);
+    const engineSeal = await engineMiB();
     const record = path.join(work, 'largest.sfr');
     await download(p, '#seal-downloads a:nth-child(1)', record);
     await download(p, '#seal-downloads a:nth-child(3)', path.join(work, 'largest.pub'));
@@ -525,7 +599,7 @@ for (const name of opt.browsers.split(',')) {
     const inVerify = await sampler.phase();
     const session = sampler.hwm();
     sampler.stop();
-    const engineVerify = Number(await p.evaluate(() => document.body.dataset.engineBytes)) / 1048576;
+    const engineVerify = await engineMiB();
     memory.chromium = {
       log_bytes: size, high_water_mib_whole_run: session, peak_mib_loading: atLoad, peak_mib_sealing: inSeal, peak_mib_verifying_with_log: inVerify,
       engine_mib_after_seal: engineSeal, engine_mib_after_verify: engineVerify, seal_seconds: sealSeconds, verify_seconds: verifySeconds,
@@ -547,6 +621,6 @@ for (const r of results) {
   lines.push(`| ${r.browser} | ${r.name} | ${r.ok ? 'PASS' : 'FAIL'} | ${r.detail.replaceAll('|', '/').replaceAll('\n', ' ')} | ${r.seconds !== undefined ? r.seconds.toFixed(1) : ''} |`);
 }
 fs.writeFileSync(path.join(opt.out, 'summary.md'), `${lines.join('\n')}\n`);
-fs.writeFileSync(path.join(opt.out, 'summary.json'), `${JSON.stringify({ results, memory }, null, 2)}\n`);
+fs.writeFileSync(path.join(opt.out, 'summary.json'), `${JSON.stringify({ results, memory, transfer }, null, 2)}\n`);
 console.log(`sandbox browser test: ${results.length - failed} of ${results.length} checks passed`);
 process.exit(failed ? 1 : 0);
