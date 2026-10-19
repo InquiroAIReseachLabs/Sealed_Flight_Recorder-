@@ -59,6 +59,22 @@ The log has no size limit. It is read once, as a stream, and every byte is hashe
 
 It drops every other record after hashing it. The number of kept data records has no limit, so memory grows with them: a log made mostly of them needs memory in proportion to its size. The definitions in the first list cost at most what their limits allow, which for format definitions near their limits is still large; a log made mostly of other data records needs little.
 
+## The sandbox's limit
+
+The sandbox page (`docs/SANDBOX.md`) adds one limit of its own, which is not a SPEC B1.4 limit and does not apply to the command line:
+
+| Limit | Value | Why | Enforced in | Tested by |
+|---|---|---|---|---|
+| One log or record in the sandbox | 100 MiB (104,857,600 bytes) | The browser, not the machine, decides how much memory a tab may use, and a page that runs out of it stops without a message. The engine streams the log, so its own memory stays small, but the browser also holds the files a person chooses and the page's sample logs. A larger file belongs to the command line, which has no limit on the log. | `crates/sfr-wasm` `MAX_SANDBOX_FILE_BYTES`: refused by the size the browser reports, before a byte is read, and again by the bytes actually read (one byte past the limit) | `crates/sfr-wasm` `a_log_over_the_sandbox_limit_is_refused_by_size_and_by_length`; `tests/browser/sandbox.test.mjs` check `limit` (a file one byte over, in each browser) and check `memory` (Chromium: the largest log under the limit is sealed and verified with the log, and the peak memory of each browser process is reported in the CI job summary) |
+
+A file over it is refused with exit 4 and this message, never truncated:
+
+```
+log flight.ulg: 104857601 bytes is over the sandbox's limit of 104857600 bytes (100 MiB) for one file; use the sfr command line, which has no limit on the log (docs/LIMITS.md)
+```
+
+The rules file, baseline, key file and public key keep the command line's 16 MiB limit and messages in the sandbox.
+
 ## One limit that truncates
 
 R4, R5, R6, X2, and X3 list at most 1,000 `detail` lines (`evaluate.rs` `MAX_DETAIL_LINES`). Past that, the detail ends with one line that says where the rest are counted: `and N more; the events list every one` for R4, R5, R6, and X2, whose cases are all events (an R4 case is a FAILSAFE_SET or QUADCHUTE event, or the ARM event when the failsafe was already set at ARM), and `and N more; the count above includes every sample` for X3, whose cases are estimator samples. This limits output, not input: it is not an error, and the rule's status is unchanged. R3 is not capped: SPEC B1.6 has it list every differing parameter, so at most the two parameter limits together.

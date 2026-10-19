@@ -13,6 +13,10 @@ docker load -i sfr-<version>-demo-image.tar.gz
 docker run --rm --network=none sfr-demo:<version>
 ```
 
+## Try it in a browser
+
+The sandbox page (`site/`, built by `scripts/build_site.sh`) runs the same engine in the browser: seal a log, verify a record, and run the steps of the demo above on the same two logs. Its records are byte-identical to the command line's for the same inputs, and after it has loaded it makes no network request: your files never leave the browser. It signs with an evaluation key made in the tab. [docs/SANDBOX.md](docs/SANDBOX.md) says how it is built, tested, and deployed behind an email allow-list.
+
 ## Downloads
 
 Each build holds, for the version in `Cargo.toml`:
