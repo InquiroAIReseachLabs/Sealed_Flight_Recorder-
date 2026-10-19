@@ -112,6 +112,25 @@ pub fn pem_decode(text: &str, label: &str) -> Result<Vec<u8>, String> {
     base64_decode(&body).ok_or_else(|| format!("the {label} block is not valid base64"))
 }
 
+/// The DER of every PEM block labelled `label`, in file order. Text outside the blocks is
+/// ignored, as `openssl` ignores it.
+pub fn pem_decode_all(text: &str, label: &str) -> Result<Vec<Vec<u8>>, String> {
+    let begin = format!("-----BEGIN {label}-----");
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(&begin) {
+        let block = rest.get(start..).unwrap_or("");
+        out.push(pem_decode(block, label)?);
+        let end = format!("-----END {label}-----");
+        let stop = block.find(&end).map_or(block.len(), |i| i + end.len());
+        rest = block.get(stop..).unwrap_or("");
+    }
+    if out.is_empty() {
+        return Err(format!("no `{begin}` line"));
+    }
+    Ok(out)
+}
+
 /// The RFC 8410 SubjectPublicKeyInfo DER of an Ed25519 public key.
 pub fn ed25519_spki_der(public_key: &[u8; 32]) -> Vec<u8> {
     let mut der = SPKI_PREFIX.to_vec();

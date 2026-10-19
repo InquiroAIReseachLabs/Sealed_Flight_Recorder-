@@ -15,7 +15,7 @@ use crate::evaluate::evaluate;
 use crate::hex;
 use crate::ingest::{FlightLogIngestor, IngestError, Px4Ingestor};
 use crate::json::{Value, canonical, first_non_canonical_offset, parse, scan_canonical};
-use crate::keys::{fingerprint, hex_decode};
+use crate::keys::{base64_decode, fingerprint, hex_decode};
 use crate::merkle;
 use crate::params::{Baseline, FirmwareSpec};
 use crate::record::{config_json, events_json, log_json, sealed_topics_json};
@@ -104,13 +104,25 @@ pub fn flight_rules_line(v: &Verified) -> String {
     }
 }
 
+/// The `trust` line of `sfr verify --pubkey`: the signature checked against the public key the
+/// verifier gave. Whether that key is the signer's is up to how the verifier got it.
+pub const TRUST_PUBKEY: &str =
+    "the public key given with --pubkey (trusted as far as its source is)";
+
+/// The `Integrity:` line of `sfr verify` given neither `--pubkey` nor `--trust-anchor`.
+pub const INTEGRITY_NOT_CHECKED: &str = "Integrity: NOT CHECKED (no trusted key given)";
+
 /// The `Flight rules:` line of `sfr verify` for a record that did not verify.
 pub const FLIGHT_RULES_UNKNOWN: &str = "Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)";
 
 /// What `sfr verify` prints for a record that verified, after any evaluation key line.
-pub fn verified_text(record_path: &str, v: &Verified) -> String {
+///
+/// `trust` says what the signature was checked against (the `trust` line), and `custody_note`
+/// qualifies the custody, which the sealer declares: `declared`, or what a certificate chain
+/// added to it.
+pub fn verified_text(record_path: &str, v: &Verified, trust: &str, custody_note: &str) -> String {
     format!(
-        "{}\n{}\nrecord    {record_path}\ncustody   {}\nkey       {}\ncrypto    {} (crate versions)\nsealed    {} (stated by the sealer, not checked)\nevents    {}\n",
+        "{}\n{}\nrecord    {record_path}\ntrust     {trust}\ncustody   {} ({custody_note})\nkey       {}\ncrypto    {} (crate versions)\nsealed    {} (stated by the sealer, not checked)\nevents    {}\n",
         integrity_line(v),
         flight_rules_line(v),
         v.custody.as_str(),
@@ -127,8 +139,9 @@ pub fn failed_line(m: &Mismatch) -> String {
 }
 
 /// What `sfr verify` prints for a record that did not verify, after any evaluation key line:
-/// the first mismatch, up to 20 others, and the flight rules line.
-pub fn failed_text(m: &Mismatch) -> String {
+/// the first mismatch, up to 20 others, the flight rules line, and the key and custody the
+/// record names, marked as its claims.
+pub fn failed_text(m: &Mismatch, claimed: Option<&ClaimedSeal>) -> String {
     let mut t = failed_line(m);
     t.push('\n');
     for other in m.also.iter().take(20) {
@@ -139,21 +152,72 @@ pub fn failed_text(m: &Mismatch) -> String {
     }
     t.push_str(FLIGHT_RULES_UNKNOWN);
     t.push('\n');
+    t.push_str(&claimed_lines(claimed));
     t
+}
+
+/// The `key` and `custody` lines of a record whose signature was not checked or did not verify:
+/// what the record names, marked as its claim.
+pub fn claimed_lines(claimed: Option<&ClaimedSeal>) -> String {
+    let key = claimed
+        .and_then(|c| c.fingerprint.as_deref())
+        .unwrap_or("unreadable");
+    let custody = claimed
+        .and_then(|c| c.custody.as_deref())
+        .unwrap_or("unreadable");
+    format!(
+        "key       {key} (named by the record, not proven)\ncustody   {custody} (declared by the record, not proven)\n"
+    )
+}
+
+/// What a record's `seal` says about its key, read without verifying anything: only what the
+/// record claims, until [`verify`] has checked the signature that covers it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClaimedSeal {
+    /// `seal.key_fingerprint`.
+    pub fingerprint: Option<String>,
+    /// `seal.key_custody`.
+    pub custody: Option<String>,
+    /// `seal.signer_certificate`, decoded from base64 (DER).
+    pub signer_certificate: Option<Vec<u8>>,
+    /// `seal.certificate_chain`, each decoded from base64 (DER).
+    pub certificate_chain: Vec<Vec<u8>>,
+}
+
+/// The seal fields a record claims. `None` when the record is not canonical or has no `seal`
+/// object; a field that is absent or of the wrong type is `None` or empty.
+pub fn claimed_seal(bytes: &[u8]) -> Option<ClaimedSeal> {
+    let spans = scan_canonical(bytes).ok()?;
+    let seal = spans.iter().find(|m| m.key == "seal")?;
+    let Value::Object(m) = parse(bytes.get(seal.value.clone())?).ok()? else {
+        return None;
+    };
+    let s = |k: &str| match m.get(k) {
+        Some(Value::Str(s)) => Some(s.clone()),
+        _ => None,
+    };
+    let certificate_chain = match m.get("certificate_chain") {
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|v| match v {
+                Value::Str(s) => base64_decode(s),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    Some(ClaimedSeal {
+        fingerprint: s("key_fingerprint"),
+        custody: s("key_custody"),
+        signer_certificate: s("signer_certificate").and_then(|c| base64_decode(&c)),
+        certificate_chain,
+    })
 }
 
 /// The key fingerprint a record names (`seal.key_fingerprint`), read without verifying anything:
 /// only what the record claims. `None` when the record is not canonical or has no such field.
 pub fn claimed_key_fingerprint(bytes: &[u8]) -> Option<String> {
-    let spans = scan_canonical(bytes).ok()?;
-    let seal = spans.iter().find(|m| m.key == "seal")?;
-    match parse(bytes.get(seal.value.clone())?).ok()? {
-        Value::Object(m) => match m.get("key_fingerprint") {
-            Some(Value::Str(s)) => Some(s.clone()),
-            _ => None,
-        },
-        _ => None,
-    }
+    claimed_seal(bytes).and_then(|c| c.fingerprint)
 }
 
 /// The sort key of a rule id: its letter, then its number (`R2` < `R10` < `X1`).
@@ -464,6 +528,31 @@ fn standalone(
         }
         _ => problems
             .push("signature or Merkle root is not lowercase hex of the right length".to_string()),
+    }
+
+    // Signer certificate and chain: null, or standard base64 (the DER is checked by
+    // `verify --trust-anchor`, which is the only reader of it).
+    let base64_or_null = |k: &str| match seal.get(k) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Str(s)) if base64_decode(s).is_some_and(|d| !d.is_empty()) => Ok(true),
+        _ => Err(fail(format!(
+            "`seal.{k}` must be null or a base64 certificate"
+        ))),
+    };
+    let has_signer_cert = base64_or_null("signer_certificate")?;
+    match seal.get("certificate_chain") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(a))
+            if has_signer_cert
+                && !a.is_empty()
+                && a.iter().all(|v| {
+                    matches!(v, Value::Str(s) if base64_decode(s).is_some_and(|d| !d.is_empty()))
+                }) => {}
+        _ => {
+            return Err(fail(
+                "`seal.certificate_chain` must be null, or a non-empty array of base64 certificates beside a signer certificate",
+            ));
+        }
     }
 
     // Custody.
@@ -825,7 +914,8 @@ mod tests {
         let key = TestKey::new(7);
         let params = SealParams {
             time_utc: "2026-10-18T15:00:00Z".into(),
-            token_cmvp_certificate: None,
+            signer_certificate: None,
+            certificate_chain: Vec::new(),
         };
         let sealed = seal(&ing, &eval, &rules, &baseline, &params, &TestBackend, &key).unwrap();
         (log, sealed.bytes, key)
@@ -971,7 +1061,8 @@ mod tests {
         let key = TestKey::new(7);
         let params = SealParams {
             time_utc: "2026-10-18T15:00:00Z".into(),
-            token_cmvp_certificate: None,
+            signer_certificate: None,
+            certificate_chain: Vec::new(),
         };
         let sealed = seal(&ing, &eval, &rules, &baseline, &params, &TestBackend, &key).unwrap();
         let pk = key.public_key();

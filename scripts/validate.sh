@@ -40,6 +40,7 @@ run "clippy -D warnings, sfr-wasm for wasm32 (the page's bindings)" \
   cargo clippy -p sfr-wasm --target wasm32-unknown-unknown --locked --quiet -- -D warnings
 run "cargo test --locked" cargo test --workspace --locked --quiet
 run "golden files agree with the independent oracle" scripts/testdata/regenerate.sh compare
+run "test certificates match their script (testdata/pki)" scripts/testdata/make_test_pki.sh --check
 
 # 3. No networking or async-runtime crates; no std::net (SPEC B1.10, "No network").
 run "deny-list self-test" scripts/check_deny_list.sh --self-test

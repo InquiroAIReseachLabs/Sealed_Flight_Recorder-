@@ -1092,28 +1092,34 @@ fn integrity_and_flight_rules_are_reported_apart() {
     let out = String::from_utf8_lossy(&o.stdout).to_string();
     assert!(out.contains("\nIntegrity: FAILED: "), "{out}");
     assert!(
-        out.ends_with("Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)\n"),
+        out.contains("\nFlight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)\n"),
+        "{out}"
+    );
+    // The key and custody it names are shown, marked as unproven claims.
+    assert!(
+        out.ends_with("(declared by the record, not proven)\n"),
         "{out}"
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// Without `--pubkey` nothing is verified: exit 4, and the message says the signer is not checked
-/// against a trusted key, names the key the record claims, and says how to check it.
+/// Without `--pubkey` or `--trust-anchor` nothing is verified: `Integrity: NOT CHECKED` on
+/// standard output, exit 4, the key and custody the record claims marked as unproven, and how to
+/// check it.
 #[test]
-fn verify_without_pubkey_says_the_signer_is_not_checked() {
+fn verify_without_a_trusted_key_says_the_signer_is_not_checked() {
     let record = "examples/reports/vtol_transition.sfr";
     let o = sfr(&["verify", record]);
     assert_eq!(o.status.code(), Some(4));
-    assert!(o.stdout.is_empty(), "{}", text(&o));
-    let err = String::from_utf8_lossy(&o.stderr).to_string();
+    let out = String::from_utf8_lossy(&o.stdout).to_string();
     for part in [
-        "Signer: NOT CHECKED against a trusted key: no --pubkey was given, so nothing was verified.",
-        "the key the record names, sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f",
+        "Integrity: NOT CHECKED (no trusted key given)\n",
+        "Flight rules: UNKNOWN (the record's integrity was not checked)\n",
+        "key       sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f (named by the record, not proven)\n",
+        "custody   file-evaluation (declared by the record, not proven)\n",
         "through a channel you trust",
-        "sfr verify examples/reports/vtol_transition.sfr --pubkey <sfr.pub>",
     ] {
-        assert!(err.contains(part), "{part} in {err}");
+        assert!(out.contains(part), "{part} in {out}");
     }
-    assert!(!err.contains("VERIFIED"), "{err}");
+    assert!(!out.contains("VERIFIED"), "{out}");
 }
