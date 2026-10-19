@@ -83,7 +83,7 @@ jobs:
           sudo apt-get install -y -q libimage-exiftool-perl
       - name: cargo test --locked
         run: cargo test --workspace --locked
-      - name: Release scripts: workflow rules, signing, hygiene scan, offline signing flow
+      - name: Release scripts (workflow rules, signing, hygiene scan, offline signing flow)
         run: |
           set -euo pipefail
           scripts/check_workflows.sh --self-test

@@ -3,6 +3,7 @@
 # section 5: actions pinned to a full commit SHA; docs/RELEASE.md: no key and no secret in CI).
 #
 #   For every file in .github/workflows/:
+#     0. it parses as YAML (a workflow that does not parse fails every push with no job);
 #     1. each `uses:` is a local path or owner/repo[/path]@<40 hex> with a version comment;
 #     2. no `pull_request_target` trigger.
 #   For release.yml, post-release-check.yml and benchmark-aarch64.yml:
@@ -29,6 +30,7 @@ check_dir() {
   for f in "$dir"/*.yml; do
     [ -f "$f" ] || continue
     name="$(basename "$f")"
+    python3 -I -c 'import sys, yaml; yaml.safe_load(open(sys.argv[1]))' "$f" 2> /dev/null || say "$name: not valid YAML"
     while IFS= read -r line; do
       ref="$(printf '%s' "$line" | sed -E 's/^[[:space:]-]*uses:[[:space:]]*([^[:space:]#]+).*/\1/')"
       case "$ref" in
@@ -87,6 +89,9 @@ secret|GH_TOKEN: ${{ github.token }}|GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 push-trigger|    tags: \["v\*"\]|    tags: ["v*"]\n    branches: [main]
 publish|--draft --prerelease|--prerelease
 EOT
+  mkdir -p "$t/yaml"
+  sed 's|^      - name: cargo test --locked|      - name: cargo test: locked|' .github/workflows/release.yml > "$t/yaml/release.yml"
+  if (check_dir "$t/yaml" > /dev/null 2>&1); then die_st "a workflow that is not valid YAML was not caught"; fi
   mkdir -p "$t/write"
   sed 's|^  meta:|  meta:\n    permissions:\n      contents: write|' .github/workflows/release.yml > "$t/write/release.yml"
   if (check_dir "$t/write" > /dev/null 2>&1); then die_st "a write permission outside draft-release was not caught"; fi
