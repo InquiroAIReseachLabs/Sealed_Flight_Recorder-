@@ -12,11 +12,13 @@ It does not prove that the log was honest, that the vehicle did what the log say
 
 ## Quickstart
 
-Two paths. The first needs no build tools: it downloads a release, checks it without trusting anyone, and runs a demo. The second builds `sfr` from source.
+Two paths. **No release has been published yet, so today only Path 2 works.** Path 1 is for after the first release: it needs no build tools, downloads the release, checks it without trusting anyone, and runs a demo. Path 2 builds `sfr` from source.
 
-### Path 1: download the release
+### Path 1: download the release (after the first release)
 
-Evaluation release 0.1.0 (tag `v0.1.0`) is a pre-release at [github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-/releases](https://github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-/releases). It holds a static `sfr` for Linux (`x86_64`, `aarch64` and `armv7`), one SBOM per target, `SHA256SUMS`, `SHA256SUMS.sig` and the release public key `sfr-release.pub`. You need `curl`, `tar`, `sha256sum` and OpenSSL 3. Every command below is run, in this order and in an empty directory, by the post-release check (`.github/workflows/post-release-check.yml`) on clean machines; the quickstart has no steps beyond these.
+> **After the first release.** No release exists yet: the download links below do not work until evaluation release 0.1.0 is published. Until then, use [Path 2](#path-2-build-from-source).
+
+Once published, evaluation release 0.1.0 (tag `v0.1.0`) is a pre-release at [github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-/releases](https://github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-/releases). It holds a static `sfr` for Linux (`x86_64`, `aarch64` and `armv7`), one SBOM per target, `SHA256SUMS`, `SHA256SUMS.sig` and the release public key `sfr-release.pub`. You need `curl`, `tar`, `sha256sum` and OpenSSL 3. Every command below is run, in this order and in an empty directory, by the post-release check (`.github/workflows/post-release-check.yml`) on clean machines; the quickstart has no steps beyond these.
 
 1. Download your target's tarball and the three files that check it. The two lines at the top choose the release and the target (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` or `armv7-unknown-linux-musleabihf`); the post-release check sets `SFR_VERSION` and `SFR_TARGET`, and you can edit the lines:
 
@@ -234,7 +236,7 @@ CI runs every command on these pages that can run there and compares its output 
 
 ## Release files
 
-Evaluation release 0.1.0 holds these files, for the version in `Cargo.toml`:
+After the first release, evaluation release 0.1.0 holds these files, for the version in `Cargo.toml`. None is published yet:
 
 | File | Contents |
 |---|---|
