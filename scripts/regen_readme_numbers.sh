@@ -156,7 +156,7 @@ $(begin benchmark)
 - $(one "$r" benchmark '^hardware: ')
 - $(one "$r" benchmark '^note: ')
 
-$(lines "$r" benchmark '^\| ')
+$(lines "$r" benchmark '^\|')
 
 $(lines "$r" benchmark '^(gate|memory): ' | sed 's/^/- /')
 $(end benchmark)
@@ -261,7 +261,8 @@ self_test() {
   grep -q -F 'armv7 (QEMU) | byte-identical records and reports: 14 of 14 golden logs |' "$t/README.md" || die "self-test: the armv7 row is wrong"
   grep -q -F '| passed, wall time 2.50 s |' "$t/README.md" || die "self-test: the demo row is wrong"
   grep -q -x -F '| large_100mb | 100 |' "$t/README.md" || die "self-test: the benchmark table is missing"
-  grep -q -x -F '|---|---|' "$t/README.md" || die "self-test: the benchmark table has no separator row"
+  [ "$(grep -A1 -x -F '| log | bytes |' "$t/README.md" | tail -1)" = '|---|---|' ] \
+    || die "self-test: the benchmark table has no separator row under its header"
   grep -q -F 'Release public key: not generated yet.' "$t/README.md" || die "self-test: the missing release key is not said"
   grep -q -x -F -- '- gate: x86_64 large_100mb seal median 0.700 s, under 2 s: PASS' "$t/README.md" || die "self-test: the gate line is missing"
   ! grep -q -x stale "$t/README.md" || die "self-test: an old block was kept"
