@@ -2,7 +2,7 @@
 //! reads a rules file.
 //!
 //! UTF-8 input goes to `sfr_core::rules::parse_rules`, which reads every section a rules file
-//! may hold, the Change Order 01 sections `[watched_parameters]`, `[sealed_topics]`,
+//! may hold, the optional sections `[watched_parameters]`, `[sealed_topics]`,
 //! `[payload_commands]` and `[authorized_sources]` included. A file that parses is then used to
 //! ingest a fixed log (the shrunk payload flight, which has commands from several sources),
 //! evaluate it, and build the dry-run JSON document, so the fuzzed sections reach the code that

@@ -9,13 +9,13 @@ Four sealed records and the reports `sfr seal` wrote beside them (SPEC B1.8), fr
 | `gz_quadtailsitter_transition.sfr`, `.sfr.md` | `examples/rules.default.toml` | quad tailsitter (VT_TYPE 0), both transitions; transition tuning |
 | `gz_x500_vision_hover.sfr`, `.sfr.md` | `gz_x500_vision_hover.rules.toml` | multicopter with external vision odometry; the sealed topic `vehicle_visual_odometry`; R7 FAIL; a parameter changed in flight |
 
-`gz_x500_vision_hover.rules.toml` is the log's golden rules file (`testdata/rules/v1.17.0_gz_x500_vision_hover.toml`, which seals `vehicle_visual_odometry`) plus `[authorized_sources]` with the autopilot itself only (system 1, component 1). R7 then fails on one command: the DO_GRIPPER (211) that PX4's `payload_deliverer` publishes at start-up with source ids it never sets (`docs/DIAGNOSTIC.md` item 12.3). No command the test harness sent fails R7.
+`gz_x500_vision_hover.rules.toml` is the log's golden rules file (`testdata/rules/v1.17.0_gz_x500_vision_hover.toml`, which seals `vehicle_visual_odometry`) plus `[authorized_sources]` with the autopilot itself only (system 1, component 1). R7 then fails on one command: the DO_GRIPPER (211) that PX4's `payload_deliverer` publishes at start-up with source ids it never sets. No command the test harness sent fails R7.
 
 `scripts/make_example_reports.sh` made them: `--seal-time 2026-10-18T15:00:00Z` and a new evaluation key. Only its public half, `sfr.pub`, is here; the private half was shredded, so no one can seal another record with it. Each report starts with EVALUATION KEY because the key is an evaluation key.
 
 ## Events the test harness injected
 
-The logs come from scripted SITL flights (each log's `.provenance.md` holds the script and, for the two Gazebo flights, the table of commands and their effects). The harness acted only through PX4's own shell commands (`commander`, `failure`, `param`, `sensor_gps_sim`), so every command it sent is an internal command from system 1, component 1, except `failure`, which publishes from 0/0. These are the events those commands put in the records, by event sequence number:
+The logs come from scripted SITL flights (each log's `.provenance.md` holds the script and, for the two Gazebo flights, the table of commands and their effects). The harness acted only through PX4's own shell commands (`commander`, `failure`, `param`, `sensor_gps_sim`), so every command it sent is an internal command from system 1, component 1, except `failure`, which publishes from 0/0. These are the events those commands put in the records (`examples/reports/vtol_transition.sfr` and the other three), by event sequence number:
 
 | Record | Harness command | Events |
 |---|---|---|
@@ -25,7 +25,7 @@ The logs come from scripted SITL flights (each log's `.provenance.md` holds the 
 | | `commander land` | seq 15 (COMMAND 21) |
 | `failsafe_gps_loss` | `commander arm` | seq 2 (COMMAND 400) |
 | | `commander takeoff` | seq 4 and 5 (COMMAND 22, then 400) |
-| | `param set SYS_FAILURE_EN 1` | none: the value was already 1 (`docs/DIAGNOSTIC.md`) |
+| | `param set SYS_FAILURE_EN 1` | none: the value was already 1 |
 | | `failure gps off` | seq 9 (COMMAND 420 from 0/0) and the two LOG_MESSAGE events it printed, seq 8 and 10; under SIH nothing handles it |
 | | `sensor_gps_sim stop` (the simulated GPS driver) | none of its own; the GPS loss it caused is what PX4 reports from seq 11 to 19 |
 | `gz_quadtailsitter_transition` | `param set MIS_TAKEOFF_ALT 20` | none: the value was already 20 (the log's `.provenance.md`) |

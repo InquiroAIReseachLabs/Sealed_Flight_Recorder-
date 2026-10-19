@@ -14,7 +14,7 @@
 //! [extended.min_battery]
 //! min_remaining = 0.25
 //!
-//! # Optional sections (Change Order 01).
+//! # Optional sections.
 //! [watched_parameters]
 //! names = ["VT_F_TRANS_DUR"]   # shown apart; R3 compares them like any other parameter
 //! [sealed_topics]
@@ -140,7 +140,7 @@ impl Category {
 pub struct Source {
     /// `vehicle_command.source_system` (8 bits).
     pub system: u8,
-    /// `vehicle_command.source_component`: 16 bits in PX4 v1.17 (docs/DIAGNOSTIC.md item 12).
+    /// `vehicle_command.source_component`: 16 bits in PX4 v1.17 (`VehicleCommand.msg`).
     pub component: u16,
 }
 
@@ -1046,7 +1046,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn change_order_01_sections_parse_and_sort() {
+    fn optional_sections_parse_and_sort() {
         let text = format!(
             "{MIN}[watched_parameters]\nnames = [\"VT_F_TRANS_DUR\", \"VT_B_TRANS_DUR\"]\n\
              [sealed_topics]\ntopics = [\"vehicle_visual_odometry\", \"custom_detection\"]\n\
@@ -1093,7 +1093,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn change_order_01_sections_reject_bad_input() {
+    fn optional_sections_reject_bad_input() {
         let bad = |extra: &str| parse_rules(&format!("{MIN}{extra}")).expect_err(extra);
         // More than 64 sealed topics is a usage error (exit 4); 64 is accepted.
         let topics = |n: usize| {

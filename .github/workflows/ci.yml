@@ -248,7 +248,7 @@ jobs:
           scripts/check_release_flow.sh
           scripts/regen_readme_numbers.sh --self-test
 
-  # The engine bundle (Chunk 6): built from this commit, checked, then driven in three browser
+  # The engine bundle: built from this commit, checked, then driven in three browser
   # engines through its test harness page by tests/browser/sandbox.test.mjs. Safari itself
   # cannot run on a Linux runner; WebKit is its engine. The bundle is kept as the artifact
   # sfr-engine-<commit>, with SHA256SUMS and BUILDINFO inside (docs/SANDBOX.md).
@@ -306,7 +306,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # Release artifacts (Chunk 5). These jobs run beside the gates above and build everything a
+  # Release artifacts. These jobs run beside the gates above and build everything a
   # release holds, unsigned: the three static tarballs, the benchmark kit, the demo image, one
   # SBOM per target, and SHA256SUMS. They publish nothing; the founder signs SHA256SUMS offline
   # and makes the release (docs/RELEASE.md).

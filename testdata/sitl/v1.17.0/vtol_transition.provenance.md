@@ -10,9 +10,7 @@ Generated for this project in PX4 v1.17.0 SITL with the built-in SIH simulator. 
 | SHA-256 | `86d64e54d1261991f4035355550f64e017f8a486c5c665848d6e68ae67fc9bf3` |
 | Size | 24295307 bytes |
 
-Full procedure, topic counts, and event sequence: `docs/DIAGNOSTIC.md`, item 3.
-
-The script that drove the flight (paths are those of the generating machine):
+The script that drove the flight (the working directory of the generating machine is written `/path/to/work`):
 
 ```bash
 #!/bin/bash
@@ -21,10 +19,10 @@ The script that drove the flight (paths are those of the generating machine):
 # fly ~25 s in FW (AUTO_LOITER: FW loiter circle, no stick input available headless), transition back to MC,
 # commanded land, auto-disarm. Fresh rootfs.
 set -u
-PX4_DIR=/tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/px4/PX4-Autopilot-v1.17.0
+PX4_DIR=/path/to/work/px4/PX4-Autopilot-v1.17.0
 BIN=$PX4_DIR/build/px4_sitl_default/bin
 ETC=$PX4_DIR/build/px4_sitl_default/etc
-OUT=/tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/sitl_logs/v1.17.0
+OUT=/path/to/work/sitl_logs/v1.17.0
 ROOTFS=${1:?rootfs}; SCENARIO=${2:?scenario}
 MODEL=sihsim_standard_vtol
 rm -rf "$ROOTFS"; mkdir -p "$ROOTFS" "$OUT"; cd "$ROOTFS"

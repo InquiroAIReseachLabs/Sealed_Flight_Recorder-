@@ -6,7 +6,7 @@ Synthetic. Written by `scripts/testdata/make_synthetic_logs.py` (Python standard
 python3 -I scripts/testdata/make_synthetic_logs.py testdata/synthetic
 ```
 
-It proves that sealed topics need no knowledge of the topic (Change Order 01, item 3d). The log carries a topic PX4 does not define, `custom_detection`, whose format uses a nested type (`detection_box`):
+It proves that sealed topics need no knowledge of the topic. The log carries a topic PX4 does not define, `custom_detection`, whose format uses a nested type (`detection_box`):
 
 ```
 detection_box:float x;float y;float w;float h;

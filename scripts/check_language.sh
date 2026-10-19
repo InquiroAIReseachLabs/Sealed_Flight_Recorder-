@@ -3,15 +3,17 @@
 #
 #   1. No em-dash (U+2014) in Markdown, the sandbox page, scripts, or Rust sources (the
 #      .sfr.md report and CLI tables are generated from Rust string literals).
-#   2. No weapon or strike terminology in any text file (Change Order 01 language gate). This
+#   2. No weapon or strike terminology in any text file (language gate). This
 #      script is the one file exempt, because it holds the list.
 #   3. If a local, git-ignored file named .forbidden-terms exists (one term per line: target
 #      company, aircraft, customer names, internal codenames), none of them appears in any
 #      tracked or untracked-but-not-ignored file, case-insensitively. The terms file itself
 #      must never be committed, which is why the scan is optional and .gitignore lists it. CI
 #      writes it from the repository secret SFR_FORBIDDEN_TERMS when that secret is set.
-#   4. Public docs (every Markdown file except the internal records CLAUDEME.md, docs/SPEC.md and
-#      docs/DIAGNOSTIC.md) name no internal codename (CLAUDEME, "Chunk <n>"); hold no compliance,
+#   4. No text file names an internal codename or work-order label ("Chunk <n>", a change
+#      order, its short form, the name of the internal standard); record files (.sfr) and this
+#      script are exempt. Public docs (every Markdown file except docs/SPEC.md, which states the
+#      rules below and must quote them) hold no compliance,
 #      certification, FIPS or "validated" wording at all, claim or not; say "production" only
 #      inside double quotes or inline code, or as "not production" / "not for production"; and
 #      name no company by its legal form (Inc, LLC, Ltd, GmbH, Corp, Corporation, PLC, Pty).
@@ -44,12 +46,10 @@ scan_em_dash() {
 }
 
 # Compliance phrasing that SPEC B1.12 forbids anywhere in docs or output text (case-insensitive).
-# SPEC.md and CLAUDEME.md are exempt: they state the rule and must quote the phrases. So is
-# docs/DIAGNOSTIC.md, the internal research record, which quotes certificates and security
-# policies. A claim pairs a regime (FIPS, IL4, IL5, 800-171, CMMC, FedRAMP, DoDD) with a status
+# docs/SPEC.md is exempt: it states the rule and must quote the phrases. A claim pairs a regime (FIPS, IL4, IL5, 800-171, CMMC, FedRAMP, DoDD) with a status
 # word (compliant, certified, accredited, authorized, validated), in either order, within one
-# clause. No FIPS, validated, or compliant claim is permitted anywhere (founder ruling, Change
-# Order 01), so no sentence is exempt.
+# clause. No FIPS, validated, or compliant claim is permitted anywhere, so no sentence is
+# exempt.
 REGIME='(FIPS|IL ?[45]|800-171|CMMC|FedRAMP|DoDD)'
 STATUS='(compliant|compliance|certified|accredited|authori[sz]ed|validated)'
 COMPLIANCE_RE="${REGIME}[^.;:]{0,40}\\b${STATUS}\\b|\\b${STATUS}[^.;:]{0,25}${REGIME}"
@@ -58,7 +58,7 @@ COMPLIANCE_RE="${REGIME}[^.;:]{0,40}\\b${STATUS}\\b|\\b${STATUS}[^.;:]{0,25}${RE
 scan_compliance() {
   local dir="$1" hits
   hits="$(cd "$dir" && candidate_files . \
-    | grep -zE '\.(md|rs|html|js|txt)$' | grep -zvE '^(docs/SPEC\.md|docs/DIAGNOSTIC\.md|CLAUDEME\.md)$' \
+    | grep -zE '\.(md|rs|html|js|txt)$' | grep -zvE '^docs/SPEC\.md$' \
     | xargs -0 -r grep -n -i -E -- "$COMPLIANCE_RE" 2>/dev/null || true)"
   if [ -n "$hits" ]; then printf '%s\n' "$hits"; return 1; fi
   return 0
@@ -94,9 +94,9 @@ scan_terms() {
   return 0
 }
 
-# Public docs under a work tree, NUL separated: Markdown, except the internal records.
+# Public docs under a work tree, NUL separated: Markdown, except docs/SPEC.md.
 public_docs() {
-  candidate_files "$1" | grep -z '\.md$' | grep -zvE '^(CLAUDEME\.md|docs/SPEC\.md|docs/DIAGNOSTIC\.md)$' || true
+  candidate_files "$1" | grep -z '\.md$' | grep -zvE '^docs/SPEC\.md$' || true
 }
 
 # Prints hits of an extended regex in public docs, after a sed program blanks what is allowed;
@@ -110,7 +110,7 @@ scan_public() {
   return 0
 }
 
-CODENAME_RE='claudeme|\bchunk [0-9]+\b'
+CODENAME_RE='claudeme|\bchunk [0-9]+\b|change[ _-]*orders?\b|\bco ?01\b'
 CLAIM_RE='\b(compliant|compliance|certified|certification|validated|fips)\b'
 # "production" is allowed only inside double quotes or inline code, or as "not (for) production".
 PRODUCTION_RE='\bproduction\b'
@@ -128,7 +128,16 @@ scan_pending() {
   return 0
 }
 
-scan_codenames() { scan_public "$1" "$CODENAME_RE"; }
+# Codenames, in every text file (rule 4): record files and this script are exempt.
+scan_codenames() {
+  local dir="$1" hits
+  hits="$(cd "$dir" && candidate_files . \
+    | grep -zvE '\.(ulg|sfr|png|jpe?g|gif|ico|wasm|pdf|gz)$' | grep -zv -x -F -- 'scripts/check_language.sh' \
+    | xargs -0 -r grep -n -i -I -E -- "$CODENAME_RE" 2>/dev/null || true)"
+  if [ -n "$hits" ]; then printf '%s
+' "$hits"; return 1; fi
+  return 0
+}
 scan_claims() { scan_public "$1" "$CLAIM_RE"; }
 scan_production() { scan_public "$1" "$PRODUCTION_RE" "$PRODUCTION_ALLOW"; }
 # Case matters for legal forms ("inc" and "corp" are ordinary in code words), so grep -i is undone.
@@ -200,18 +209,22 @@ if [ "${1:-}" = "--self-test" ]; then
   done
   printf '%s\n' "$out" | grep -q '^fine.md' && { echo "FAIL: self-test: false positive on fine.md"; exit 1; }
 
-  # Public docs: codenames, claim words, "production", legal forms; the internal records are exempt.
+  # Codenames in any text file; claim words, "production", legal forms in public docs; SPEC.md is
+  # exempt from the public-doc rules, record files from the codename rule.
   rm -f "$tmp"/*.md "$tmp"/docs/*.md
-  printf 'Built to the CLAUDEME standard.\nDone in Chunk 7.\n' > "$tmp/docs/CODE.md"
+  printf 'Built to the CLAUDEME standard.\nDone in Chunk 7.\nPer change order 2.\nThe CO01 flights.\n' > "$tmp/docs/CODE.md"
+  printf '// Change-Order 01 gate\n' > "$tmp/gate.rs"
+  printf '{"text":"Chunk 7"}\n' > "$tmp/old.sfr"
   printf 'Uses validated crypto.\nNo FIPS claim.\nSee the compliance notes.\nIt is certified.\n' > "$tmp/docs/CLAIM.md"
   printf 'Ready for production.\nThe production page.\n' > "$tmp/docs/PROD.md"
   printf 'This is not production code.\nIt is not for production use.\nThe flag is "production".\nSet `mode = production`.\n' > "$tmp/docs/PROD_OK.md"
   printf 'Built for Example Widgets Inc.\nA GmbH partner.\n' > "$tmp/docs/CO.md"
   printf 'chunked uploads; an increment; corpus files; incoming/\n' > "$tmp/docs/FINE.md"
-  printf 'CLAUDEME and Chunk 7, FIPS validated, production, Acme Inc.\n' > "$tmp/CLAUDEME.md"
-  cp "$tmp/CLAUDEME.md" "$tmp/docs/SPEC.md"
+  printf 'FIPS validated, production, Acme Inc.\n' > "$tmp/docs/SPEC.md"
   out="$(scan_codenames "$tmp" || true)"
-  for n in 1 2; do printf '%s\n' "$out" | grep -q "^docs/CODE.md:$n:" || { echo "FAIL: self-test: codename on line $n missed"; exit 1; }; done
+  for n in 1 2 3 4; do printf '%s\n' "$out" | grep -q "^docs/CODE.md:$n:" || { echo "FAIL: self-test: codename on line $n missed"; exit 1; }; done
+  printf '%s\n' "$out" | grep -q '^gate.rs:1:' || { echo "FAIL: self-test: codename in a source file missed"; exit 1; }
+  printf '%s\n' "$out" | grep -q 'old.sfr' && { echo "FAIL: self-test: a record file was scanned for codenames"; exit 1; }
   out="$(scan_claims "$tmp" || true)"
   for n in 1 2 3 4; do printf '%s\n' "$out" | grep -q "^docs/CLAIM.md:$n:" || { echo "FAIL: self-test: claim word on line $n missed"; exit 1; }; done
   out="$(scan_production "$tmp" || true)"
@@ -228,7 +241,7 @@ if [ "${1:-}" = "--self-test" ]; then
   printf '%s\n' "$out" | grep -q 'form.html' && { echo "FAIL: self-test: an HTML placeholder attribute was flagged"; exit 1; }
   for scan in scan_codenames scan_claims scan_production scan_companies; do
     out="$($scan "$tmp" || true)"
-    printf '%s\n' "$out" | grep -q -E 'FINE.md|CLAUDEME.md|SPEC.md' && { echo "FAIL: self-test: $scan flagged an allowed or exempt file: $out"; exit 1; }
+    printf '%s\n' "$out" | grep -q -E 'FINE.md|SPEC.md' && { echo "FAIL: self-test: $scan flagged an allowed or exempt file: $out"; exit 1; }
   done
 
   echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing; weapon and strike terms; public-doc codenames, claim words, production, legal forms; pending wording)"
@@ -259,12 +272,12 @@ fi
 if hits="$(scan_weapon "$root")"; then
   echo "PASS: no weapon or strike terminology"
 else
-  echo "FAIL: weapon or strike terminology found (Change Order 01):"
+  echo "FAIL: weapon or strike terminology found:"
   printf '%s\n' "$hits"
   status=1
 fi
 
-for rule in "codenames:no internal codename in a public doc" "claims:no compliance, certification, FIPS or validated wording in a public doc" \
+for rule in "codenames:no internal codename or change-order wording in any file" "claims:no compliance, certification, FIPS or validated wording in a public doc" \
   "production:production only quoted or as not production in a public doc" "companies:no company legal form in a public doc" \
   "pending:no counsel, lawyer, to be supplied, placeholder, TBD or coming soon wording in any file"; do
   name="${rule%%:*}" what="${rule#*:}"

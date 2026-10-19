@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# validate.sh: CLAUDEME pre-commit gate. RUN THIS BEFORE EVERY COMMIT.
+# validate.sh: the pre-commit gate. RUN THIS BEFORE EVERY COMMIT.
 # Runs the checks of every CI job except those that need their own build or tools: the fuzz job
 # (pinned nightly and cargo-fuzz), the release-build verify timing gate, the armv7 job (QEMU),
 # the release jobs (static builds twice from clean, SBOMs, demo image under docker, aarch64 and
@@ -12,7 +12,7 @@ set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-echo "=== CLAUDEME compliance check: Sealed Flight Record ==="
+echo "=== pre-commit checks: Sealed Flight Record ==="
 failures=0
 run() {
   local name="$1"; shift
@@ -54,7 +54,7 @@ run "README numbers match docs/receipts/ci-run.txt" scripts/regen_readme_numbers
 run "docs tests self-test" python3 -I scripts/check_docs.py --self-test
 run "docs tests (scripts/check_docs.py)" python3 -I scripts/check_docs.py
 
-# 4c. Release scripts (Chunk 5): no private key in the repository, the signing script's own
+# 4c. Release scripts: no private key in the repository, the signing script's own
 # test, the benchmark segment manifest, and every script parses.
 run "no private key self-test" scripts/check_no_private_keys.sh --self-test
 run "no private key in the repository" scripts/check_no_private_keys.sh
@@ -62,7 +62,7 @@ run "no email address self-test" scripts/check_no_emails.sh --self-test
 run "no email address in the repository" scripts/check_no_emails.sh
 run "engine bundle check self-test" scripts/check_engine_bundle.sh --self-test
 run "release signing self-test" scripts/release_sign.sh --self-test
-# The release workflows (Chunk 5 and the evaluation release): their rules, the hygiene scan of
+# The release workflows: their rules, the hygiene scan of
 # every release file, and the whole offline signing flow with eight attacks on it. The hygiene
 # scan needs exiftool (apt-get install libimage-exiftool-perl); a missing tool is a failure.
 run "workflow rules self-test" scripts/check_workflows.sh --self-test

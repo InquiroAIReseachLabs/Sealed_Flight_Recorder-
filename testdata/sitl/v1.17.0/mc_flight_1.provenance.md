@@ -10,9 +10,7 @@ Generated for this project in PX4 v1.17.0 SITL with the built-in SIH simulator. 
 | SHA-256 | `6e7b6956c20422aa9f31a13e7f074e80cba85760928fd895eed941e9492823fc` |
 | Size | 8536869 bytes |
 
-Full procedure, topic counts, and event sequence: `docs/DIAGNOSTIC.md`, item 3.
-
-The script that drove the flight (paths are those of the generating machine):
+The script that drove the flight (the working directory of the generating machine is written `/path/to/work`):
 
 ```bash
 #!/bin/bash
@@ -22,10 +20,10 @@ The script that drove the flight (paths are those of the generating machine):
 # auto-disarm by landing. Default configuration, no param set. Run via nsrun.sh (private /tmp + loopback).
 # "keep" reuses an existing rootfs (parameters.bson persists) -> scenario B2 / volatile parameter experiment.
 set -u
-PX4_DIR=/tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/px4/PX4-Autopilot-v1.17.0
+PX4_DIR=/path/to/work/px4/PX4-Autopilot-v1.17.0
 BIN=$PX4_DIR/build/px4_sitl_default/bin
 ETC=$PX4_DIR/build/px4_sitl_default/etc
-OUT=/tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/sitl_logs/v1.17.0
+OUT=/path/to/work/sitl_logs/v1.17.0
 ROOTFS=${1:?rootfs}; SCENARIO=${2:?scenario}; KEEP=${3:-}
 MODEL=sihsim_quadx
 [ -z "$KEEP" ] && rm -rf "$ROOTFS"

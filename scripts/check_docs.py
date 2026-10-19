@@ -32,7 +32,7 @@ Every public doc is held to four rules:
   3. Links. Every relative link resolves to a file in the work tree, and an anchor (`#part`)
      to a heading of that file.
   4. Scope. The public docs: every Markdown file that git lists (tracked, or untracked and not
-     ignored), except CLAUDEME.md, docs/SPEC.md and docs/DIAGNOSTIC.md (internal records), the
+     ignored), except docs/SPEC.md (the design contract, which quotes forbidden wording), the
      reports sfr writes (examples/reports/*.sfr.md), and the provenance and license files of the test
      logs (testdata/**/*.provenance.md, testdata/pyulog/).
 
@@ -56,7 +56,7 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXEMPT = {"CLAUDEME.md", "docs/SPEC.md", "docs/DIAGNOSTIC.md"}
+EXEMPT = {"docs/SPEC.md"}
 SHELLS = {"sh", "bash", "shell", "console", "zsh"}
 FENCE = re.compile(r"^( {0,3})(`{3,})(.*)$")
 TRY_DIR = "try"
@@ -526,12 +526,13 @@ def self_test():
         open(os.path.join(tmp, "README.md"), "w").write(good.replace("| a | b |", "From `scripts/count.sh`:\n\n| a | b |"))
         assert run_release(tmp, os.path.join(tmp, "wd2")) == ["README.md has no doc-release block: nothing to run"]
         # Exempt files and generated reports are not public docs; generated blocks are not prose.
-        open(os.path.join(tmp, "CLAUDEME.md"), "w").write("```\nanything 1234\n```\n")
+        os.makedirs(os.path.join(tmp, "docs"), exist_ok=True)
+        open(os.path.join(tmp, "docs/SPEC.md"), "w").write("```\nanything 1234\n```\n")
         os.makedirs(os.path.join(tmp, "examples/reports"))
         open(os.path.join(tmp, "examples/reports/x.sfr.md"), "w").write("```\n99\n```\n")
         open(os.path.join(tmp, "docs/gen.md"), "w").write("# Gen\n\n<!-- BEGIN tests: written -->\n123 passed\n<!-- END tests -->\n")
         docs, errors = check(tmp, run=False)
-        assert "CLAUDEME.md" not in docs and "examples/reports/x.sfr.md" not in docs and errors == [], (docs, errors)
+        assert "docs/SPEC.md" not in docs and "examples/reports/x.sfr.md" not in docs and errors == [], (docs, errors)
     finally:
         shutil.rmtree(tmp)
     print("PASS: docs self-test (commands run and outputs compared, labels, syntax-only blocks, links and anchors, "

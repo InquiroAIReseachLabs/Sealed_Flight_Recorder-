@@ -1,5 +1,5 @@
 #!/bin/sh
-# run_demo.sh: the offline demo of sfr (Chunk 5; SPEC B1.10 No network: it passes in
+# run_demo.sh: the offline demo of sfr (SPEC B1.10 No network: it passes in
 # `docker run --network=none`).
 #
 #   a. keygen an evaluation key

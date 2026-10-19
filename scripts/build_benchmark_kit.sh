@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build_benchmark_kit.sh: the benchmark kit tarball, for any architecture (Chunk 5).
+# build_benchmark_kit.sh: the benchmark kit tarball, for any architecture.
 #
 # scripts/benchmark.sh needs no build tools, but it needs the golden logs. The kit holds:
 #

@@ -1,7 +1,6 @@
 //! Sealed Flight Record engine (SPEC B1.2, `crates/sfr-core`).
 //!
-//! Ingest, events, and rules (Chunk 2) and the record, Merkle tree, signing, and verification
-//! (Chunk 3) live here. The engine performs no I/O beyond reading byte streams handed to it,
+//! Ingest, events, and rules and the record, Merkle tree, signing, and verification live here. The engine performs no I/O beyond reading byte streams handed to it,
 //! has no networking, and contains no `unsafe` code.
 #![forbid(unsafe_code)]
 

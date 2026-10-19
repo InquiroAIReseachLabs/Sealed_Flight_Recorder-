@@ -19,11 +19,11 @@ PX4 source is cited as `path:line` relative to the root of the PX4 v1.17.0 tree 
 
 - Run on 2026-10-18 from 22:19:24 to 22:20:42 UTC (wall clock from the run's command log). This is attempt 2; attempt 1 is described under "Superseded attempt". ULog info field `boot_time_utc_us` is 1792361964762746. The log is `<rootfs>/log/2026-10-18/22_19_25.ulg`, the only `.ulg` in the rootfs, with the same SHA-256 as this copy.
 - `<work>` below is the working directory of the generating machine (written `/path/to/work` in the script copies), and `<PX4>` is `<work>/px4/PX4-Autopilot-v1.17.0`.
-- Fresh, empty rootfs `<work>/co01_sih/runs/payload_two_sources_a2/rootfs`: the script refuses an attempt directory that exists, and the command log prints the rootfs as empty before the start. No `parameters*.bson` existed before the start.
-- Driver invocation: `cd <work>/co01_sih && ./run_flight.sh payload_two_sources <work>/co01_sih/runs/payload_two_sources_a2` (script below).
+- Fresh, empty rootfs `<work>/golden_sih/runs/payload_two_sources_a2/rootfs`: the script refuses an attempt directory that exists, and the command log prints the rootfs as empty before the start. No `parameters*.bson` existed before the start.
+- Driver invocation: `cd <work>/golden_sih && ./run_flight.sh payload_two_sources <work>/golden_sih/runs/payload_two_sources_a2` (script below).
 - PX4 server start, from inside the rootfs: `env PX4_SIM_MODEL=sihsim_quadx PX4_SIMULATOR=sihsim PX4_PARAM_PWM_MAIN_FUNC5=301 PX4_PARAM_PWM_MAIN_FUNC6=430 <PX4>/build/px4_sitl_default/bin/px4 -i 5 -d <PX4>/build/px4_sitl_default/etc`. px4 printed `instance: 5`, `Simulation loop with 250 Hz (4000 us sim time interval)` and `Simulation with 1.0x speedup`.
-- The binary is the one used for the other v1.17.0 SIH golden logs (`make px4_sitl_default`, `docs/DIAGNOSTIC.md` item 3), used as is: `build/px4_sitl_default/bin/px4`, 52691768 bytes, SHA-256 `0fc8eab8114ade0c011ecec11fde5d3d610d1a42121bbe6b1badd3f0b2382b6b`, file time 02:55 UTC on 2026-10-18.
-- MAVLink client start, after the preflight checks passed: `MAVLINK20=1 <work>/co01_sih/venv/bin/python -I <work>/co01_sih/mav_driver.py --scenario payload_two_sources --cmdlog <cmd log> --bin <PX4>/build/px4_sitl_default/bin --instance 5 --expect-sysid 6`. Every flight command went over MAVLink; the px4 client binaries were used only for read-only checks (`px4-listener`, `px4-param show`, `px4-logger status`) and the final `px4-shutdown --instance 5`.
+- The binary is the one used for the other v1.17.0 SIH golden logs (`make px4_sitl_default`), used as is: `build/px4_sitl_default/bin/px4`, 52691768 bytes, SHA-256 `0fc8eab8114ade0c011ecec11fde5d3d610d1a42121bbe6b1badd3f0b2382b6b`, file time 02:55 UTC on 2026-10-18.
+- MAVLink client start, after the preflight checks passed: `MAVLINK20=1 <work>/golden_sih/venv/bin/python -I <work>/golden_sih/mav_driver.py --scenario payload_two_sources --cmdlog <cmd log> --bin <PX4>/build/px4_sitl_default/bin --instance 5 --expect-sysid 6`. Every flight command went over MAVLink; the px4 client binaries were used only for read-only checks (`px4-listener`, `px4-param show`, `px4-logger status`) and the final `px4-shutdown --instance 5`.
 - SITL logging defaults were kept: `SDLOG_MODE` 1 (from boot until disarm) and `SDLOG_PROFILE` 131, set by v1.17.0 `ROMFS/px4fmu_common/init.d-posix/rcS:180` and `ROMFS/px4fmu_common/init.d-posix/rcS:182`. pyulog reports 0 dropouts.
 - Host: Linux x86_64. Another PX4 SITL instance 0 was running on the same host: its UDP ports 18570, 14580, 14280 and 13030 were in use at the start (command log). Load average was 1.72 at start and 3.91 at end. The lockstep simulation ran a little slower than wall clock: 39.6 s of wall time for 37.6 s of simulation time between the arm and land sends.
 - Cleanup: px4 exited 0 after `px4-shutdown --instance 5`. The script then removed `/tmp/px4-sock-5` and `/tmp/px4_lock-5`.
@@ -333,7 +333,7 @@ The scripts used absolute paths under a working directory of the generating mach
 ```bash
 #!/bin/bash
 # run_flight.sh <scenario> <attempt_dir>
-# co01 golden flights, PX4 v1.17.0 SITL with the built-in SIH simulator, airframe 10040_sihsim_quadx,
+# Golden flights, PX4 v1.17.0 SITL with the built-in SIH simulator, airframe 10040_sihsim_quadx,
 # PX4 instance 5 (px4 -i 5) so sockets (/tmp/px4-sock-5), lock file (/tmp/px4_lock-5) and MAVLink ports
 # (GCS 18575, onboard 14585, payload 14285, gimbal 13035, SIH display 19455) do not collide with other px4
 # instances on this host. Fresh rootfs per attempt (no parameters*.bson), SITL logging defaults
@@ -351,7 +351,7 @@ set -u
 PX4_DIR=/path/to/work/px4/PX4-Autopilot-v1.17.0
 BIN=$PX4_DIR/build/px4_sitl_default/bin
 ETC=$PX4_DIR/build/px4_sitl_default/etc
-WORK=/path/to/work/co01_sih
+WORK=/path/to/work/golden_sih
 PY=$WORK/venv/bin/python
 DRIVER=$WORK/mav_driver.py
 INST=5
@@ -439,7 +439,7 @@ exit $DRC
 #!/usr/bin/env python3
 # mav_driver.py --scenario {payload_two_sources|vision_odometry} --cmdlog <file> --bin <px4 bin dir> [--instance 5]
 #
-# MAVLink client for the co01 SIH golden flights (PX4 v1.17.0 SITL, airframe 10040_sihsim_quadx, px4 -i 5).
+# MAVLink client for the SIH golden flights (PX4 v1.17.0 SITL, airframe 10040_sihsim_quadx, px4 -i 5).
 # Run with MAVLINK20=1 (pymavlink, dialect common, MAVLink 2). Every send, every COMMAND_ACK and every
 # STATUSTEXT received is written with a UTC wall clock stamp to --cmdlog; px4-listener (--instance 5) is
 # polled for the state checks, as in the existing golden driver scripts.

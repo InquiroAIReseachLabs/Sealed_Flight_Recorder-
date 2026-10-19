@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check_reproducible.sh: build one target twice from clean and compare (Chunk 5 task 7).
+# check_reproducible.sh: build one target twice from clean and compare.
 #
 # Runs scripts/build_release.sh twice in one build directory, <cargo target dir>/reproducible,
 # deleting it before each build, and compares the two binaries and the two tarballs byte for byte.
