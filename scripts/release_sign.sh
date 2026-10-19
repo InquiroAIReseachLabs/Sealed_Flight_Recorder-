@@ -93,7 +93,10 @@ self_test() {
   printf '0' >> "$t/SHA256SUMS"
   if verify "$t/SHA256SUMS" "$t/test.pub" > /dev/null 2>&1; then die "self-test: a changed SHA256SUMS verifies"; fi
   cp "$t/SHA256SUMS.orig" "$t/SHA256SUMS"
-  printf '\001' | dd of="$t/SHA256SUMS.sig" bs=1 seek=10 conv=notrunc 2> /dev/null
+  # Flip one bit of byte 10, so the signature always changes (writing a fixed byte left it
+  # unchanged whenever the random key's signature already held that byte there).
+  b="$(od -An -tu1 -j10 -N1 "$t/SHA256SUMS.sig" | tr -d ' ')"
+  printf "$(printf '\\%03o' $((b ^ 1)))" | dd of="$t/SHA256SUMS.sig" bs=1 seek=10 conv=notrunc 2> /dev/null
   if verify "$t/SHA256SUMS" "$t/test.pub" > /dev/null 2>&1; then die "self-test: a changed signature verifies"; fi
   (umask 077 && openssl genpkey -algorithm ed25519 -out "$t/other.key")
   public_of "$t/other.key" > "$t/other.pub"
