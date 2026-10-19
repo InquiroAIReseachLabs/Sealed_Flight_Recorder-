@@ -482,9 +482,17 @@ jobs:
           key="$RUNNER_TEMP/test-release.key" pub="$RUNNER_TEMP/test-release.pub"
           openssl genpkey -algorithm ed25519 -out "$key"
           openssl pkey -in "$key" -pubout -out "$pub"
-          scripts/release_sign.sh sign dist/SHA256SUMS "$key" --pubkey "$pub"
-          (cd dist && openssl pkeyutl -verify -pubin -inkey "$pub" -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig && sha256sum -c SHA256SUMS)
-          rm -f "$key" dist/SHA256SUMS.sig
+          # The signing script signs the GitHub release's list: the three tarballs and the three
+          # SBOMs (.github/workflows/release.yml), not the benchmark kit and the demo image.
+          version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          mkdir gh
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf; do
+            cp "dist/sfr-$version-$t.tar.gz" "dist/sfr-$version-$t.cdx.json" gh/
+          done
+          scripts/release_assemble.sh --set github gh > /dev/null
+          scripts/release_sign.sh sign gh/SHA256SUMS "$key" --pubkey "$pub"
+          (cd gh && openssl pkeyutl -verify -pubin -inkey "$pub" -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig && sha256sum --check --strict SHA256SUMS)
+          rm -f "$key"
           { echo "### SHA256SUMS (unsigned)"; echo; echo '```'; cat dist/SHA256SUMS; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
