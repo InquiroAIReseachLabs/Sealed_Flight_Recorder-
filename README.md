@@ -75,7 +75,7 @@ CI run 39190820606 on commit `0aa307f05d368cbc4984557e4492485a35d0732a`:
 
 ## Benchmark
 
-Seal time, standalone verify time and seal peak memory for every golden log and for logs of 10, 50 and 100 MB built for size only ([docs/BENCHMARK.md](docs/BENCHMARK.md)). Only the x86_64 CI machine is shown here. The aarch64 gate (100 MB seal under 4 s) is pending a run on real aarch64 hardware ([docs/RELEASE.md](docs/RELEASE.md) step 4); no armv7 timing is published.
+Seal time, standalone verify time and seal peak memory for every golden log and for the large logs built for size only ([docs/BENCHMARK.md](docs/BENCHMARK.md)). Only the x86_64 CI machine is shown here. The aarch64 gate is pending a run on real aarch64 hardware ([docs/RELEASE.md](docs/RELEASE.md) step 4); no armv7 timing is published.
 
 <!-- BEGIN benchmark: written by scripts/regen_readme_numbers.sh, do not edit by hand -->
 `scripts/benchmark.sh` run from the x86_64 release tarball and the benchmark kit, CI run 39190820606 on commit `0aa307f05d368cbc4984557e4492485a35d0732a` (docs/BENCHMARK.md).

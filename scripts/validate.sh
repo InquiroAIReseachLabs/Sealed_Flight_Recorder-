@@ -3,7 +3,7 @@
 # Runs the checks of every CI job except those that need their own build or tools: the fuzz job
 # (pinned nightly and cargo-fuzz), the release-build verify timing gate, the armv7 job (QEMU),
 # and the release jobs (static builds twice from clean, SBOMs, demo image under docker, aarch64
-# records under QEMU, benchmark, SHA256SUMS); scripts/build_release.sh, scripts/run_demo.sh and
+# and armv7 records under QEMU, benchmark, SHA256SUMS); scripts/build_release.sh, scripts/run_demo.sh and
 # docs/RELEASE.md run those by hand. Exits non-zero on any FAIL.
 set -uo pipefail
 

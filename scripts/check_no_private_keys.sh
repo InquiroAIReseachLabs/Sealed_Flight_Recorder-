@@ -48,7 +48,10 @@ if [ "${1:-}" = --self-test ]; then
   [ "$(sort "$tmp.out" | tr '\n' ' ')" = "notes.txt release/sfr-release.pem " ] \
     || { echo "FAIL: self-test: found [$(cat "$tmp.out")]"; exit 1; }
   rm -rf "$tmp/.git"
-  if scan "$tmp" > /dev/null 2>&1; then echo "FAIL: self-test: a directory git cannot list passes"; exit 1; fi
+  # GIT_CEILING_DIRECTORIES: a TMPDIR inside a work tree must not let git find that repository.
+  if GIT_CEILING_DIRECTORIES="$(dirname "$tmp")" scan "$tmp" > /dev/null 2>&1; then
+    echo "FAIL: self-test: a directory git cannot list passes"; exit 1
+  fi
   echo "PASS: private key self-test (untracked and tracked files, PKCS#8 and EC, allow list, ignored files, no git)"
   exit 0
 fi

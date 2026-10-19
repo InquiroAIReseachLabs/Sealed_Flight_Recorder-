@@ -277,7 +277,7 @@ jobs:
           retention-days: 3
 
   records:
-    name: every golden log seals to the same bytes on x86_64, aarch64 and armv7 (QEMU) (SPEC B1.10 Deterministic)
+    name: every golden log seals to the same bytes on x86_64, aarch64 and armv7 (QEMU) (SPEC B1.10 Deterministic, armv7)
     needs: release-build
     runs-on: ubuntu-24.04
     steps:

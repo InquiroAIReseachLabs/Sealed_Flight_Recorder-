@@ -58,6 +58,6 @@ while read -r log; do
     || { echo "build_benchmark_kit.sh: $log has no notice" >&2; exit 1; }
 done < <(find "$kit/testdata" -name '*.ulg')
 tarball="$out/$name.tar.gz"
-tar -C "$stage" --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX' \
+tar -C "$stage" --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX,a-s' \
   --format=gnu -cf - "$name" | gzip -n -6 > "$tarball"
 echo "$tarball"

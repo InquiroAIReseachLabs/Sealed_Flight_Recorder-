@@ -4,8 +4,8 @@
 # Runs scripts/build_release.sh twice in one build directory, <cargo target dir>/reproducible,
 # deleting it before each build, and compares the two binaries and the two tarballs byte for byte.
 # Prints one line per artifact, "identical <sha256>" or "DIFFERENT <sha256> <sha256>", and keeps
-# the first build's tarball in <out-dir>. It reports; it does not claim more than two builds on one machine prove. Exits 1 if
-# either artifact differs.
+# the first build's tarball in <out-dir>. It reports; it does not claim more than two builds on
+# one machine prove. Exits 1 if either artifact differs.
 #
 # Usage: scripts/check_reproducible.sh <target> <out-dir>
 set -euo pipefail

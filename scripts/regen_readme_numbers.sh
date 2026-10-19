@@ -212,10 +212,11 @@ regenerate() {
   [[ "$(field "$r" commit)" =~ ^[0-9a-f]{40}$ ]] || die "$r has no commit"
   rendered="$(blocks "$r")"
   while IFS= read -r marker; do
+    [[ "$marker" == '<!-- '* ]] || die "$readme has a marker that does not start its line: $marker"
     block="$(printf '%s\n' "$marker" | sed -E 's/^<!-- (BEGIN|END) ([a-z-]+).*$/\2/')"
     [ "$block" = release-key ] || printf '%s\n' "$rendered" | grep -q -x -F -- "$block" \
       || die "$readme holds a $block block, but the receipt $r has no lines for it"
-  done < <(grep -E '^<!-- (BEGIN|END) ' "$readme" || true)
+  done < <(grep -E '<!-- (BEGIN|END) ' "$readme" || true)
   render_release_key "$key" > "$work/block"
   splice "$readme" release-key "$work/block" > "$out"
   for block in $rendered; do
@@ -279,6 +280,11 @@ self_test() {
   main write "$t/orphan.md" "$t/cq-receipt" "$t/no-such.pub"
   printf '%s\n' "$(begin benchmark)" '| large_100mb | 9 |' "$(end benchmark)" >> "$t/orphan.md"
   if (main check "$t/orphan.md" "$t/cq-receipt" "$t/no-such.pub" > /dev/null 2>&1); then die "self-test: a block the receipt cannot fill is accepted"; fi
+  # The same block with indented markers, which Markdown still hides.
+  readme "$t/indented.md" verify-timing tests release-key
+  main write "$t/indented.md" "$t/cq-receipt" "$t/no-such.pub"
+  printf '%s\n' "  $(begin benchmark)" '| large_100mb | 9 |' "   $(end benchmark)" >> "$t/indented.md"
+  if (main check "$t/indented.md" "$t/cq-receipt" "$t/no-such.pub" > /dev/null 2>&1); then die "self-test: an indented marker is accepted"; fi
   # The release key, with its fingerprint, once release/sfr-release.pub exists.
   openssl genpkey -algorithm ed25519 -out "$t/k.key" 2> /dev/null
   openssl pkey -in "$t/k.key" -pubout -out "$t/k.pub"

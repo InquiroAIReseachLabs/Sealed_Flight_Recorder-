@@ -15,9 +15,9 @@
 #
 # The build is meant not to depend on where it runs (scripts/check_reproducible.sh compares two
 # builds on one machine): --remap-path-prefix replaces the checkout, the Cargo home, and the target
-# directory in the binary; SFR_BUILD_COMMIT is the checkout's commit;
-# the tarball has sorted names, modes 755 and 644 whatever the umask, the commit time as every
-# mtime, owner 0, and no gzip timestamp.
+# directory in the binary; SFR_BUILD_COMMIT is the checkout's commit; the tarball has sorted
+# names, modes 755 and 644 whatever the umask or a setgid temporary directory, the commit time as
+# every mtime, owner 0, and no gzip timestamp.
 # scripts/check_reproducible.sh builds a target twice from clean and compares.
 #
 # Usage: scripts/build_release.sh <target> <out-dir>
@@ -98,6 +98,6 @@ install -m 0644 examples/reports/* "$pkg/examples/reports/"
 } > "$pkg/BUILDINFO"
 chmod 0644 "$pkg/BUILDINFO"
 tarball="$out/$name.tar.gz"
-tar -C "$stage" --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX' \
+tar -C "$stage" --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX,a-s' \
   --format=gnu -cf - "$name" | gzip -n -9 > "$tarball"
 echo "$tarball"
