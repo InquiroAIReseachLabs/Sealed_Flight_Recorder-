@@ -44,6 +44,10 @@ pub const MAX_TEXT_BYTES: u64 = 16 * 1024 * 1024;
 /// The first line of every output for a record sealed with an evaluation key (SPEC B1.3).
 pub const EVALUATION_LINE: &str = sfr_core::report::EVALUATION_LINE;
 
+/// The `trust` line of a verification against a given public key, as `sfr verify --pubkey`
+/// prints it.
+pub const TRUST_PUBKEY: &str = sfr_core::verify::TRUST_PUBKEY;
+
 /// `seal.key_label` of a record sealed with the in-browser evaluation key.
 pub const SANDBOX_KEY_LABEL: &str = "EVALUATION KEY (sandbox, in-browser)";
 
@@ -547,7 +551,8 @@ pub fn seal(req: SealRequest<'_>) -> Result<SealOutput, Failure> {
 
     let params = SealParams {
         time_utc,
-        token_cmvp_certificate: None,
+        signer_certificate: None,
+        certificate_chain: Vec::new(),
     };
     let sealed = sfr_core::seal::seal(&ing, &eval, &rules, &baseline, &params, &crypto, &key)
         .map_err(|e| fail(exit_code::USAGE, e.to_string()))?;
@@ -654,7 +659,12 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
                 t.push_str(EVALUATION_LINE);
                 t.push('\n');
             }
-            t.push_str(&sfr_core::verify::verified_text(record_path, &v));
+            t.push_str(&sfr_core::verify::verified_text(
+                record_path,
+                &v,
+                TRUST_PUBKEY,
+                "declared",
+            ));
             Ok(VerifyOutput {
                 exit_code: exit_code::OK,
                 headline,
@@ -681,7 +691,10 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
                 t.push_str(EVALUATION_LINE);
                 t.push('\n');
             }
-            t.push_str(&sfr_core::verify::failed_text(&m));
+            t.push_str(&sfr_core::verify::failed_text(
+                &m,
+                sfr_core::verify::claimed_seal(req.record.bytes).as_ref(),
+            ));
             Ok(VerifyOutput {
                 exit_code: exit_code::RULE_FAIL,
                 headline,

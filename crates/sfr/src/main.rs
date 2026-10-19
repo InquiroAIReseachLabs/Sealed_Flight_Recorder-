@@ -18,10 +18,12 @@ use sfr_core::keys::{
 use sfr_core::params::{Baseline, parse_baseline};
 use sfr_core::record::dry_run_json;
 use sfr_core::rules::{Rules, parse_rules};
-use sfr_core::seal::{SealParams, format_utc, parse_seal_time, seal, this_tool};
+use sfr_core::seal::{
+    SealParams, format_utc, parse_seal_time, parse_seal_time_seconds, seal, this_tool,
+};
 use sfr_core::verify::{
-    MAX_RECORD_BYTES, VerifyError, check_record_size, claimed_key_fingerprint, failed_text,
-    verified_text, verify,
+    ClaimedSeal, INTEGRITY_NOT_CHECKED, MAX_RECORD_BYTES, Mismatch, TRUST_PUBKEY, VerifyError,
+    check_record_size, claimed_lines, claimed_seal, failed_text, verified_text, verify,
 };
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -29,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use zeroize::Zeroizing;
 
+mod certs;
 mod hardware;
 
 const USAGE: &str = "usage:
@@ -94,7 +97,7 @@ impl Args {
                 let v = it
                     .next()
                     .ok_or_else(|| usage(format!("{a} needs a value")))?;
-                if out.values.iter().any(|(k, _)| k == a) {
+                if a != "--crl" && out.values.iter().any(|(k, _)| k == a) {
                     return Err(usage(format!("{a} given twice")));
                 }
                 out.values.push((a.clone(), v.clone()));
@@ -114,6 +117,15 @@ impl Args {
             .iter()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.as_str())
+    }
+
+    /// Every value of an option that may be given more than once (`--crl`).
+    fn values(&self, name: &str) -> Vec<&str> {
+        self.values
+            .iter()
+            .filter(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+            .collect()
     }
 
     fn flag(&self, name: &str) -> bool {
@@ -534,12 +546,28 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         .value("--baseline")
         .ok_or_else(|| usage("--baseline is required"))?;
     let dry_run = a.flag("--dry-run");
-    if a.value("--cert").is_some() || a.value("--chain").is_some() {
-        return Err(fail(
-            exit_code::USAGE,
-            "--cert and --chain (signer certificates) are not available in this build",
-        ));
+    if a.value("--chain").is_some() && a.value("--cert").is_none() {
+        return Err(usage("--chain applies only with --cert <signer.pem>"));
     }
+    let signer_certificate = match a.value("--cert") {
+        None => None,
+        Some(path) => {
+            let mut certs = certs::read_certificates(path, "signer certificate")
+                .map_err(|e| fail(exit_code::USAGE, e))?;
+            if certs.len() != 1 {
+                return Err(usage(format!(
+                    "--cert {path} holds {} certificates; give the signer's alone, intermediates with --chain",
+                    certs.len()
+                )));
+            }
+            Some(certs.remove(0))
+        }
+    };
+    let certificate_chain = match a.value("--chain") {
+        None => Vec::new(),
+        Some(path) => certs::read_certificates(path, "certificate chain")
+            .map_err(|e| fail(exit_code::USAGE, e))?,
+    };
     // The key source is checked before any work, so a usage error costs nothing.
     if a.value("--key-uri").is_some() && a.value("--key").is_some() {
         return Err(usage("give one key source: --key-uri or --key"));
@@ -671,9 +699,25 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         return Ok(eval.exit_code);
     };
 
+    // The signer certificate must certify the signing key (SPEC B1.3 --cert).
+    if let Some(der) = &signer_certificate {
+        let certified = certs::certificate_key(der)
+            .map_err(|e| fail(exit_code::USAGE, format!("signer certificate: {e}")))?;
+        if certified != key.public_key() {
+            return Err(fail(
+                exit_code::USAGE,
+                format!(
+                    "the signer certificate certifies {}, not the signing key {}; nothing written",
+                    fingerprint(crypto, &certified),
+                    fingerprint(crypto, &key.public_key())
+                ),
+            ));
+        }
+    }
     let params = SealParams {
         time_utc,
-        token_cmvp_certificate: None,
+        signer_certificate,
+        certificate_chain,
     };
     let sealed = seal(
         &ing,
@@ -784,6 +828,17 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
 // ---------------------------------------------------------------------------------------------
 // verify
 
+/// What a verification checked the signature against.
+enum Trust {
+    /// A public key file given with `--pubkey`.
+    PublicKey([u8; 32]),
+    /// Trust anchors given with `--trust-anchor`, and CRLs given with `--crl`.
+    Anchors {
+        anchors: Vec<Vec<u8>>,
+        crls: Vec<Vec<u8>>,
+    },
+}
+
 fn verify_cmd(
     args: &[String],
     crypto: &RustCrypto,
@@ -795,20 +850,64 @@ fn verify_cmd(
         &["--require-hardware-key", "--json"],
     )?;
     let record_path = a.one_positional("record")?.to_string();
-    if a.value("--trust-anchor").is_some() || a.value("--crl").is_some() {
-        return Err(fail(
-            exit_code::USAGE,
-            "--trust-anchor and --crl (certificate chains) are not available in this build; use --pubkey",
-        ));
-    }
+    let json_out = a.flag("--json");
+    let crl_paths = a.values("--crl");
+    let trust = match (a.value("--pubkey"), a.value("--trust-anchor")) {
+        (Some(_), Some(_)) => {
+            return Err(usage(
+                "give one trust source: --pubkey <sfr.pub> or --trust-anchor <ca.pem>",
+            ));
+        }
+        (Some(pub_path), None) => {
+            if !crl_paths.is_empty() {
+                return Err(usage("--crl applies only to --trust-anchor"));
+            }
+            Some(Trust::PublicKey(
+                parse_public_key_pem(&read_text(pub_path, "public key", exit_code::USAGE)?)
+                    .map_err(|e| fail(exit_code::USAGE, format!("public key {pub_path}: {e}")))?,
+            ))
+        }
+        (None, Some(anchor_path)) => {
+            let anchors = certs::read_certificates(anchor_path, "trust anchor")
+                .map_err(|e| fail(exit_code::USAGE, e))?;
+            let crls = crl_paths
+                .iter()
+                .map(|p| certs::read_crl(p))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| fail(exit_code::USAGE, e))?;
+            Some(Trust::Anchors { anchors, crls })
+        }
+        (None, None) => {
+            if !crl_paths.is_empty() {
+                return Err(usage("--crl applies only to --trust-anchor"));
+            }
+            None
+        }
+    };
     // One byte over the limit is read so that `verify` reports the oversize record as a
     // verification failure (exit 1) naming the limit, the same way for every oversize record.
     let record = read_capped(&record_path, "record", MAX_RECORD_BYTES as u64 + 1)?;
-    let Some(pub_path) = a.value("--pubkey") else {
-        return Err(no_pubkey(&record_path, &record));
+    let claimed = claimed_seal(&record);
+    let Some(trust) = trust else {
+        return not_checked(&record_path, claimed.as_ref(), json_out, stdout);
     };
-    let public = parse_public_key_pem(&read_text(pub_path, "public key", exit_code::USAGE)?)
-        .map_err(|e| fail(exit_code::USAGE, format!("public key {pub_path}: {e}")))?;
+    // The key to check the signature with: the given one, or the one the record's signer
+    // certificate certifies (the certificate is inside the signed seal leaf, so the signature
+    // check below covers it before the chain is judged).
+    let public = match &trust {
+        Trust::PublicKey(k) => Ok(*k),
+        Trust::Anchors { .. } => claimed
+            .as_ref()
+            .and_then(|c| c.signer_certificate.as_deref())
+            .ok_or_else(|| {
+                "the record carries no signer certificate, so it cannot chain to a trust anchor; \
+                 verify it with --pubkey"
+                    .to_string()
+            })
+            .and_then(|der| {
+                certs::certificate_key(der).map_err(|e| format!("signer certificate: {e}"))
+            }),
+    };
     let mut log_file = match a.value("--ulog") {
         Some(p) => Some(
             File::open(p)
@@ -816,19 +915,69 @@ fn verify_cmd(
         ),
         None => None,
     };
-    let log: Option<&mut dyn Read> = log_file.as_mut().map(|f| f as &mut dyn Read);
-    let deep = log.is_some();
-    let outcome = verify(
-        &record,
-        log,
-        crypto,
-        &public,
-        a.flag("--require-hardware-key"),
-    );
-    let json_out = a.flag("--json");
+    let deep = log_file.is_some();
+    let outcome = match public {
+        Err(e) => Err(VerifyError::Mismatch(Mismatch {
+            first: e,
+            also: Vec::new(),
+            custody: claimed
+                .as_ref()
+                .and_then(|c| c.custody.as_deref())
+                .and_then(Custody::parse),
+        })),
+        Ok(public) => {
+            let log: Option<&mut dyn Read> = log_file.as_mut().map(|f| f as &mut dyn Read);
+            verify(
+                &record,
+                log,
+                crypto,
+                &public,
+                a.flag("--require-hardware-key"),
+            )
+        }
+    };
+    // With a trust anchor, a record that verified must also chain to it at its seal time.
+    let outcome = match (outcome, &trust) {
+        (Ok(v), Trust::Anchors { anchors, crls }) => {
+            let chained = claimed
+                .as_ref()
+                .and_then(|c| c.signer_certificate.as_deref())
+                .ok_or_else(|| "the record carries no signer certificate".to_string())
+                .and_then(|signer| {
+                    let seconds = parse_seal_time_seconds(&v.time_utc)?;
+                    let chain = claimed
+                        .as_ref()
+                        .map_or(&[][..], |c| c.certificate_chain.as_slice());
+                    certs::check_chain(signer, chain, anchors, crls, seconds)
+                });
+            match chained {
+                Ok(ok) => Ok((v, Some(ok))),
+                Err(e) => Err(VerifyError::Mismatch(Mismatch {
+                    first: format!("certificate chain: {e}"),
+                    also: Vec::new(),
+                    custody: Some(v.custody),
+                })),
+            }
+        }
+        (Ok(v), Trust::PublicKey(_)) => Ok((v, None)),
+        (Err(e), _) => Err(e),
+    };
     match outcome {
         Err(VerifyError::Io(e)) => Err(fail(exit_code::USAGE, format!("log: {e}"))),
-        Ok(v) => {
+        Ok((v, chain)) => {
+            let (trust_line, custody_note) = match &chain {
+                None => (TRUST_PUBKEY.to_string(), "declared".to_string()),
+                Some(ok) => (
+                    format!(
+                        "certificate chain to the trust anchor {} at the seal time; {} CRL(s) checked",
+                        ok.anchor, ok.crls
+                    ),
+                    format!(
+                        "declared; the key's certificate chains to the trust anchor {}",
+                        ok.anchor
+                    ),
+                ),
+            };
             let text = if json_out {
                 json::pretty(
                     &Obj::new()
@@ -846,7 +995,22 @@ fn verify_cmd(
                         )
                         .field("record", Value::str(record_path.clone()))
                         .field("deep", Value::Bool(v.deep))
+                        .field(
+                            "trust",
+                            Value::str(if chain.is_some() {
+                                "trust-anchor"
+                            } else {
+                                "pubkey"
+                            }),
+                        )
+                        .field(
+                            "trust_anchor",
+                            chain
+                                .as_ref()
+                                .map_or(Value::Null, |c| Value::str(c.anchor.clone())),
+                        )
                         .field("key_custody", Value::str(v.custody.as_str()))
+                        .field("key_custody_proven", Value::Bool(false))
                         .field("key_fingerprint", Value::str(v.fingerprint.clone()))
                         .field("crypto_crates", Value::str(v.crypto_crates.clone()))
                         .field("sealed_utc", Value::str(v.time_utc.clone()))
@@ -860,7 +1024,7 @@ fn verify_cmd(
                     t.push_str(EVALUATION_LINE);
                     t.push('\n');
                 }
-                t.push_str(&verified_text(&record_path, &v));
+                t.push_str(&verified_text(&record_path, &v, &trust_line, &custody_note));
                 t
             };
             write_out(stdout, &text)?;
@@ -878,6 +1042,10 @@ fn verify_cmd(
                         .field(
                             "key_custody",
                             m.custody.map_or(Value::Null, |c| Value::str(c.as_str())),
+                        )
+                        .field(
+                            "key_fingerprint",
+                            Value::opt_str(claimed.as_ref().and_then(|c| c.fingerprint.clone())),
                         )
                         .field("first_mismatch", Value::str(m.first.clone()))
                         .field(
@@ -900,7 +1068,7 @@ fn verify_cmd(
                     t.push_str(EVALUATION_LINE);
                     t.push('\n');
                 }
-                t.push_str(&failed_text(&m));
+                t.push_str(&failed_text(&m, claimed.as_ref()));
                 t
             };
             write_out(stdout, &text)?;
@@ -909,24 +1077,49 @@ fn verify_cmd(
     }
 }
 
-/// `verify` without `--pubkey`: nothing is checked, because the record names its signing key
-/// only by fingerprint and its signature can be checked only with that key's public half. Says
-/// so, names the fingerprint the record claims, and says how to check the signer (exit 4).
-fn no_pubkey(record_path: &str, record: &[u8]) -> Failure {
-    let claimed = claimed_key_fingerprint(record).map_or_else(
-        || "the record's signing key".to_string(),
-        |fp| format!("the key the record names, {fp}"),
-    );
-    fail(
-        exit_code::USAGE,
-        format!(
-            "Signer: NOT CHECKED against a trusted key: no --pubkey was given, so nothing was verified.\n\
-             The signature can be checked only with the public half of {claimed}.\n\
-             To check who signed it, get the signer's public key (sfr.pub) from the signer through a channel you trust, \
-             confirm its fingerprint with them, and run:\n  \
-             sfr verify {record_path} --pubkey <sfr.pub>"
-        ),
-    )
+/// `verify` with neither `--pubkey` nor `--trust-anchor`: nothing is checked, because a record
+/// signed by anyone verifies against its own key. Says so on standard output, names the key and
+/// custody the record claims, says how to check it, and exits 4.
+fn not_checked(
+    record_path: &str,
+    claimed: Option<&ClaimedSeal>,
+    json_out: bool,
+    stdout: &mut dyn Write,
+) -> Result<i32, Failure> {
+    let how = "give the signer's public key (--pubkey <sfr.pub>) or a trust anchor its \
+               certificate chains to (--trust-anchor <ca.pem>), obtained through a channel you trust";
+    let text = if json_out {
+        json::pretty(
+            &Obj::new()
+                .field("verified", Value::Bool(false))
+                .field("integrity", Value::str("NOT CHECKED"))
+                .field("flight_rules", Value::str("UNKNOWN"))
+                .field("record", Value::str(record_path))
+                .field(
+                    "key_fingerprint",
+                    Value::opt_str(claimed.and_then(|c| c.fingerprint.clone())),
+                )
+                .field(
+                    "key_custody",
+                    Value::opt_str(claimed.and_then(|c| c.custody.clone())),
+                )
+                .field("how_to_check", Value::str(how))
+                .build(),
+        )
+    } else {
+        let mut t = String::new();
+        if claimed.and_then(|c| c.custody.as_deref()) == Some(Custody::FileEvaluation.as_str()) {
+            t.push_str(EVALUATION_LINE);
+            t.push('\n');
+        }
+        t.push_str(&format!(
+            "{INTEGRITY_NOT_CHECKED}\nFlight rules: UNKNOWN (the record's integrity was not checked)\nrecord    {record_path}\n{}To check it, {how}.\n",
+            claimed_lines(claimed)
+        ));
+        t
+    };
+    write_out(stdout, &text)?;
+    Ok(exit_code::USAGE)
 }
 
 // ---------------------------------------------------------------------------------------------

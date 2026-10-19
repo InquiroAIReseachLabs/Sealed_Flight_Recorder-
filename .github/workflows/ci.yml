@@ -57,6 +57,8 @@ jobs:
           awk '/^test result:/ { p += $4; f += $6; i += $8 }
             END { printf "tests: %d passed, %d failed, %d ignored (cargo test --workspace --locked)\n", p, f, i }' test.log \
             | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: The test certificates are what scripts/testdata/make_test_pki.sh makes
+        run: scripts/testdata/make_test_pki.sh --check
       - name: README numbers come only from docs/receipts/ci-run.txt (SPEC B1.10 Reproducible claims)
         run: |
           set -euo pipefail

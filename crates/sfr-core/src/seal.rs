@@ -11,7 +11,7 @@ use crate::crypto::{CrateVersion, CryptoBackend, Signer};
 use crate::evaluate::{Evaluation, Status};
 use crate::ingest::Ingested;
 use crate::json::{Obj, Value, canonical};
-use crate::keys::fingerprint;
+use crate::keys::{base64_encode, fingerprint};
 use crate::merkle;
 use crate::params::Baseline;
 use crate::record::{baseline_json, config_json, events_json, log_json, sealed_topics_json};
@@ -204,8 +204,12 @@ pub fn crates_json(crates: &[CrateVersion]) -> Value {
 pub struct SealParams {
     /// RFC 3339 UTC time, `YYYY-MM-DDTHH:MM:SSZ` (see [`parse_seal_time`]).
     pub time_utc: String,
-    /// CMVP certificate number of a PKCS#11 token, given with `--token-cert`.
-    pub token_cmvp_certificate: Option<String>,
+    /// The signer's X.509 certificate (DER), given with `seal --cert`; it must hold the
+    /// signing key. Recorded as `seal.signer_certificate`, base64.
+    pub signer_certificate: Option<Vec<u8>>,
+    /// Intermediate CA certificates (DER), given with `seal --chain`, nearest the signer first.
+    /// Recorded as `seal.certificate_chain`, each base64; null when empty.
+    pub certificate_chain: Vec<Vec<u8>>,
 }
 
 /// A sealed record.
@@ -255,13 +259,30 @@ pub fn seal(
             .field("key_fingerprint", Value::str(fp.clone()))
             .field("key_label", Value::str(signer.label()))
             .field("key_custody", Value::str(signer.custody().as_str()))
-            .field(
-                "token_cmvp_certificate",
-                Value::opt_str(params.token_cmvp_certificate.clone()),
-            )
+            // Always null: sfr records nothing about a token's certification.
+            .field("token_cmvp_certificate", Value::Null)
             .field("crypto_crates", crates_json(crypto.crates()))
-            .field("signer_certificate", Value::Null)
-            .field("certificate_chain", Value::Null)
+            .field(
+                "signer_certificate",
+                params
+                    .signer_certificate
+                    .as_ref()
+                    .map_or(Value::Null, |der| Value::str(base64_encode(der))),
+            )
+            .field(
+                "certificate_chain",
+                if params.certificate_chain.is_empty() {
+                    Value::Null
+                } else {
+                    Value::Array(
+                        params
+                            .certificate_chain
+                            .iter()
+                            .map(|der| Value::str(base64_encode(der)))
+                            .collect(),
+                    )
+                },
+            )
             .build(),
     );
     record.insert("log".to_string(), log_json(&ing.identity));
@@ -366,6 +387,12 @@ pub fn format_utc(unix_seconds: i64) -> String {
 /// Parses an RFC 3339 time with whole seconds and a `Z` or `+HH:MM` / `-HH:MM` offset, and
 /// returns it as UTC `YYYY-MM-DDTHH:MM:SSZ` (the record's form). Years 1970 to 9999.
 pub fn parse_seal_time(text: &str) -> Result<String, String> {
+    parse_seal_time_seconds(text).map(format_utc)
+}
+
+/// The Unix time, in seconds, of an RFC 3339 time [`parse_seal_time`] accepts, such as a
+/// record's `seal.time_utc`.
+pub fn parse_seal_time_seconds(text: &str) -> Result<i64, String> {
     let bad =
         || format!("`{text}` is not an RFC 3339 time like 2026-10-18T14:00:00Z (whole seconds)");
     let b = text.as_bytes();
@@ -438,7 +465,7 @@ pub fn parse_seal_time(text: &str) -> Result<String, String> {
     if unix < 0 {
         return Err(bad());
     }
-    Ok(format_utc(unix))
+    Ok(unix)
 }
 
 #[cfg(test)]

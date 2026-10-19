@@ -14,6 +14,8 @@ path = "src/main.rs"
 sfr-core = { path = "../sfr-core" }
 zeroize = { workspace = true }
 getrandom = { workspace = true }
+rustls-webpki = { workspace = true }
+rustls-pki-types = { workspace = true }
 
 # The sandbox engine, held to the CLI's output in tests/sandbox.rs.
 [dev-dependencies]

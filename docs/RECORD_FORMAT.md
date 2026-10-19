@@ -55,16 +55,16 @@ A schema 1 record holds exactly these thirteen fields, no more and no fewer (`RE
 
 | Member | Value |
 |---|---|
-| `certificate_chain` | `null` in this build (certificate chains are not built yet) |
+| `certificate_chain` | `null`, or, beside a signer certificate, an array of the intermediate CA certificates given with `seal --chain`, nearest the signer first, each the standard base64 (RFC 4648, padded) of its DER |
 | `crypto_crates` | array of `{"name": ..., "version": ...}`, one per crate that computed the record, sorted by name: `blake3`, `ed25519-dalek`, `sha2` with their crate versions (`RUSTCRYPTO_CRATES` in `crates/sfr-core/src/crypto.rs`) |
 | `key_custody` | `pkcs11-token`, `tpm-sealed` or `file-evaluation` (below) |
 | `key_fingerprint` | `sha256:` and the lowercase hex SHA-256 of the signing key's SubjectPublicKeyInfo DER |
 | `key_label` | the key file name, token object label, or sealed-key directory |
-| `signer_certificate` | `null` in this build |
+| `signer_certificate` | `null`, or the standard base64 (RFC 4648, padded) of the DER of the signer's X.509 certificate given with `seal --cert`; its key is the signing key (`seal` refuses another) |
 | `time_utc` | `YYYY-MM-DDTHH:MM:SSZ`: the time given with `--seal-time`, converted to UTC, or the sealing machine's clock when none is given. Self-asserted: signed, so it cannot change after sealing, but nothing checks it |
 | `token_cmvp_certificate` | always `null`: `sfr` records nothing about the token beyond the key's fingerprint and label |
 
-**Key custody** is declared by the sealer and signed with the record: `pkcs11-token` (the private key never leaves a PKCS#11 token or HSM), `tpm-sealed` (the seed is sealed to one TPM 2.0 and is in `sfr`'s memory for one signature), `file-evaluation` (a key file, for evaluation only). This build signs only with `file-evaluation` keys. A verifier must treat custody as a claim: only a signer certificate chain could prove it ([THREAT_MODEL.md](THREAT_MODEL.md)).
+**Key custody** is declared by the sealer and signed with the record: `pkcs11-token` (the private key never leaves a PKCS#11 token or HSM), `tpm-sealed` (the seed is sealed to one TPM 2.0 and is in `sfr`'s memory for one signature), `file-evaluation` (a key file, for evaluation only). A verifier must treat custody as a claim, with or without a certificate chain ([THREAT_MODEL.md](THREAT_MODEL.md)). The certificates are inside the seal leaf, so the signature covers them; `verify --trust-anchor` checks them (`crates/sfr/src/certs.rs`).
 
 **Seal time** is the sealer's statement, signed but not proven: nothing in the record shows when it was made unless a trusted time is supplied ([THREAT_MODEL.md](THREAT_MODEL.md)).
 

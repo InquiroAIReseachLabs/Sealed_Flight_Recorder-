@@ -37,6 +37,11 @@ getrandom = { version = "=0.4.3", default-features = false }
 # Rules file parsing (SPEC B1.6). serde_core only, no derive macros; tables are walked by hand
 # so unknown keys can be rejected.
 toml = { version = "=0.9.12", default-features = false, features = ["parse", "std", "serde"] }
+# sfr verify --trust-anchor only (SPEC B1.3): X.509 path validation, extended key usage and CRLs.
+# No crypto backend feature: sfr supplies Ed25519 from ed25519-dalek, so the one crypto stack
+# (SPEC B1.10 Crypto) holds and neither ring nor aws-lc enters the build.
+rustls-webpki = { version = "=0.103.15", default-features = false, features = ["alloc"] }
+rustls-pki-types = { version = "=1.15.1", default-features = false, features = ["alloc"] }
 # sfr-pkcs11-helper only: a separate, dynamically linked process (SPEC B1.2).
 cryptoki = { version = "=0.12.1" }
 # sfr-wasm on wasm32 only: the bindings the sandbox page calls (site/). The JavaScript glue is

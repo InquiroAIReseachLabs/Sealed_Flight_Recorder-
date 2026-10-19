@@ -10,7 +10,7 @@ This is an evaluation release, provided without warranty, and in development: th
 
 - **Only the record is signed.** The `.sfr` file is what the signature covers and what `sfr verify` checks. The `.sfr.md` report is a readable view generated from the record; it carries no signature of its own, so anyone can edit a copy of it. Trust what `sfr verify` says about the `.sfr`, not the report.
 - **The seal proves no change since sealing, not accuracy before it.** A record that verifies has not changed since it was sealed, and with `--ulog` neither has the log. It does not prove that the log was accurate or honest when it was sealed, that the vehicle did what the log says, or that nothing changed the log between the flight and the seal.
-- **Who signed needs the signer's public key.** The record names its signing key only by fingerprint. `sfr verify` checks the signature against the public key you give it with `--pubkey`, so it tells you who signed only if you got that key from the signer through a channel you trust. A key that arrives with the record proves nothing about who signed it. Without `--pubkey`, `sfr verify` checks nothing.
+- **Who signed needs the signer's public key.** The record names its signing key only by fingerprint. `sfr verify` checks the signature against the public key you give it with `--pubkey`, or against the key in the record's signer certificate when that certificate chains to a trust anchor you give it with `--trust-anchor` (with `--crl` for revocation). It tells you who signed only if you got that key or anchor through a channel you trust. A key that arrives with the record proves nothing about who signed it. Given neither, `sfr verify` checks nothing: it prints `Integrity: NOT CHECKED (no trusted key given)` and exits 4. Every verify prints the key fingerprint and the custody the record declares; custody is never proven, even by a certificate chain, which shows whom the key belongs to, not where it is kept.
 - **The seal time is self-asserted.** `sealed` is the sealing machine's clock, or the time given with `--seal-time`. It is signed, so it cannot change after sealing, but nothing checks that it was right.
 - **PX4 versions.** `sfr` is tested on logs from PX4 v1.14.4 and v1.17.0 (`testdata/sitl/`); v1.15 and v1.16 are decoded from the PX4 source's message definitions, but no log from them is in the tests. A log from a version outside v1.14 to v1.17, or with no version, is still accepted and sealed: `seal` prints a warning on standard error, the version-dependent names in its events are left empty, and no such log is tested.
 
@@ -122,7 +122,8 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    Integrity: VERIFIED (record and log)
    Flight rules: PASS
    record    examples/reports/vtol_transition.sfr
-   custody   file-evaluation
+   trust     the public key given with --pubkey (trusted as far as its source is)
+   custody   file-evaluation (declared)
    key       sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f
    crypto    blake3 1.8.7, ed25519-dalek 3.0.0, sha2 0.11.1 (crate versions)
    sealed    2026-10-18T15:00:00Z (stated by the sealer, not checked)
@@ -143,6 +144,8 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    EVALUATION KEY: not for operational use
    Integrity: FAILED: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
    Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
+   key       sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f (named by the record, not proven)
+   custody   file-evaluation (declared by the record, not proven)
    exit 1
    ```
 
@@ -158,6 +161,8 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    Integrity: FAILED: event seq 1 (COMMAND) field `command`: sealed 311, found 211
      also: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
    Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
+   key       sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f (named by the record, not proven)
+   custody   file-evaluation (declared by the record, not proven)
    exit 1
    ```
 
@@ -217,10 +222,10 @@ From `crates/sfr-core/src/lib.rs` (`exit_code`):
 | Exit | `sfr seal` | `sfr verify` |
 |---|---|---|
 | 0 | every rule PASS or N/A; record written | `Integrity: VERIFIED`, whatever the `Flight rules:` line says |
-| 1 | a rule FAIL; the record is still written | `Integrity: FAILED`: the record, or the log with `--ulog`, does not match, or is over an input limit |
+| 1 | a rule FAIL; the record is still written | `Integrity: FAILED`: the record, or the log with `--ulog`, does not match, is over an input limit, or (with `--trust-anchor`) its certificate chain is refused |
 | 2 | a required topic or field is missing (R1 FAIL); the record is still written | not used |
 | 3 | the log, rules file or baseline is malformed, truncated, or over an input limit; nothing written | not used |
-| 4 | a usage, key or file error; nothing written | a usage, key or file error |
+| 4 | a usage, key or file error; nothing written | a usage, key or file error, or no trust source given (`Integrity: NOT CHECKED`) |
 
 `sfr keygen` and `sfr --version` exit 0 or 4.
 
