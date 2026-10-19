@@ -9,9 +9,9 @@
 # (CI) fails when README.md differs from what the receipt gives. The blocks:
 #
 #   verify-timing  code-quality job: the two "perf:" lines of crates/sfr/tests/verify_perf.rs
-#   tests          code-quality job: the "tests:" line; armv7 and aarch64-records jobs: the
-#                  "byte-identical records and reports" line of scripts/check_same_records.sh;
-#                  demo job: the "DEMO PASSED" and "demo:" lines
+#   tests          code-quality job: the "tests:" line; records job: the two "byte-identical
+#                  records and reports" lines of scripts/check_same_records.sh (x86_64 against
+#                  aarch64 and against armv7); demo job: the "DEMO PASSED" and "demo:" lines
 #   benchmark      benchmark job: the output of scripts/benchmark.sh (x86_64 only: no armv7
 #                  timing is published, SPEC B1.10 armv7)
 #
@@ -21,8 +21,8 @@
 #   scripts/regen_readme_numbers.sh                    rewrite README.md from the receipt
 #   scripts/regen_readme_numbers.sh --check            exit 1 if README.md differs from the receipt
 #   scripts/regen_readme_numbers.sh --receipt <run-id> <commit> <job>=<log> ...
-#       write the receipt from CI job logs; <job> is code-quality, armv7, aarch64-records, demo,
-#       or benchmark; a log may carry the timestamps GitHub puts before each line
+#       write the receipt from CI job logs; <job> is code-quality, records, demo, or benchmark;
+#       a log may carry the timestamps GitHub puts before each line
 #   scripts/regen_readme_numbers.sh --self-test
 set -euo pipefail
 export LC_ALL=C
@@ -39,10 +39,10 @@ end() { echo "<!-- END $1 -->"; }
 job_pattern() {
   case "$1" in
     code-quality) echo '^(perf|tests): ' ;;
-    armv7 | aarch64-records) echo '^byte-identical records and reports' ;;
+    records) echo '^byte-identical records and reports, ' ;;
     demo) echo '^(DEMO PASSED in |demo: )' ;;
     benchmark) echo '^((benchmark|hardware|note|gate|memory): |\| )' ;;
-    *) die "unknown job $1 (code-quality, armv7, aarch64-records, demo, benchmark)" ;;
+    *) die "unknown job $1 (code-quality, records, demo, benchmark)" ;;
   esac
 }
 
@@ -112,13 +112,13 @@ render_tests() {
   re='^tests: ([0-9]+) passed, 0 failed, ([0-9]+) ignored \(cargo test --workspace --locked\)$'
   [[ "$tests" =~ $re ]] || die "cannot read the tests line (or a test failed): $tests"
   local passed="${BASH_REMATCH[1]}" ignored="${BASH_REMATCH[2]}"
-  re='^byte-identical records and reports: ([0-9]+ of [0-9]+) golden logs$'
-  armv7="$(one "$r" armv7 '^byte-identical')"
+  re='^byte-identical records and reports, x86_64 and (aarch64|armv7): ([0-9]+ of [0-9]+) golden logs$'
+  armv7="$(one "$r" records 'x86_64 and armv7: ')"
   [[ "$armv7" =~ $re ]] || die "cannot read the armv7 line: $armv7"
-  armv7="${BASH_REMATCH[1]}"
-  aarch64="$(one "$r" aarch64-records '^byte-identical')"
+  armv7="${BASH_REMATCH[2]}"
+  aarch64="$(one "$r" records 'x86_64 and aarch64: ')"
   [[ "$aarch64" =~ $re ]] || die "cannot read the aarch64 line: $aarch64"
-  aarch64="${BASH_REMATCH[1]}"
+  aarch64="${BASH_REMATCH[2]}"
   one "$r" demo '^DEMO PASSED in ' > /dev/null
   demo="$(one "$r" demo '^demo: ')"
   re='^demo: docker run --network=none, image loaded from its saved tarball, wall time ([0-9.]+) s$'
@@ -208,15 +208,15 @@ self_test() {
     "${ts}perf: in-process verify (gated, under 10 ms): 10,000 events, 123 byte record, median 1.00 ms, min 0.90 ms, max 2.00 ms, 101 runs" \
     "perf: end-to-end sfr verify (not gated): same record, median 3.00 ms, min 2.50 ms, max 4.00 ms, 101 runs"$'\r' \
     "${ts}tests: 10 passed, 0 failed, 2 ignored (cargo test --workspace --locked)" > "$t/cq.log"
-  echo "${ts}byte-identical records and reports: 14 of 14 golden logs" > "$t/armv7.log"
-  echo "byte-identical records and reports: 13 of 14 golden logs" > "$t/aarch64.log"
+  printf '%s\n' "${ts}byte-identical records and reports, x86_64 and aarch64: 13 of 14 golden logs" \
+    "byte-identical records and reports, x86_64 and armv7: 14 of 14 golden logs" > "$t/records.log"
   printf '%s\n' "DEMO PASSED in 1 s: every step gave the expected result." \
     "demo: docker run --network=none, image loaded from its saved tarball, wall time 2.50 s" > "$t/demo.log"
   printf '%s\n' "benchmark: sfr 0.1.0 (build abc); binary x86_64, machine x86_64; 5 run(s) per log" \
     "hardware: x86_64; CPU Test" "note: built for size only" "| log | bytes |" "|---|---|" "| large_100mb | 100 |" \
     "gate: x86_64 large_100mb seal median 0.700 s, under 2 s: PASS" "memory: large_100mb seal peak RSS 4000 KB" > "$t/bench.log"
-  receipt "$t/receipt" 7 "$(printf 'a%.0s' {1..40})" code-quality="$t/cq.log" armv7="$t/armv7.log" \
-    aarch64-records="$t/aarch64.log" demo="$t/demo.log" benchmark="$t/bench.log"
+  receipt "$t/receipt" 7 "$(printf 'a%.0s' {1..40})" code-quality="$t/cq.log" records="$t/records.log" \
+    demo="$t/demo.log" benchmark="$t/bench.log"
   { echo "# Title"; for b in verify-timing tests benchmark; do echo; begin "$b"; echo stale; end "$b"; done; echo; echo tail; } > "$t/README.md"
   main write "$t/README.md" "$t/receipt"
   grep -q -F '| In-process verify | `sfr_core::verify` on the record bytes already in memory | 1.00 ms | 0.90 ms | 2.00 ms | 101 |' "$t/README.md" \
@@ -224,6 +224,7 @@ self_test() {
   grep -q -F '| 3.00 ms | 2.50 ms | 4.00 ms | 101 | not gated, reported only |' "$t/README.md" || die "self-test: the end-to-end row is wrong"
   grep -q -F '| `cargo test --workspace --locked` | 10 passed, 0 failed, 2 ignored |' "$t/README.md" || die "self-test: the tests row is wrong"
   grep -q -F 'aarch64 (QEMU) | byte-identical records and reports: 13 of 14 golden logs |' "$t/README.md" || die "self-test: the aarch64 row is wrong"
+  grep -q -F 'armv7 (QEMU) | byte-identical records and reports: 14 of 14 golden logs |' "$t/README.md" || die "self-test: the armv7 row is wrong"
   grep -q -F '| passed, wall time 2.50 s |' "$t/README.md" || die "self-test: the demo row is wrong"
   grep -q -x -F '| large_100mb | 100 |' "$t/README.md" || die "self-test: the benchmark table is missing"
   grep -q -x -F -- '- gate: x86_64 large_100mb seal median 0.700 s, under 2 s: PASS' "$t/README.md" || die "self-test: the gate line is missing"

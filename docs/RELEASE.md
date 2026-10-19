@@ -9,7 +9,7 @@ The founder makes each release. CI never signs, tags, or publishes: every commit
 | `release-build` (one per target) | `scripts/check_reproducible.sh`, which runs `scripts/build_release.sh` twice from clean | `rust-lld` links a static `sfr` (`readelf -lW`: no INTERP; `readelf -dW`: no NEEDED; `file`: static) for `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` and `armv7-unknown-linux-musleabihf`; the two binaries and the two tarballs are byte-identical |
 | `release-kit-sbom` | `scripts/build_benchmark_kit.sh`, `scripts/release_sbom.sh` | the benchmark kit; one CycloneDX SBOM per target, naming its target and listing `sha2`, `ed25519-dalek` and `blake3` |
 | `demo` | `scripts/build_demo_image.sh`, `scripts/run_demo.sh` | the demo image, saved, then loaded on a cleaned Docker and run with `--network=none` in under 60 s |
-| `aarch64-records` | `scripts/check_same_records.sh` | every golden log seals to the same record and report with the x86_64 and the aarch64 release binaries (aarch64 under QEMU) |
+| `records` | `scripts/check_same_records.sh` | every golden log seals to the same record and report with the x86_64 release binary as with the aarch64 and the armv7 ones (both under QEMU) |
 | `benchmark` | `scripts/benchmark.sh` | from the x86_64 tarball and the kit in `debian:12-slim`, no build tools: 100 MB seal under 2 s, peak memory of every golden log and the 100 MB log |
 | `release-assemble` | `scripts/release_assemble.sh`, `scripts/release_sign.sh` | `SHA256SUMS` lists exactly the release files; the signing script signs it with a throwaway key and the `openssl` command below verifies it |
 

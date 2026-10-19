@@ -72,8 +72,10 @@ jobs:
             grep -E '^perf: ' verify-perf.log | sed -e 's/^perf: /- /'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The static armv7 build and the comparison of its records with x86_64 run in release-build
+  # and records, from the release tarballs, beside this job.
   armv7:
-    name: armv7 static build, tests under QEMU, records identical to x86_64 (SPEC B1.10)
+    name: armv7 full test suite under QEMU (SPEC B1.10 armv7)
     runs-on: ubuntu-latest
     env:
       # Rust's own linker and the target's bundled musl startup files: no cross C toolchain.
@@ -91,25 +93,10 @@ jobs:
             sudo sh -c 'cat /usr/lib/binfmt.d/qemu-arm.conf > /proc/sys/fs/binfmt_misc/register'
           fi
           qemu-arm-static --version | head -1
-      - name: Static armv7 build; file reports a statically linked 32-bit ARM executable
-        run: |
-          set -euo pipefail
-          cargo build --release --locked -p sfr --target armv7-unknown-linux-musleabihf
-          out="$(file target/armv7-unknown-linux-musleabihf/release/sfr)"
-          echo "$out"
-          grep -q 'ELF 32-bit LSB executable, ARM' <<<"$out"
-          grep -q 'statically linked' <<<"$out"
       # Profile qemu-test (Cargo.toml): optimized, with overflow checks and debug assertions on;
       # an unoptimized build under emulation was the slowest step of CI.
       - name: Full test suite on armv7 under QEMU (correctness only; no armv7 timing is gated)
         run: cargo test --workspace --locked --profile qemu-test --target armv7-unknown-linux-musleabihf
-      - name: Every golden log seals to the same bytes on x86_64 and armv7
-        run: |
-          set -euo pipefail
-          cargo build --release --locked -p sfr
-          scripts/check_same_records.sh target/release/sfr target/armv7-unknown-linux-musleabihf/release/sfr \
-            | tee same-records.log
-          { echo "### Records sealed on x86_64 and armv7"; echo; tail -1 same-records.log; } >> "$GITHUB_STEP_SUMMARY"
 
   golden-oracle:
     name: golden files agree with the independent pyulog oracle
@@ -262,7 +249,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: release-x86_64-unknown-linux-musl
           path: dist
@@ -289,15 +276,15 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  aarch64-records:
-    name: every golden log seals to the same bytes on x86_64 and aarch64 (QEMU) (SPEC B1.10 Deterministic)
+  records:
+    name: every golden log seals to the same bytes on x86_64, aarch64 and armv7 (QEMU) (SPEC B1.10 Deterministic)
     needs: release-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
-          pattern: release-*-linux-musl
+          pattern: release-*-unknown-linux-*
           path: dist
           merge-multiple: true
       - name: Install QEMU user-mode emulation
@@ -305,16 +292,24 @@ jobs:
           set -euo pipefail
           sudo apt-get update -q
           sudo apt-get install -y -q qemu-user-static
-      - name: Seal every golden log with the x86_64 and the aarch64 release binaries; compare
+      # The release binaries of the three tarballs; aarch64 and armv7 run through QEMU wrappers.
+      # The "byte-identical" lines are what the README copies.
+      - name: Seal every golden log with the x86_64, aarch64 and armv7 release binaries; compare
         run: |
           set -euo pipefail
           mkdir bin
-          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do tar -C bin -xzf dist/sfr-*-$t.tar.gz; done
-          aarch64="$(ls -d "$PWD"/bin/sfr-*-aarch64-unknown-linux-musl)/bin/sfr"
-          printf '#!/bin/sh\nexec qemu-aarch64-static %s "$@"\n' "$aarch64" > sfr-aarch64
-          chmod +x sfr-aarch64
-          scripts/check_same_records.sh bin/sfr-*-x86_64-unknown-linux-musl/bin/sfr "$PWD/sfr-aarch64" | tee same-records.log
-          { echo "### Records sealed on x86_64 and aarch64"; echo; tail -1 same-records.log; } >> "$GITHUB_STEP_SUMMARY"
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf; do
+            tar -C bin -xzf dist/sfr-*-$t.tar.gz
+          done
+          x86="$(ls -d "$PWD"/bin/sfr-*-x86_64-unknown-linux-musl)/bin/sfr"
+          for arch in aarch64:aarch64-unknown-linux-musl armv7:armv7-unknown-linux-musleabihf; do
+            name="${arch%%:*}" target="${arch#*:}"
+            qemu="qemu-${name/armv7/arm}-static"
+            printf '#!/bin/sh\nexec %s %s "$@"\n' "$qemu" "$(ls -d "$PWD"/bin/sfr-*-"$target")/bin/sfr" > "sfr-$name"
+            chmod +x "sfr-$name"
+            scripts/check_same_records.sh "$x86" "$PWD/sfr-$name" "x86_64 and $name" | tee "same-records-$name.log"
+          done
+          { echo "### Records sealed on x86_64, aarch64 and armv7"; echo; tail -qn1 same-records-*.log | sed 's/^/- /'; } >> "$GITHUB_STEP_SUMMARY"
 
   # No source checkout and no Rust: the two tarballs, in debian:12-slim with GNU time added.
   benchmark:
@@ -322,11 +317,11 @@ jobs:
     needs: [release-build, release-kit-sbom]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: release-x86_64-unknown-linux-musl
           path: dist
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: release-kit-sbom
           path: dist
@@ -350,7 +345,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           pattern: release-*
           path: dist
