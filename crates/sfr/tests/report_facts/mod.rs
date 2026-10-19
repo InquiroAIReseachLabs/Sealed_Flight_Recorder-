@@ -289,6 +289,34 @@ pub fn check(record: &Value, md: &str) {
         assert_eq!(rows, want, "parameter differences are R3's detail lines");
     }
 
+    // Parameters changed in flight: exactly the PARAM_CHANGED_IN_FLIGHT events, in order.
+    l.expect("## Parameters changed in flight");
+    l.expect("");
+    l.expect(
+        "These are reported, not a rule failure: R3 compares the parameters at log start with the baseline.",
+    );
+    l.expect("");
+    let changes: Vec<&Obj> = a(r, "events")
+        .iter()
+        .map(|e| o(e, "event"))
+        .filter(|e| plain(f(e, "kind")) == "PARAM_CHANGED_IN_FLIGHT")
+        .collect();
+    if changes.is_empty() {
+        l.expect("No parameter changed in flight.");
+        l.expect("");
+    } else {
+        let rows = l.table(&["Seq", "Boot time (s)", "Parameter", "Old", "New"]);
+        assert_eq!(rows.len(), changes.len(), "one row per parameter change");
+        for (row, e) in rows.iter().zip(changes) {
+            assert_eq!(row[0], ev(f(e, "seq")));
+            assert_eq!(micros(&row[1]).to_string(), plain(f(e, "boot_us")));
+            assert_eq!(
+                row[2..],
+                [ev(f(e, "name")), ev(f(e, "old")), ev(f(e, "new"))]
+            );
+        }
+    }
+
     // Transition tuning, exactly when the record has a vtol_type.
     if let Value::Object(vt) = f(vehicle, "vtol_type") {
         l.expect("## Transition tuning");
@@ -400,6 +428,13 @@ pub fn check(record: &Value, md: &str) {
                 .collect::<Vec<_>>()
                 .join("; ");
             assert_eq!(row[4], want.trim(), "event {} detail", row[0]);
+        }
+        // The legend for `initial`, exactly when an event carries it.
+        if events.iter().any(|e| o(e, "event").contains_key("initial")) {
+            l.expect(
+                "`initial` (ARM, FAILSAFE_SET): true when the event comes from the log's first `vehicle_status` sample, because the log starts armed or in failsafe; false when it is a change between two samples.",
+            );
+            l.expect("");
         }
     }
 

@@ -302,7 +302,12 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
 /// verifies against its log with the committed public key.
 #[test]
 fn the_example_reports_render_from_their_records_and_verify() {
-    for name in ["vtol_transition", "failsafe_gps_loss"] {
+    for name in [
+        "vtol_transition",
+        "failsafe_gps_loss",
+        "gz_quadtailsitter_transition",
+        "gz_x500_vision_hover",
+    ] {
         let record = format!("examples/reports/{name}.sfr");
         let parsed = sfr_core::json::parse(&std::fs::read(root().join(&record)).unwrap()).unwrap();
         let md = std::fs::read_to_string(root().join(format!("{record}.md"))).unwrap();

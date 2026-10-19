@@ -2,6 +2,10 @@
 
 SPEC B1.7 defines the record. Chunk 7 completes this document: every field, the leaf layout, and copy-paste `openssl` and `b3sum` commands that check a record without `sfr`. Change Order 01 requires the sealed topic digest byte layout now, so that an independent implementation can reproduce it; it is below.
 
+## Event field `initial`
+
+ARM and FAILSAFE_SET events carry a boolean `initial` (SPEC B1.5); no other event kind has it. It is `true` when the event comes from the log's first `vehicle_status` sample, because the log starts armed (ARM) or with `vehicle_status.failsafe` true (FAILSAFE_SET): the event records the state the log opens in, not a change the log shows. It is `false` when the event is a change from the previous `vehicle_status` sample in file order. The report shows the field in the detail column of its event timeline, with this definition in one line under the table.
+
 ## Sealed topic digests
 
 A rules file may list topics in `[sealed_topics]` (at most 64). For each listed topic and each instance (`multi_id`) the log subscribes, the record holds one entry in `sealed_topics`. The tool needs no knowledge of the topic's message structure: ULog is self-describing.

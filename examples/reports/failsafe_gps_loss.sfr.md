@@ -25,6 +25,12 @@ EVALUATION KEY: not for operational use
 
 R3 found no difference between the baseline and the flown parameters.
 
+## Parameters changed in flight
+
+These are reported, not a rule failure: R3 compares the parameters at log start with the baseline.
+
+No parameter changed in flight.
+
 ## Sealed topics
 
 The record holds no sealed topic digests.
@@ -61,6 +67,8 @@ The record holds no sealed topic digests.
 | 25 | 45.172000 | FAILSAFE\_CLEAR |  | flag local\_position\_invalid\_relaxed |
 | 26 | 45.172000 | FAILSAFE\_CLEAR |  | flag local\_velocity\_invalid |
 
+`initial` (ARM, FAILSAFE_SET): true when the event comes from the log's first `vehicle_status` sample, because the log starts armed or in failsafe; false when it is a change between two samples.
+
 ## Log
 
 - File: failsafe\_gps\_loss\.ulg
@@ -74,15 +82,15 @@ The record holds no sealed topic digests.
 ## Seal
 
 - Sealed at: 2026\-10\-18T15\:00\:00Z
-- Key fingerprint: `sha256:79f8ff973d02c252cb7740a48e532f6f3794b2c2299398e379e35bb36f7d8d39`
+- Key fingerprint: `sha256:e9189283def3921d2c7489ceed37e4680b4768b78faa311fdf49cf6325b5e4f4`
 - Key custody: file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
-- Merkle root: `f7b0c88e857de6fe2cc25c24fbb2aa8290d7b3d01a3ea8807a4b710b6fd75eec` (sha256\-rfc6962, 39 leaves)
+- Merkle root: `1bd8cc1bb59722f87adaec7fc06721ebd64f21ba6672426f1b6a9b6fe20cd361` (sha256\-rfc6962, 39 leaves)
 - Schema version: 1
 
 ## Verify
 
-With the public key whose fingerprint is `sha256:79f8ff973d02c252cb7740a48e532f6f3794b2c2299398e379e35bb36f7d8d39` saved as `sfr.pub`, in the directory that holds the record and the log:
+With the public key whose fingerprint is `sha256:e9189283def3921d2c7489ceed37e4680b4768b78faa311fdf49cf6325b5e4f4` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
 sfr verify failsafe_gps_loss.sfr --pubkey sfr.pub --ulog failsafe_gps_loss.ulg

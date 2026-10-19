@@ -24,6 +24,12 @@ pub const REPORT_EXTENSION: &str = "sfr.md";
 /// Hex digits of a sealed topic digest shown in the report.
 pub const DIGEST_PREFIX_LEN: usize = 16;
 
+/// The note under "Parameters changed in flight": the section reports, it does not judge.
+pub const PARAM_CHANGES_NOTE: &str = "These are reported, not a rule failure: R3 compares the parameters at log start with the baseline.";
+
+/// The legend under the event timeline when an event carries `initial` (docs/RECORD_FORMAT.md).
+pub const INITIAL_LEGEND: &str = "`initial` (ARM, FAILSAFE_SET): true when the event comes from the log's first `vehicle_status` sample, because the log starts armed or in failsafe; false when it is a change between two samples.";
+
 /// Why a record cannot be turned into a report: it lacks a field the report shows. A record
 /// that `verify` accepts always has every one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,6 +266,40 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         out.push('\n');
     }
 
+    // Parameters changed in flight: the PARAM_CHANGED_IN_FLIGHT events, in timeline order.
+    out.push_str("## Parameters changed in flight\n\n");
+    out.push_str(PARAM_CHANGES_NOTE);
+    out.push_str("\n\n");
+    let mut changes = Vec::new();
+    for (i, e) in events.iter().enumerate() {
+        let path = format!("events[{i}]");
+        let e = obj(e, &path)?;
+        if s(e, "kind", &path)? == "PARAM_CHANGED_IN_FLIGHT" {
+            changes.push((path, e));
+        }
+    }
+    if changes.is_empty() {
+        out.push_str("No parameter changed in flight.\n\n");
+    } else {
+        header(
+            &mut out,
+            &["Seq", "Boot time (s)", "Parameter", "Old", "New"],
+        );
+        for (path, e) in changes {
+            row(
+                &mut out,
+                &[
+                    escape(&s(e, "seq", &path)?),
+                    seconds(get(e, "boot_us", &path)?),
+                    escape(&s(e, "name", &path)?),
+                    escape(&s(e, "old", &path)?),
+                    escape(&s(e, "new", &path)?),
+                ],
+            );
+        }
+        out.push('\n');
+    }
+
     // Transition tuning, when the vehicle is VTOL.
     if let Value::Object(vt) = get(vehicle, "vtol_type", "log.vehicle")? {
         out.push_str("## Transition tuning\n\n");
@@ -361,6 +401,13 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
             );
         }
         out.push('\n');
+        if events
+            .iter()
+            .any(|e| matches!(e, Value::Object(m) if m.contains_key("initial")))
+        {
+            out.push_str(INITIAL_LEGEND);
+            out.push_str("\n\n");
+        }
     }
 
     // Log identity and digests.
