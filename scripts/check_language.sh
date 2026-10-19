@@ -8,7 +8,16 @@
 #   3. If a local, git-ignored file named .forbidden-terms exists (one term per line: target
 #      company, aircraft, customer names, internal codenames), none of them appears in any
 #      tracked or untracked-but-not-ignored file, case-insensitively. The terms file itself
-#      must never be committed, which is why the scan is optional and .gitignore lists it.
+#      must never be committed, which is why the scan is optional and .gitignore lists it. CI
+#      writes it from the repository secret SFR_FORBIDDEN_TERMS when that secret is set.
+#   4. Public docs (every Markdown file except the internal records CLAUDEME.md, docs/SPEC.md and
+#      docs/DIAGNOSTIC.md) name no internal codename (CLAUDEME, "Chunk <n>"); hold no compliance,
+#      certification, FIPS or "validated" wording at all, claim or not; say "production" only
+#      inside double quotes or inline code, or as "not production" / "not for production"; and
+#      name no company by its legal form (Inc, LLC, Ltd, GmbH, Corp, Corporation, PLC, Pty).
+#   5. No public file says "counsel", "lawyer", "to be supplied", "placeholder", "TBD" or "coming
+#      soon": the repository states what exists, not what is promised. An HTML `placeholder=`
+#      attribute is markup, not wording. This script is exempt, because it holds the list.
 #
 # Files scanned: tracked plus untracked files that .gitignore does not exclude, so a new doc
 # fails locally before it is committed, the same way it would fail in CI.
@@ -85,6 +94,51 @@ scan_terms() {
   return 0
 }
 
+# Public docs under a work tree, NUL separated: Markdown, except the internal records.
+public_docs() {
+  candidate_files "$1" | grep -z '\.md$' | grep -zvE '^(CLAUDEME\.md|docs/SPEC\.md|docs/DIAGNOSTIC\.md)$' || true
+}
+
+# Prints hits of an extended regex in public docs, after a sed program blanks what is allowed;
+# returns 1 if any. scan_public <dir> <regex> [<sed program>]
+scan_public() {
+  local dir="$1" re="$2" allow="${3:-}" hits
+  hits="$(cd "$dir" && public_docs . | while IFS= read -r -d '' f; do
+      sed -E -e "$allow" -- "$f" | grep -n -i -E -- "$re" | sed "s|^|$f:|" || true
+    done)"
+  if [ -n "$hits" ]; then printf '%s\n' "$hits"; return 1; fi
+  return 0
+}
+
+CODENAME_RE='claudeme|\bchunk [0-9]+\b'
+CLAIM_RE='\b(compliant|compliance|certified|certification|validated|fips)\b'
+# "production" is allowed only inside double quotes or inline code, or as "not (for) production".
+PRODUCTION_RE='\bproduction\b'
+PRODUCTION_ALLOW='s/"[^"]*"//g; s/`[^`]*`//g; s/\bnot (for )?production\b//gI'
+COMPANY_RE='\b(Inc|LLC|Ltd|GmbH|Corp|Corporation|PLC|Pty)\b'
+
+# Promise and pending-work wording, banned in every text file (rule 5).
+PENDING_RE='\b(counsel|lawyers?|to be supplied|placeholders?|tbd|coming soon)\b'
+scan_pending() {
+  local dir="$1" hits
+  hits="$(cd "$dir" && candidate_files . \
+    | grep -zvE '\.(ulg|png|jpe?g|gif|ico|wasm|pdf|gz)$' | grep -zv -x -F -- 'scripts/check_language.sh' \
+    | xargs -0 -r grep -n -i -I -E -- "$PENDING_RE" 2>/dev/null | grep -v -E ':[0-9]+:.*<[^>]* placeholder="' || true)"
+  if [ -n "$hits" ]; then printf '%s\n' "$hits"; return 1; fi
+  return 0
+}
+
+scan_codenames() { scan_public "$1" "$CODENAME_RE"; }
+scan_claims() { scan_public "$1" "$CLAIM_RE"; }
+scan_production() { scan_public "$1" "$PRODUCTION_RE" "$PRODUCTION_ALLOW"; }
+# Case matters for legal forms ("inc" and "corp" are ordinary in code words), so grep -i is undone.
+scan_companies() {
+  local dir="$1" hits
+  hits="$(cd "$dir" && public_docs . | xargs -0 -r grep -n -E -- "$COMPANY_RE" 2>/dev/null || true)"
+  if [ -n "$hits" ]; then printf '%s\n' "$hits"; return 1; fi
+  return 0
+}
+
 if [ "${1:-}" = "--self-test" ]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
@@ -146,7 +200,38 @@ if [ "${1:-}" = "--self-test" ]; then
   done
   printf '%s\n' "$out" | grep -q '^fine.md' && { echo "FAIL: self-test: false positive on fine.md"; exit 1; }
 
-  echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing; weapon and strike terms)"
+  # Public docs: codenames, claim words, "production", legal forms; the internal records are exempt.
+  rm -f "$tmp"/*.md "$tmp"/docs/*.md
+  printf 'Built to the CLAUDEME standard.\nDone in Chunk 7.\n' > "$tmp/docs/CODE.md"
+  printf 'Uses validated crypto.\nNo FIPS claim.\nSee the compliance notes.\nIt is certified.\n' > "$tmp/docs/CLAIM.md"
+  printf 'Ready for production.\nThe production page.\n' > "$tmp/docs/PROD.md"
+  printf 'This is not production code.\nIt is not for production use.\nThe flag is "production".\nSet `mode = production`.\n' > "$tmp/docs/PROD_OK.md"
+  printf 'Built for Example Widgets Inc.\nA GmbH partner.\n' > "$tmp/docs/CO.md"
+  printf 'chunked uploads; an increment; corpus files; incoming/\n' > "$tmp/docs/FINE.md"
+  printf 'CLAUDEME and Chunk 7, FIPS validated, production, Acme Inc.\n' > "$tmp/CLAUDEME.md"
+  cp "$tmp/CLAUDEME.md" "$tmp/docs/SPEC.md"
+  out="$(scan_codenames "$tmp" || true)"
+  for n in 1 2; do printf '%s\n' "$out" | grep -q "^docs/CODE.md:$n:" || { echo "FAIL: self-test: codename on line $n missed"; exit 1; }; done
+  out="$(scan_claims "$tmp" || true)"
+  for n in 1 2 3 4; do printf '%s\n' "$out" | grep -q "^docs/CLAIM.md:$n:" || { echo "FAIL: self-test: claim word on line $n missed"; exit 1; }; done
+  out="$(scan_production "$tmp" || true)"
+  for n in 1 2; do printf '%s\n' "$out" | grep -q "^docs/PROD.md:$n:" || { echo "FAIL: self-test: production on line $n missed"; exit 1; }; done
+  printf '%s\n' "$out" | grep -q 'PROD_OK' && { echo "FAIL: self-test: allowed production wording flagged: $out"; exit 1; }
+  out="$(scan_companies "$tmp" || true)"
+  for n in 1 2; do printf '%s\n' "$out" | grep -q "^docs/CO.md:$n:" || { echo "FAIL: self-test: legal form on line $n missed"; exit 1; }; done
+  printf 'License terms will come from counsel.\nThresholds are placeholders.\nDetails TBD, coming soon.\nTo be supplied later.\n' > "$tmp/docs/PEND.md"
+  printf '<input id="t" placeholder="the current time">\n' > "$tmp/docs/form.html"
+  printf 'pub const X: &str = "a lawyer";\n' > "$tmp/pend.rs"
+  out="$(scan_pending "$tmp" || true)"
+  for n in 1 2 3 4; do printf '%s\n' "$out" | grep -q "^docs/PEND.md:$n:" || { echo "FAIL: self-test: pending wording on line $n missed"; exit 1; }; done
+  printf '%s\n' "$out" | grep -q '^pend.rs:1:' || { echo "FAIL: self-test: pending wording in a source file missed"; exit 1; }
+  printf '%s\n' "$out" | grep -q 'form.html' && { echo "FAIL: self-test: an HTML placeholder attribute was flagged"; exit 1; }
+  for scan in scan_codenames scan_claims scan_production scan_companies; do
+    out="$($scan "$tmp" || true)"
+    printf '%s\n' "$out" | grep -q -E 'FINE.md|CLAUDEME.md|SPEC.md' && { echo "FAIL: self-test: $scan flagged an allowed or exempt file: $out"; exit 1; }
+  done
+
+  echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing; weapon and strike terms; public-doc codenames, claim words, production, legal forms; pending wording)"
   exit 0
 fi
 
@@ -178,6 +263,19 @@ else
   printf '%s\n' "$hits"
   status=1
 fi
+
+for rule in "codenames:no internal codename in a public doc" "claims:no compliance, certification, FIPS or validated wording in a public doc" \
+  "production:production only quoted or as not production in a public doc" "companies:no company legal form in a public doc" \
+  "pending:no counsel, lawyer, to be supplied, placeholder, TBD or coming soon wording in any file"; do
+  name="${rule%%:*}" what="${rule#*:}"
+  if hits="$("scan_$name" "$root")"; then
+    echo "PASS: $what"
+  else
+    echo "FAIL: $what:"
+    printf '%s\n' "$hits"
+    status=1
+  fi
+done
 
 terms="${SFR_FORBIDDEN_TERMS_FILE:-$root/.forbidden-terms}"
 if [ -f "$terms" ]; then

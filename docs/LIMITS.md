@@ -6,7 +6,7 @@
 
 An input over a limit is refused, never truncated. A message for a count or a size names the limit and the SPEC section:
 
-```
+```text
 sfr: log flight.ulg: the number of events exceeds the input limit of 100000 events (SPEC B1.4)
 sfr: rules file rules.toml: line 3: `required_topics` exceeds the input limit of 256 entries (SPEC B1.4)
 ```
@@ -69,15 +69,15 @@ The browser engine bundle (`docs/SANDBOX.md`) adds one limit of its own, which i
 
 A file over it is refused with exit 4 and this message, never truncated:
 
-```
+```text
 log flight.ulg: 104857601 bytes is over the sandbox's limit of 104857600 bytes (100 MiB) for one file; use the sfr command line, which has no limit on the log (docs/LIMITS.md)
 ```
 
-The rules file, baseline, key file and public key keep the command line's 16 MiB limit and messages in the sandbox.
+The rules file, baseline, key file and public key keep the command line's 16 MiB limit (`MAX_TEXT_BYTES`) and messages in the sandbox.
 
 ## One limit that truncates
 
-R4, R5, R6, X2, and X3 list at most 1,000 `detail` lines (`evaluate.rs` `MAX_DETAIL_LINES`). Past that, the detail ends with one line that says where the rest are counted: `and N more; the events list every one` for R4, R5, R6, and X2, whose cases are all events (an R4 case is a FAILSAFE_SET or QUADCHUTE event, or the ARM event when the failsafe was already set at ARM), and `and N more; the count above includes every sample` for X3, whose cases are estimator samples. This limits output, not input: it is not an error, and the rule's status is unchanged. R3 is not capped: SPEC B1.6 has it list every differing parameter, so at most the two parameter limits together.
+R4, R5, R6, R7, X2, and X3 list at most 1,000 `detail` lines (`evaluate.rs` `MAX_DETAIL_LINES`). Past that, the detail ends with one line that says where the rest are counted: `and N more; the events list every one` for R4, R5, R6, R7, and X2, whose cases are all events (an R4 case is a FAILSAFE_SET or QUADCHUTE event, or the ARM event when the failsafe was already set at ARM), and `and N more; the count above includes every sample` for X3, whose cases are estimator samples. This limits output, not input: it is not an error, and the rule's status is unchanged. R3 is not capped: SPEC B1.6 has it list every differing parameter, so at most the two parameter limits together.
 
 ## Testing
 

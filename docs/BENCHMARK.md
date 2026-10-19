@@ -6,18 +6,18 @@ It needs bash 5 or later, GNU time at `/usr/bin/time` (Debian and Ubuntu: `sudo 
 
 ## Run it on another machine (for example real aarch64 hardware)
 
-1. Take three files from the CI run or the release: the tarball for the machine's target (`sfr-<version>-aarch64-unknown-linux-musl.tar.gz` on a 64-bit ARM machine), the benchmark kit `sfr-<version>-benchmark.tar.gz`, and `SHA256SUMS`.
+1. Take three files from the CI run or the release: the tarball for the machine's target (`sfr-<version>-aarch64-unknown-linux-musl.tar.gz` on an aarch64 machine), the benchmark kit `sfr-<version>-benchmark.tar.gz`, and `SHA256SUMS`.
 2. Check them: `sha256sum -c --ignore-missing SHA256SUMS`
-3. Unpack both tarballs in one directory:
+3. Unpack both tarballs in one directory (not run in CI by the docs test: it needs the release files):
 
-   ```
+   ```sh doc-syntax
    tar -xzf sfr-<version>-aarch64-unknown-linux-musl.tar.gz
    tar -xzf sfr-<version>-benchmark.tar.gz
    ```
 
-4. Run, keeping the output:
+4. Run, keeping the output (not run in CI by the docs test; the `benchmark` job runs it):
 
-   ```
+   ```sh doc-syntax
    sfr-<version>-benchmark/scripts/benchmark.sh --sfr sfr-<version>-aarch64-unknown-linux-musl/bin/sfr | tee benchmark.txt
    ```
 
@@ -27,13 +27,15 @@ Run nothing else on the machine meanwhile. `--runs N` changes the number of runs
 
 ## Gates
 
+From SPEC B1.10, as `scripts/benchmark.sh` checks them:
+
 | Architecture | Gate (SPEC B1.10) |
 |---|---|
 | x86_64 | each 100 MB seal median under 2 s |
 | aarch64 | each 100 MB seal median under 4 s, counted only on real aarch64 hardware, not emulation |
 | armv7 | none; no armv7 timing is published unless measured on real hardware |
 
-On every architecture, a seal peak above 256 MB on a 100 MB log must be reported with its cause before work continues. The script prints one `gate:` and one `memory:` line per 100 MB log and exits 1 if a gate is missed or a peak is above 256 MB.
+On every architecture, a seal peak above 256 MB on a 100 MB log must be reported with its cause before work continues. `scripts/benchmark.sh` prints one `gate:` and one `memory:` line per 100 MB log and exits 1 if a gate is missed or a peak is above 256 MB.
 
 ## The large logs
 

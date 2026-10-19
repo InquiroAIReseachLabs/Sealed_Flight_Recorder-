@@ -174,18 +174,56 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Language self-test
         run: scripts/check_language.sh --self-test
-      - name: No em-dash, compliance claim, or banned term (scripts/check_language.sh)
-        run: scripts/check_language.sh
+      # The forbidden-terms list (target and company names) is never committed: CI reads it from
+      # the repository secret SFR_FORBIDDEN_TERMS, one term per line, when the secret is set.
+      - name: No em-dash, compliance claim, codename, or banned term (scripts/check_language.sh)
+        env:
+          SFR_FORBIDDEN_TERMS: ${{ secrets.SFR_FORBIDDEN_TERMS }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SFR_FORBIDDEN_TERMS:-}" ]; then
+            printf '%s\n' "$SFR_FORBIDDEN_TERMS" > "$RUNNER_TEMP/forbidden-terms"
+            export SFR_FORBIDDEN_TERMS_FILE="$RUNNER_TEMP/forbidden-terms"
+          fi
+          scripts/check_language.sh
       - name: No private key in the repository (scripts/check_no_private_keys.sh)
         run: |
           set -euo pipefail
           scripts/check_no_private_keys.sh --self-test
           scripts/check_no_private_keys.sh
-      - name: No email address in the repository, placeholders aside (scripts/check_no_emails.sh)
+      - name: No email address in the repository, example.com and example.org aside (scripts/check_no_emails.sh)
         run: |
           set -euo pipefail
           scripts/check_no_emails.sh --self-test
           scripts/check_no_emails.sh
+
+  # Every shell command in the public docs runs, or is syntax-checked when it cannot run here,
+  # and every output block shown in a doc must equal what the command printed; every number has a
+  # source and every relative link resolves (scripts/check_docs.py). The README quickstart builds
+  # sfr from this commit; RECORD_FORMAT.md checks a golden record with openssl and b3sum alone.
+  docs:
+    name: docs tests (every doc command run and its output compared; numbers, links)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain (rust-toolchain.toml) and b3sum 1.8.7, the blake3 crate's version
+        env:
+          RUSTFLAGS: ""
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          cargo install b3sum --version 1.8.7 --locked
+      - name: The tools the docs use
+        run: |
+          set -euo pipefail
+          openssl version
+          b3sum --version
+          python3 --version
+          bash --version | head -1
+      - name: Docs test self-test
+        run: python3 -I scripts/check_docs.py --self-test
+      - name: Docs tests (scripts/check_docs.py)
+        run: python3 -I scripts/check_docs.py
 
   # The engine bundle (Chunk 6): built from this commit, checked, then driven in three browser
   # engines through its test harness page by tests/browser/sandbox.test.mjs. Safari itself

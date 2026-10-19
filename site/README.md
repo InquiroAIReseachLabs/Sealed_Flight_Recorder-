@@ -1,6 +1,6 @@
 # site/
 
-The test harness page for the engine bundle (`docs/SANDBOX.md`): a plain page that CI's browser gate (`tests/browser/sandbox.test.mjs`) drives in Chromium, Firefox and WebKit. The production page is built elsewhere on the same bundle; this page has no design work and is not deployed.
+The test harness page for the engine bundle (`docs/SANDBOX.md`): a plain page that CI's browser gate (`tests/browser/sandbox.test.mjs`) drives in Chromium, Firefox and WebKit. The page that invited evaluators use is built elsewhere on the same bundle; this page has no design work and is not deployed.
 
 | File | What it does |
 |---|---|

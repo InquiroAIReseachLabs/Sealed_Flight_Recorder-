@@ -37,17 +37,34 @@ The logs come from scripted SITL flights (each log's `.provenance.md` holds the 
 | | `commander takeoff` | seq 5 and 6 (COMMAND 22, then 400) |
 | | `commander land` | seq 9 (COMMAND 21) |
 
-Every other event is PX4's own record of the flight: the ARM, DISARM, NAV_STATE_CHANGE, VTOL_TRANSITION, FAILSAFE_SET and FAILSAFE_CLEAR events that follow those commands; the DO_GRIPPER (211) at start-up; the commands 1001, 1000 and 1001 that navigator publishes on entering LAND; the CAL_BARO0_OFF change in flight, written by the firmware's barometer calibration; and the log messages. The x500 harness also ran a stand-in ground station heartbeat from system 255 for the whole flight, which sent nothing else and put no event in the record.
+Every other event in the records (`scripts/make_example_reports.sh` wrote them) is PX4's own record of the flight: the ARM, DISARM, NAV_STATE_CHANGE, VTOL_TRANSITION, FAILSAFE_SET and FAILSAFE_CLEAR events that follow those commands; the DO_GRIPPER (211) at start-up; the commands 1001, 1000 and 1001 that navigator publishes on entering LAND; the CAL_BARO0_OFF change in flight, written by the firmware's barometer calibration; and the log messages. The x500 harness also ran a stand-in ground station heartbeat from system 255 for the whole flight, which sent nothing else and put no event in the record.
 
 ## Verify
 
-Each report gives the `sfr verify` command for a directory that holds the record, the log and `sfr.pub`. From the repository root, with the files where they are:
+Each report gives the `sfr verify` command for a directory that holds the record, the log and `sfr.pub`. From the repository root, with `sfr` built as in the [README](../../README.md#quickstart) and the files where they are:
 
+```sh doc-test
+for name in vtol_transition failsafe_gps_loss gz_quadtailsitter_transition gz_x500_vision_hover; do
+  target/release/sfr verify "examples/reports/$name.sfr" --pubkey examples/reports/sfr.pub \
+    --ulog "testdata/sitl/v1.17.0/$name.ulg" | grep -E '^(VERIFIED|status)'
+done
 ```
-sfr verify examples/reports/vtol_transition.sfr --pubkey examples/reports/sfr.pub --ulog testdata/sitl/v1.17.0/vtol_transition.ulg
-sfr verify examples/reports/failsafe_gps_loss.sfr --pubkey examples/reports/sfr.pub --ulog testdata/sitl/v1.17.0/failsafe_gps_loss.ulg
-sfr verify examples/reports/gz_quadtailsitter_transition.sfr --pubkey examples/reports/sfr.pub --ulog testdata/sitl/v1.17.0/gz_quadtailsitter_transition.ulg
-sfr verify examples/reports/gz_x500_vision_hover.sfr --pubkey examples/reports/sfr.pub --ulog testdata/sitl/v1.17.0/gz_x500_vision_hover.ulg
+
+```text doc-output
+VERIFIED (record and log)
+status    PASS
+VERIFIED (record and log)
+status    FAIL
+VERIFIED (record and log)
+status    PASS
+VERIFIED (record and log)
+status    FAIL
 ```
 
 `crates/sfr/tests/seal_verify.rs` checks that each report is exactly what its record renders to, that every fact in it comes from the record, and that each record verifies against its log. When a record or report format change makes that test fail, run `scripts/make_example_reports.sh` again and commit the new files.
+
+To make them again after a format change. Not run in CI: it makes a new key, so it rewrites every record, report and `sfr.pub`:
+
+```sh doc-syntax
+scripts/make_example_reports.sh target/release/sfr
+```

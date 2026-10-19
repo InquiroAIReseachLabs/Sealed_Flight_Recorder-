@@ -1,40 +1,166 @@
 # Sealed Flight Record
 
-After a PX4 flight, produce a signed, self-verifying record of the configuration that flew, the readiness rule results, and the operator, failsafe, and transition events, so anyone can later prove none of it was changed.
+After a PX4 flight, `sfr` produces a signed, self-verifying record of the configuration that flew, the readiness rule results, and the operator, failsafe, and transition events, so anyone can later prove none of it was changed.
 
-v1.0 evaluation release, in development.
+This is an evaluation release, provided without warranty, and in development: records sealed with it are for evaluation, and it signs only with evaluation keys. A browser version of the same engine is available to invited evaluators and is hosted separately. Third-party material is listed in [NOTICE.md](NOTICE.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
-## Try it offline
+## What a record proves
 
-The demo image (`sfr-<version>-demo-image.tar.gz`, x86_64) holds the static `sfr`, two golden SITL logs with their notices, the default rules, and `scripts/run_demo.sh`. With no network it generates an evaluation key; seals the golden VTOL flight and prints the results table and event count; verifies the record alone and against the log; changes one byte of a COMMAND event in a copy of the record and shows verify naming that event; changes VTOL transition parameter `VT_B_TRANS_DUR` in a copy of the quad tailsitter log and shows verify naming the parameter with its sealed and found values; and prints the command that seals your own logs.
+`sfr seal` runs the rules R1 to R7 on a PX4 ULog file and writes a signed record (`.sfr`) and a plain report (`.sfr.md`). `sfr verify` checks the record, and with `--ulog` checks it against the log. A record that verifies proves that this record, signed by this key, matches these log bytes and these rule results.
 
+It does not prove that the log was honest, that the vehicle did what the log says, that the key holder is who they claim, or when the log was made: the seal time is the sealer's own statement. [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) gives the details and the attacks that are and are not detected.
+
+## Quickstart
+
+**What is published today:** nothing yet. No container image and no binary has been published. CI builds static `sfr` binaries for Linux (`x86_64`, `aarch64`, `armv7`) and an offline demo image on every commit, but keeps them only as CI artifacts of that run, which are not a release; the first release will publish them with a signature ([docs/RELEASE.md](docs/RELEASE.md)). Until then, build from source as below.
+
+You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essential`), and [rustup](https://rustup.rs). `rust-toolchain.toml` pins the Rust version, and `cargo` installs it on the first build. The first build downloads the dependencies from crates.io; after that, `sfr` needs no network. CI builds and tests on Linux `x86_64`; other systems have not been tested.
+
+1. Get the source. Not run in CI, which tests the checkout it already has:
+
+   ```sh doc-syntax
+   git clone https://github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-.git
+   cd Sealed_Flight_Recorder-
+   ```
+
+2. Build. The binary is `target/release/sfr`:
+
+   ```sh doc-test
+   cargo build --release --locked
+   ```
+
+3. Verify a record sealed earlier, against its log. `examples/reports/` holds four records sealed from golden SITL logs, with the public key `examples/reports/sfr.pub`:
+
+   ```sh doc-test
+   target/release/sfr verify examples/reports/vtol_transition.sfr --pubkey examples/reports/sfr.pub \
+     --ulog testdata/sitl/v1.17.0/vtol_transition.ulg
+   ```
+
+   ```text doc-output
+   EVALUATION KEY: not for operational use
+   VERIFIED (record and log)
+   record    examples/reports/vtol_transition.sfr
+   custody   file-evaluation
+   key       sha256:e9189283def3921d2c7489ceed37e4680b4768b78faa311fdf49cf6325b5e4f4
+   crypto    blake3 1.8.7, ed25519-dalek 3.0.0, sha2 0.11.1 (crate versions)
+   sealed    2026-10-18T15:00:00Z
+   status    PASS
+   events    22
+   ```
+
+4. Change one field of a copy of that record. Verify names what no longer matches and exits 1:
+
+   ```sh doc-test
+   mkdir -p try
+   sed 's/"command":211,/"command":311,/' examples/reports/vtol_transition.sfr > try/changed.sfr
+   rc=0
+   target/release/sfr verify try/changed.sfr --pubkey examples/reports/sfr.pub || rc=$?
+   echo "exit $rc"
+   ```
+
+   ```text doc-output
+   EVALUATION KEY: not for operational use
+   FAILED: Merkle root mismatch: a leaf changed after sealing (recorded 31577a8e29ea34a41f09692efeb856903162f605e62702ba1c2fb8b6dda304c2, computed 95f6c952bbbb0539d677755b628dffa26ccae7250cf03869a81bd5b549146e04)
+   exit 1
+   ```
+
+5. Make an evaluation key and seal a log. `seal` prints the rule results and writes the record and its report into `try/out/`:
+
+   ```sh doc-test
+   mkdir -p try
+   target/release/sfr keygen --evaluation-only --out try/keys > try/keygen.txt
+   head -1 try/keygen.txt
+   target/release/sfr seal testdata/sitl/v1.17.0/vtol_transition.ulg --rules examples/rules.default.toml \
+     --baseline testdata/baselines/v1.17.0_vtol_transition.params \
+     --key try/keys/sfr.key --evaluation-only --out try/out > try/seal.txt
+   grep -E '^(R[0-9] |status|record|report)' try/seal.txt
+   ```
+
+   ```text doc-output
+   EVALUATION KEY: not for operational use
+   R1    PASS    required topics present       all present
+   R2    PASS    firmware matches baseline     1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4
+   R3    PASS    parameters match baseline     no differences
+   R4    PASS    no failsafe in flight         never true in flight
+   R5    PASS    arm and disarm consistent     1 ARM, 1 DISARM
+   R6    PASS    VTOL transitions completed    2 START, 2 END, 0 problem(s)
+   R7    N/A     authorized command sources    no [authorized_sources] in the rules file
+   status    PASS
+   record    try/out/vtol_transition.sfr
+   report    try/out/vtol_transition.sfr.md
+   ```
+
+   The key is new each time, so its fingerprint and the record's Merkle root differ from run to run; `try/keygen.txt` and `try/seal.txt` hold the whole output. Open `try/out/vtol_transition.sfr.md` to read the report.
+
+6. Verify the record you sealed, against its log:
+
+   ```sh doc-test
+   target/release/sfr verify try/out/vtol_transition.sfr --pubkey try/keys/sfr.pub \
+     --ulog testdata/sitl/v1.17.0/vtol_transition.ulg | grep -E '^(EVALUATION|VERIFIED|status)'
+   ```
+
+   ```text doc-output
+   EVALUATION KEY: not for operational use
+   VERIFIED (record and log)
+   status    PASS
+   ```
+
+To seal your own log you need a rules file (start from `examples/rules.default.toml`) and a baseline: the parameter file QGroundControl exports, plus one line `# Firmware: <version>` ([docs/RULES.md](docs/RULES.md)). Not run in CI: it needs your files.
+
+```sh doc-syntax
+target/release/sfr seal "$LOG" --rules my_rules.toml --baseline my_vehicle.params --dry-run
+target/release/sfr seal "$LOG" --rules my_rules.toml --baseline my_vehicle.params \
+  --key try/keys/sfr.key --evaluation-only --out records
 ```
-docker load -i sfr-<version>-demo-image.tar.gz
-docker run --rm --network=none sfr-demo:<version>
-```
 
-## Try it in a browser
+## Exit codes
 
-The engine bundle (`scripts/build_engine.sh`, kept by every CI run as the artifact `sfr-engine-<commit>`) runs the same engine in a web page: seal a log, verify a record, and run the steps of the demo above on a bundled sample log. Its records are byte-identical to the command line's for the same inputs. Files a person chooses are read in the browser and never uploaded; the bundle fetches only its own files, and the sample log only when the demo runs. It signs with an evaluation key made in the browser. [docs/SANDBOX.md](docs/SANDBOX.md) documents its JavaScript API and how it is tested.
+From `crates/sfr-core/src/lib.rs` (`exit_code`):
 
-## Downloads
+| Exit | `sfr seal` | `sfr verify` |
+|---|---|---|
+| 0 | every rule PASS or N/A; record written | VERIFIED |
+| 1 | a rule FAIL; the record is still written | verification failed: the record, or the log with `--ulog`, does not match, or is over an input limit |
+| 2 | a required topic or field is missing (R1 FAIL); the record is still written | not used |
+| 3 | the log, rules file or baseline is malformed, truncated, or over an input limit; nothing written | not used |
+| 4 | a usage, key or file error; nothing written | a usage, key or file error |
 
-Each build holds, for the version in `Cargo.toml`:
+`sfr keygen` and `sfr --version` exit 0 or 4.
+
+## Documentation
+
+| Page | What it covers |
+|---|---|
+| [docs/RULES.md](docs/RULES.md) | each rule, the log data it reads, the rules file and the baseline |
+| [docs/RECORD_FORMAT.md](docs/RECORD_FORMAT.md) | the record, exactly, and how to verify one with `openssl` and `b3sum` |
+| [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | what a seal proves and what it does not |
+| [docs/INTEGRATION_NOTES.md](docs/INTEGRATION_NOTES.md) | the topics `sfr` reads, sealing after disarm, CI use, key handling |
+| [docs/LIMITS.md](docs/LIMITS.md) | the input limits |
+| [docs/RELEASE.md](docs/RELEASE.md), [docs/BENCHMARK.md](docs/BENCHMARK.md) | how a release is made and benchmarked |
+| [examples/reports/README.md](examples/reports/README.md) | the example records and reports |
+
+CI runs every command on these pages that can run there and compares its output (`scripts/check_docs.py`).
+
+## The record and its report
+
+`sfr seal` writes the signed record `<name>.sfr` and, beside it, the report `<name>.sfr.md`: Markdown that GitHub and GitLab render, generated only from the record, with the `sfr verify` command that checks it. `examples/reports/` holds the records and reports of four golden SITL flights (standard VTOL, GPS loss failsafe, quad tailsitter, and a multicopter with a sealed topic and an R7 failure), sealed with an evaluation key.
+
+## Release files
+
+Not published yet. Each release will hold, for the version in `Cargo.toml`:
 
 | File | Contents |
 |---|---|
 | `sfr-<version>-<target>.tar.gz` | the static `sfr` for `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, or `armv7-unknown-linux-musleabihf`, this README, `examples/`, and `BUILDINFO` |
 | `sfr-<version>-<target>.cdx.json` | the CycloneDX SBOM of that `sfr`: its resolved dependency graph for the target from `Cargo.lock` (a superset of the crates it links; build-time crates marked `excluded`), with version, license, and SHA-256 |
 | `sfr-<version>-benchmark.tar.gz` | `scripts/benchmark.sh` and the golden logs it reads, for any architecture ([docs/BENCHMARK.md](docs/BENCHMARK.md)) |
-| `sfr-<version>-demo-image.tar.gz` | the demo image above |
+| `sfr-<version>-demo-image.tar.gz` | an offline demo image (x86_64): the static `sfr`, two golden SITL logs, the default rules, and `scripts/run_demo.sh`, which seals, verifies, and shows verify naming a changed event and a changed parameter |
 | `SHA256SUMS` | the SHA-256 of every file above |
-| `SHA256SUMS.sig` | the Ed25519 signature over `SHA256SUMS`, made offline with the release key (a release only) |
+| `SHA256SUMS.sig` | the Ed25519 signature over `SHA256SUMS`, made offline with the release key |
 
-CI builds every file but the signature on each commit and keeps them as the `sfr-release-unsigned` artifact of the run. It publishes nothing; [docs/RELEASE.md](docs/RELEASE.md) says how a release is signed and made.
+CI builds every file but the signature on each commit and keeps them as the `sfr-release-unsigned` artifact of the run; [docs/RELEASE.md](docs/RELEASE.md) says how a release is signed and made. To check release files with OpenSSL 3 and coreutils alone, in the directory that holds them and `sfr-release.pub` (the release public key below), run these. Not run in CI: no release has been signed yet.
 
-Check a download with OpenSSL 3 and coreutils alone, in the directory that holds the files and `sfr-release.pub`, the release public key below (`release/sfr-release.pub` in this repository at the release's commit):
-
-```
+```sh doc-syntax
 openssl pkeyutl -verify -pubin -inkey sfr-release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
 sha256sum -c --ignore-missing SHA256SUMS
 ```
@@ -44,10 +170,6 @@ The first prints `Signature Verified Successfully` only for a good signature by 
 <!-- BEGIN release-key: written by scripts/regen_readme_numbers.sh, do not edit by hand -->
 Release public key: not generated yet. The founder generates the release key on an offline machine with `scripts/release_sign.sh keygen <offline path>`, which writes its public half to `release/sfr-release.pub`; `scripts/regen_readme_numbers.sh` then shows it here, and both are committed before the first release.
 <!-- END release-key -->
-
-## The record and its report
-
-`sfr seal` writes the signed record `<name>.sfr` and, beside it, the report `<name>.sfr.md`: Markdown that GitHub and GitLab render, generated only from the record, with the `sfr verify` command that checks it. `examples/reports/` holds the records and reports of four golden SITL flights (standard VTOL, GPS loss failsafe, quad tailsitter, and a multicopter with a sealed topic and an R7 failure), sealed with an evaluation key.
 
 ## Verify timing
 
@@ -116,3 +238,7 @@ Seal time, standalone verify time and seal peak memory for every golden log and 
 - gate: x86_64 large_100mb_sealed8 seal median 0.629 s, under 2 s: PASS
 - memory: large_100mb_sealed8 seal peak RSS 4624 KB, not above 256 MB (262144 KB)
 <!-- END benchmark -->
+
+## Rights
+
+Copyright (c) 2026 Inquiro AI Research Labs. All rights reserved. This source is published for review and evaluation.

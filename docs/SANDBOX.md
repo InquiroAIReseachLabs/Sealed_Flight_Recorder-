@@ -1,6 +1,6 @@
 # Sandbox: the engine bundle for the browser
 
-The engine bundle runs `sfr` in a web page: seal a PX4 log, verify a record, verify a record with its log, and the tamper demo of `scripts/run_demo.sh`. It is a v1.0 evaluation release. The production page that uses it is built and hosted with the Inquiro website; this repository delivers the bundle, its JavaScript API, and the tests that hold it to the command line.
+The engine bundle runs `sfr` in a web page: seal a PX4 log, verify a record, verify a record with its log, and the tamper demo of `scripts/run_demo.sh`. It is a v1.0 evaluation release. The page that invited evaluators use is built and hosted separately; this repository delivers the bundle, its JavaScript API, and the tests that hold it to the command line.
 
 ## What it promises
 
@@ -30,7 +30,7 @@ The engine bundle runs `sfr` in a web page: seal a PX4 log, verify a record, ver
 
 `scripts/check_engine_bundle.sh <dir> <commit>` checks that a bundle is whole: every file present, `SHA256SUMS` listing exactly the other files with matching digests, and `BUILDINFO` naming the commit. CI runs it on every bundle it keeps.
 
-**Serving it.** Serve the directory as it is, from the same origin as the page that imports `sfr.js` (a browser starts a module worker only from its own origin). The page's Content-Security-Policy must allow `script-src 'self' 'wasm-unsafe-eval'`, `worker-src 'self'` and `connect-src 'self'`; nothing else is needed. The sample log is about 8.5 MB, and is stored and sent gzip-compressed (about 3.1 MB). The bundle unpacks it in the browser with `DecompressionStream`, so it travels compressed on any static host; a host that itself sets `Content-Encoding: gzip` on the file also works. `loadSample()` reports the transfer size.
+**Serving it.** Serve the directory as it is, from the same origin as the page that imports `sfr.js` (a browser starts a module worker only from its own origin). The page's Content-Security-Policy must allow `script-src 'self' 'wasm-unsafe-eval'`, `worker-src 'self'` and `connect-src 'self'`; nothing else is needed. The sample log is about 8.5 MB, and is stored and sent gzip-compressed (about 3.1 MB; `samples/samples.json`, written by `scripts/build_engine.sh`, gives both sizes exactly). The bundle unpacks it in the browser with `DecompressionStream`, so it travels compressed on any static host; a host that itself sets `Content-Encoding: gzip` on the file also works. `loadSample()` reports the transfer size.
 
 **The sample.** `mc_flight_1.ulg` is the smallest golden log that shows both tamper changes: it has COMMAND events to change in the record and float parameters at log start to change in the log, and every rule passes on it. `failsafe_gps_loss.ulg` also shows them, at 10.2 MB (3.8 MB compressed), with R4 failing on its GPS failsafe; `scripts/build_engine.sh` names the sample in one place.
 
@@ -150,4 +150,4 @@ These are the steps of `scripts/run_demo.sh`, on one smaller log. The browser te
 
 ## Test harness and tests
 
-`site/` is a plain page over the bundle, for CI only; `scripts/build_site.sh <out-dir>` puts it next to a fresh bundle (`<out-dir>/engine/`). `tests/browser/sandbox.test.mjs` drives it in Chromium, Firefox and WebKit (`npm ci` in `tests/browser` first; `node tests/browser/sandbox.test.mjs --site <out-dir> --sfr <sfr built from the same commit> --out <dir>`) and writes `summary.md`, `summary.json` and screenshots. CI tests WebKit, Safari's engine on Linux, not Safari itself; the production page should also be opened in Safari before it goes live.
+`site/` is a plain page over the bundle, for CI only; `scripts/build_site.sh <out-dir>` puts it next to a fresh bundle (`<out-dir>/engine/`). `tests/browser/sandbox.test.mjs` drives it in Chromium, Firefox and WebKit (`npm ci` in `tests/browser` first; `node tests/browser/sandbox.test.mjs --site <out-dir> --sfr <sfr built from the same commit> --out <dir>`) and writes `summary.md`, `summary.json` and screenshots. CI tests WebKit, Safari's engine on Linux, not Safari itself; the hosted page should also be opened in Safari before it is offered.

@@ -1,8 +1,8 @@
 # Golden expected outputs
 
-`<name>.json` is the output of
+`<name>.json` is the output of this command (not run in CI by the docs test; `crates/sfr/tests/seal_dry_run.rs` runs it on every golden log):
 
-```
+```sh doc-syntax
 sfr seal <log> --rules <rules> --baseline testdata/baselines/<name>.params --dry-run --json
 ```
 
@@ -40,7 +40,7 @@ either.
   file's required topics, every sealed topic, and with `[authorized_sources]` `vehicle_command`
   and the three fields R7 reads). The oracle's R4 follows SPEC B1.6: the window
   runs from the ARM sample through the sample that disarms, and the quadchute check reads the VTOL
-  state only on a VTOL vehicle. Its R4 was re-derived from that wording at the Chunk 3 gate by a
+  state only on a VTOL vehicle. Its R4 was re-derived from that wording by a
   pass that did not read `crates/`;
 - `sealed_topics`: the same entries in the same order (topic, then `multi_id`), and in each entry
   `topic`, `multi_id`, `format_sha256`, `message_count`, `first_timestamp_us`, `last_timestamp_us`
@@ -52,7 +52,7 @@ either.
 
 It does not compare the version-dependent names (`old_name`, `new_name`, `reason_name`), `utc_us`,
 FAILSAFE_SET `initial`, the log digests and size, R2, R3, or result wording. An independent
-pyulog check during the Chunk 2 verification compared those fields on the 8 files then in `testdata/`
+pyulog check during the first verification compared those fields on the 8 files then in `testdata/`
 (`pyulog_sample`, `v1.14.4_mc_flight`, and the `v1.17.0` flights `mc_flight_1`, `mc_flight_2`,
 `vtol_transition`, `vtol_transition_abort`, `failsafe_gps_loss` and `failsafe_battery_empty`) and
 found no difference; it is not part of CI.
@@ -75,7 +75,9 @@ push (job `golden-oracle`).
 
 ## Regenerating
 
-```
+Not run in CI: they need pyulog and numpy, and rewrite committed files; CI compares the committed ones.
+
+```sh doc-syntax
 scripts/testdata/regenerate.sh baselines   # testdata/baselines/*.params from the logs (pyulog)
 scripts/testdata/regenerate.sh oracle      # oracle/*.oracle.json (pyulog, numpy)
 scripts/testdata/regenerate.sh expected    # *.json (a built sfr)
