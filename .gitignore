@@ -15,6 +15,11 @@
 # Kept out of the repository on purpose: the names it holds must not appear anywhere in it.
 .forbidden-terms
 
+# Local lists and settings that may name people or hold secrets: never committed.
+allowlist*
+*.allowlist
+.env*
+
 # Editor and OS noise
 .idea/
 .vscode/

@@ -51,6 +51,8 @@ run "README numbers match docs/receipts/ci-run.txt" scripts/regen_readme_numbers
 # test, the benchmark segment manifest, and every script parses.
 run "no private key self-test" scripts/check_no_private_keys.sh --self-test
 run "no private key in the repository" scripts/check_no_private_keys.sh
+run "no email address self-test" scripts/check_no_emails.sh --self-test
+run "no email address in the repository" scripts/check_no_emails.sh
 run "release signing self-test" scripts/release_sign.sh --self-test
 run "benchmark segment manifest matches the golden VTOL flight" python3 -I scripts/benchmark/make_segments.py \
   --check scripts/benchmark/vtol_transition.segments testdata/sitl/v1.17.0/vtol_transition.ulg \

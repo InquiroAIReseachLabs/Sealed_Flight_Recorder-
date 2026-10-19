@@ -6151,7 +6151,7 @@ index c17bbda..9bcf026 100644
 --- a/platforms/posix/src/px4/common/px4_daemon/pxh.cpp
 +++ b/platforms/posix/src/px4/common/px4_daemon/pxh.cpp
 @@ -40,6 +40,7 @@
-  * @author Julian Oes <julian@oes.ch>
+  * @author Julian Oes
   */
  
 +#include <cstdint>

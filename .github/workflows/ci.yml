@@ -181,6 +181,11 @@ jobs:
           set -euo pipefail
           scripts/check_no_private_keys.sh --self-test
           scripts/check_no_private_keys.sh
+      - name: No email address in the repository, placeholders aside (scripts/check_no_emails.sh)
+        run: |
+          set -euo pipefail
+          scripts/check_no_emails.sh --self-test
+          scripts/check_no_emails.sh
 
   # The sandbox page (Chunk 6): built from this commit, then driven in three browser engines by
   # tests/browser/sandbox.test.mjs. Safari itself cannot run on a Linux runner; WebKit is its
