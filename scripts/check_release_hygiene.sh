@@ -88,6 +88,14 @@ check_tarball() { # check_tarball <path>
     || { echo "HIT $name: tar-member: members are not all inside one folder"; rc=1; }
   bad="$(tar -tvzf "$tb" | awk '$2 != "0/0"' | wc -l)"
   [ "$bad" -eq 0 ] || { echo "HIT $name: tar-owner: $bad member(s) not owned by 0/0"; rc=1; }
+  # Only plain files and folders: a link or a special file can point outside the folder.
+  bad="$(tar -tvzf "$tb" | awk 'substr($1, 1, 1) != "-" && substr($1, 1, 1) != "d"' | wc -l)"
+  [ "$bad" -eq 0 ] || { echo "HIT $name: tar-member: $bad member(s) are links or special files"; rc=1; }
+  # The member names and the long listing (names, link targets) are text too.
+  listing="$(mktemp)"
+  tar -tvzf "$tb" > "$listing"
+  scan_text "$name (member list)" "$listing" || rc=1
+  rm -f "$listing"
   stage="$(mktemp -d)"
   tar -C "$stage" --no-same-owner --no-same-permissions -xzf "$tb" 2> /dev/null || { rm -rf "$stage"; echo "HIT $name: tar-unpack: cannot unpack" >&2; return 1; }
   scan_file "$name" "$tb" || rc=1
@@ -169,6 +177,17 @@ EOF
   tar -C "$t/abs/pkg" --owner=0 --group=0 --numeric-owner -czf "$t/abs/sfr-0.1.0-x.tar.gz" -P --transform 's,^,/etc/,' sfr-0.1.0-x/f 2> /dev/null
   if (check_dir "$t/abs" > "$t/abs.out" 2>&1); then die "self-test: a tarball with an absolute member passed"; fi
   grep -q tar-member "$t/abs.out" || die "self-test: tar-member not named"
+  # a member name that holds an address, and a symlink to a home path, both owned by 0/0
+  mkdir -p "$t/names/pkg/sfr-0.1.0-x"; printf 'x\n' > "$t/names/pkg/sfr-0.1.0-x/built-by-someone${at}example.com.txt"
+  tar -C "$t/names/pkg" --owner=0 --group=0 --numeric-owner -czf "$t/names/sfr-0.1.0-x.tar.gz" sfr-0.1.0-x
+  rm -rf "$t/names/pkg"
+  if (check_dir "$t/names" > "$t/names.out" 2>&1); then die "self-test: an address in a member name passed"; fi
+  grep -q 'email-address' "$t/names.out" || die "self-test: the member name address is not named"
+  mkdir -p "$t/link/pkg/sfr-0.1.0-x"; ln -s /home/someone/src "$t/link/pkg/sfr-0.1.0-x/link"; printf 'x\n' > "$t/link/pkg/sfr-0.1.0-x/f"
+  tar -C "$t/link/pkg" --owner=0 --group=0 --numeric-owner -czf "$t/link/sfr-0.1.0-x.tar.gz" sfr-0.1.0-x
+  rm -rf "$t/link/pkg"
+  if (check_dir "$t/link" > "$t/link.out" 2>&1); then die "self-test: a symlink member passed"; fi
+  grep -q 'links or special files' "$t/link.out" || die "self-test: the symlink is not named"
   # an empty directory is no pass
   mkdir -p "$t/empty"
   if (check_dir "$t/empty" > /dev/null 2>&1); then die "self-test: an empty directory passed"; fi
