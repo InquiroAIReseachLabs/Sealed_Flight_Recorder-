@@ -1,7 +1,7 @@
 # sfr rules file: core rules R1 to R6, the optional rule R7 (commented out below), and the
 # optional example rules X1 to X5.
 #
-# Every threshold below is a placeholder that shows the syntax. It is not a recommendation
+# Every threshold below is an example that shows the syntax. It is not a recommendation
 # for any aircraft. Each one is set by your flight-test lead.
 format = "sfr-rules/1"
 

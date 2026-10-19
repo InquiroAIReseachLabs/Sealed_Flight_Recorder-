@@ -22,9 +22,9 @@ The release builds remap the build paths, embed the commit (`SFR_BUILD_COMMIT`),
 3. **aarch64 on aarch64 hardware.** SPEC B1.10 Releases: the release artifacts for aarch64 are built on native aarch64 hardware. On an aarch64 machine with the pinned toolchain (`rustup toolchain install` in the checkout of that commit): `scripts/build_release.sh aarch64-unknown-linux-musl dist/`. Compare its SHA-256 with the CI tarball of the same name. If they are identical, the CI file is that native build byte for byte. If not, put the native tarball in place of the CI one and run `scripts/release_assemble.sh <dir>` again to rewrite `SHA256SUMS`.
 4. **aarch64 benchmark.** Run `scripts/benchmark.sh` on that machine from the aarch64 tarball and the benchmark kit ([BENCHMARK.md](BENCHMARK.md)) and keep its output: the aarch64 gate (100 MB seal under 4 s) counts only on real hardware.
 5. **Sign**, on the offline machine: `scripts/release_sign.sh sign <dir>/SHA256SUMS /path/off/the/repository/sfr-release.key`. It refuses a key that is not `release/sfr-release.pub`, writes `SHA256SUMS.sig` (a raw 64-byte Ed25519 signature), and checks it with the command below.
-6. **Check** in a fresh directory, with OpenSSL 3 and coreutils alone:
+6. **Check** in a fresh directory, with OpenSSL 3 and coreutils alone (not run in CI: it needs a signed release):
 
-   ```
+   ```sh doc-syntax
    openssl pkeyutl -verify -pubin -inkey sfr-release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
    sha256sum -c SHA256SUMS
    ```
@@ -33,4 +33,4 @@ The release builds remap the build paths, embed the commit (`SFR_BUILD_COMMIT`),
 
 ## Licenses
 
-The tarballs hold no LICENSE file: the project license is counsel's decision. The SBOMs list the license of every crate linked into `sfr`; the golden logs carry their own notices (`testdata/README.md`, `testdata/pyulog/NOTICE.md` and `LICENSE.md`, and a `.provenance.md` per SITL and synthetic log).
+The tarballs hold no LICENSE file: the source is published for review and evaluation, with all rights reserved (`README.md`, Rights), and `NOTICE.md` lists the third-party material. The SBOMs list the license of every crate linked into `sfr`; the golden logs carry their own notices (`testdata/README.md`, `testdata/pyulog/NOTICE.md` and `LICENSE.md`, and a `.provenance.md` per SITL and synthetic log).

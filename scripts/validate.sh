@@ -46,6 +46,10 @@ run "language self-test" scripts/check_language.sh --self-test
 run "language check" scripts/check_language.sh
 run "README numbers script self-test" scripts/regen_readme_numbers.sh --self-test
 run "README numbers match docs/receipts/ci-run.txt" scripts/regen_readme_numbers.sh --check
+# Docs tests (the docs CI job): every doc command runs (b3sum and openssl 3 must be installed),
+# outputs match, every number has a source, every relative link resolves.
+run "docs tests self-test" python3 -I scripts/check_docs.py --self-test
+run "docs tests (scripts/check_docs.py)" python3 -I scripts/check_docs.py
 
 # 4c. Release scripts (Chunk 5): no private key in the repository, the signing script's own
 # test, the benchmark segment manifest, and every script parses.
