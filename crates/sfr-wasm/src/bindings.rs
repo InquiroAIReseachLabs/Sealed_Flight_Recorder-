@@ -212,6 +212,7 @@ pub fn verify(
     log: Option<ByteSource>,
     log_name: Option<String>,
     log_size: f64,
+    now: &str,
 ) -> String {
     if let Err(f) = crate::check_sandbox_size("record", record_name, byte_count(record_size)) {
         return failure_json(f.code, &f.message, false);
@@ -220,6 +221,7 @@ pub fn verify(
         .as_ref()
         .map(|l| BufReader::with_capacity(READ_CHUNK, JsReader(l)));
     let request = VerifyRequest {
+        now,
         record: Input {
             name: record_name,
             bytes: record,

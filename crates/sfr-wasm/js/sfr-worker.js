@@ -92,6 +92,7 @@ function verify(req) {
     req.log ? new BlobSource(req.log.blob, req.log.name) : undefined,
     req.log ? req.log.name : undefined,
     req.log ? req.log.blob.size : 0,
+    req.now,
   ));
 }
 

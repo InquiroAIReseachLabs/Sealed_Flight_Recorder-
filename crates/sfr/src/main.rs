@@ -19,12 +19,13 @@ use sfr_core::params::{Baseline, parse_baseline};
 use sfr_core::record::dry_run_json;
 use sfr_core::rules::{Rules, parse_rules};
 use sfr_core::seal::{
-    SealParams, format_utc, parse_seal_time, parse_seal_time_seconds, seal, this_tool,
+    SealParams, check_seal_time, format_utc, parse_seal_time, parse_seal_time_seconds, seal,
+    this_tool,
 };
 use sfr_core::verify::{
     ClaimedSeal, INTEGRITY_NOT_CHECKED, MAX_RECORD_BYTES, Mismatch, TRUST_PUBKEY, VerifyError,
-    check_record_size, claimed_lines, claimed_seal, failed_text, report_line, verified_text,
-    verify,
+    check_record_size, claimed_lines, claimed_seal, failed_text, report_line, time_line,
+    verified_text, verify,
 };
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -42,7 +43,8 @@ const USAGE: &str = "usage:
            (--key-uri pkcs11:... | --key-uri tpm-sealed:<dir> | --key <sfr.key> --evaluation-only | --dry-run)
            [--out <dir>] [--seal-time <RFC3339>] [--allow-untested-version] [--json]
   sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> [--crl <crl>]...)
-             [--ulog <flight.ulg>] [--report <name.sfr.md>] [--require-hardware-key] [--json]
+             [--ulog <flight.ulg>] [--report <name.sfr.md>] [--require-hardware-key]
+             [--at <RFC3339>] [--json]
   sfr pubkey --key-uri (pkcs11:... | tpm-sealed:<dir>) [--json]
   sfr --version [--json]";
 
@@ -809,7 +811,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         }
         t.push_str(&table(&ing, &eval, crypto, false, &rules, &baseline));
         t.push_str(&format!(
-            "\n{:<10}{}\n{:<10}{}\n{:<10}{}\n{:<10}{} ({})\n{:<10}{}\n",
+            "\n{:<10}{}\n{:<10}{}\n{:<10}{}\n{:<10}{} ({})\n{:<10}{} (claimed: this machine's clock, or --seal-time)\n",
             "record",
             shown(&out_path),
             "report",
@@ -849,11 +851,34 @@ fn verify_cmd(
 ) -> Result<i32, Failure> {
     let a = Args::parse(
         args,
-        &["--pubkey", "--ulog", "--trust-anchor", "--crl", "--report"],
+        &[
+            "--pubkey",
+            "--ulog",
+            "--trust-anchor",
+            "--crl",
+            "--report",
+            "--at",
+        ],
         &["--require-hardware-key", "--json"],
     )?;
     let record_path = a.one_positional("record")?.to_string();
     let json_out = a.flag("--json");
+    // The verification time: the verifier's clock, or the time given with --at. Certificate
+    // validity is judged at this time and never at the record's claimed seal time, and a claimed
+    // seal time later than it is refused.
+    let (verification_time, time_source) = match a.value("--at") {
+        Some(t) => (
+            parse_seal_time_seconds(t).map_err(|e| usage(format!("--at: {e}")))?,
+            "--at",
+        ),
+        None => (
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| fail(exit_code::USAGE, format!("system clock: {e}")))
+                .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))?,
+            "verifier clock",
+        ),
+    };
     // The report to check: --report, or <name>.sfr.md beside <name>.sfr when it exists.
     let report_path = match a.value("--report") {
         Some(p) => {
@@ -953,7 +978,20 @@ fn verify_cmd(
             )
         }
     };
-    // With a trust anchor, a record that verified must also chain to it at its seal time.
+    // The seal time is the sealer's claim: it may not lie in the verifier's future.
+    let outcome = match outcome {
+        Ok(v) => match check_seal_time(&v.claimed_time_utc, verification_time) {
+            Ok(_) => Ok(v),
+            Err(e) => Err(VerifyError::Mismatch(Mismatch {
+                first: e,
+                also: Vec::new(),
+                custody: Some(v.custody),
+            })),
+        },
+        Err(e) => Err(e),
+    };
+    // With a trust anchor, a record that verified must also chain to it at the verification
+    // time (never at the claimed seal time).
     let outcome = match (outcome, &trust) {
         (Ok(v), Trust::Anchors { anchors, crls }) => {
             let chained = claimed
@@ -961,11 +999,10 @@ fn verify_cmd(
                 .and_then(|c| c.signer_certificate.as_deref())
                 .ok_or_else(|| "the record carries no signer certificate".to_string())
                 .and_then(|signer| {
-                    let seconds = parse_seal_time_seconds(&v.time_utc)?;
                     let chain = claimed
                         .as_ref()
                         .map_or(&[][..], |c| c.certificate_chain.as_slice());
-                    certs::check_chain(signer, chain, anchors, crls, seconds)
+                    certs::check_chain(signer, chain, anchors, crls, verification_time)
                 });
             match chained {
                 Ok(ok) => Ok((v, Some(ok))),
@@ -1002,7 +1039,7 @@ fn verify_cmd(
                 None => (TRUST_PUBKEY.to_string(), "declared".to_string()),
                 Some(ok) => (
                     format!(
-                        "certificate chain to the trust anchor {} at the seal time; {} CRL(s) checked",
+                        "certificate chain to the trust anchor {} at the verification time; {} CRL(s) checked",
                         ok.anchor, ok.crls
                     ),
                     format!(
@@ -1047,7 +1084,15 @@ fn verify_cmd(
                         .field("key_custody_proven", Value::Bool(false))
                         .field("key_fingerprint", Value::str(v.fingerprint.clone()))
                         .field("crypto_crates", Value::str(v.crypto_crates.clone()))
-                        .field("sealed_utc", Value::str(v.time_utc.clone()))
+                        .field(
+                            "seal_time_claimed_utc",
+                            Value::str(v.claimed_time_utc.clone()),
+                        )
+                        .field(
+                            "verification_time_utc",
+                            Value::str(format_utc(verification_time)),
+                        )
+                        .field("verification_time_source", Value::str(time_source))
                         .field("status", Value::str(v.status.clone()))
                         .field("event_count", Value::count(v.events as u64))
                         .build(),
@@ -1058,12 +1103,15 @@ fn verify_cmd(
                     t.push_str(EVALUATION_LINE);
                     t.push('\n');
                 }
+                let time = (chain.is_some() || time_source == "--at")
+                    .then(|| time_line(verification_time, time_source, chain.is_some()));
                 t.push_str(&verified_text(
                     &record_path,
                     &v,
                     &trust_line,
                     &custody_note,
                     &report_line(report),
+                    time.as_deref(),
                 ));
                 t
             };

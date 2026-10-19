@@ -19,7 +19,9 @@ use sfr_core::json;
 use sfr_core::keys::{fingerprint, parse_public_key_pem, pem_decode, public_key_pem};
 use sfr_core::params::{Baseline, parse_baseline};
 use sfr_core::rules::{Compare, Rules, parse_rules};
-use sfr_core::seal::{SealParams, parse_seal_time, this_tool};
+use sfr_core::seal::{
+    SealParams, check_seal_time, parse_seal_time, parse_seal_time_seconds, this_tool,
+};
 use sfr_core::verify::{VerifyError, check_record_size};
 use std::io::{self, Read};
 use std::path::Path;
@@ -214,8 +216,12 @@ pub struct VerifiedSummary {
     pub events: usize,
 }
 
-/// `sfr verify <record> --pubkey <pub> [--ulog <log>]`.
+/// `sfr verify <record> --pubkey <pub> [--ulog <log>] --at <now>`: the page gives the current
+/// time, as it does for a seal, because the engine reads no clock.
 pub struct VerifyRequest<'a> {
+    /// The verification time, RFC 3339: the browser's clock. A record whose claimed seal time is
+    /// later than this (by more than the allowed clock skew) is refused, as `sfr verify` does.
+    pub now: &'a str,
     /// The record.
     pub record: Input<'a>,
     /// The public key (`sfr.pub`).
@@ -576,7 +582,7 @@ pub fn seal(req: SealRequest<'_>) -> Result<SealOutput, Failure> {
     }
     t.push_str(&table(&ing, &eval, &rules, &baseline));
     t.push_str(&format!(
-        "\n{:<10}{}\n{:<10}{}\n{:<10}{}\n{:<10}{} ({})\n{:<10}{}\n",
+        "\n{:<10}{}\n{:<10}{}\n{:<10}{}\n{:<10}{} ({})\n{:<10}{} (claimed: this machine's clock, or --seal-time)\n",
         "record",
         record_name,
         "report",
@@ -587,7 +593,7 @@ pub fn seal(req: SealRequest<'_>) -> Result<SealOutput, Failure> {
         sealed.fingerprint,
         custody.as_str(),
         "sealed",
-        params.time_utc
+        params.time_utc,
     ));
     let id = &ing.identity;
     Ok(SealOutput {
@@ -631,6 +637,8 @@ pub fn seal(req: SealRequest<'_>) -> Result<SealOutput, Failure> {
 /// Verifies a record as `sfr verify --pubkey` does, standalone or, with the log, deep.
 pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
     let crypto = RustCrypto;
+    let verification_time = parse_seal_time_seconds(req.now)
+        .map_err(|e| fail(exit_code::USAGE, format!("verification time: {e}")))?;
     let public = parse_public_key_pem(text(&req.public_key, "public key", exit_code::USAGE)?)
         .map_err(|e| {
             fail(
@@ -651,6 +659,18 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
     let deep = capped.is_some();
     let log: Option<&mut dyn Read> = capped.as_mut().map(|c| c as &mut dyn Read);
     let outcome = sfr_core::verify::verify(req.record.bytes, log, &crypto, &public, false);
+    // The seal time is the sealer's claim: it may not lie in the verifier's future.
+    let outcome = match outcome {
+        Ok(v) => match check_seal_time(&v.claimed_time_utc, verification_time) {
+            Ok(_) => Ok(v),
+            Err(e) => Err(VerifyError::Mismatch(sfr_core::verify::Mismatch {
+                first: e,
+                also: Vec::new(),
+                custody: Some(v.custody),
+            })),
+        },
+        Err(e) => Err(e),
+    };
     // A record that verified must also match its report, when one is given (as the CLI does).
     let outcome = match (outcome, &req.report) {
         (Ok(v), Some(report)) => match sfr_core::report::check(req.record.bytes, report.bytes) {
@@ -679,6 +699,7 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
                 TRUST_PUBKEY,
                 "declared",
                 &sfr_core::verify::report_line(report),
+                None,
             ));
             Ok(VerifyOutput {
                 exit_code: exit_code::OK,
@@ -689,7 +710,7 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
                 verified: Some(VerifiedSummary {
                     fingerprint: v.fingerprint,
                     crypto_crates: v.crypto_crates,
-                    sealed_utc: v.time_utc,
+                    sealed_utc: v.claimed_time_utc,
                     status: v.status,
                     failed_rules: v.failed_rules,
                     events: v.events,

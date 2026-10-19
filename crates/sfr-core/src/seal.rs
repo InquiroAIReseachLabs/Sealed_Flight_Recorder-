@@ -500,10 +500,62 @@ pub fn parse_seal_time_seconds(text: &str) -> Result<i64, String> {
     Ok(unix)
 }
 
+/// How far a record's claimed seal time may lie after the verifier's time before `verify`
+/// refuses it, in seconds: 5 minutes. Two clocks that both keep good time still differ by a
+/// little, and a record sealed a moment ago on another machine must verify here.
+pub const SEAL_TIME_SKEW_SECONDS: i64 = 300;
+
+/// Checks a record's claimed seal time (`seal.time_utc`) against the verification time, both in
+/// Unix seconds. The seal time is the sealer's own statement and decides nothing else in
+/// `verify`; the one thing a verifier can say about it is that it is not in the verifier's
+/// future. A claimed time more than [`SEAL_TIME_SKEW_SECONDS`] after `verification_time` is
+/// refused. Returns the claimed time in Unix seconds.
+pub fn check_seal_time(claimed: &str, verification_time: i64) -> Result<i64, String> {
+    let secs = parse_seal_time_seconds(claimed)
+        .map_err(|e| format!("seal time claimed by the record: {e}"))?;
+    if secs > verification_time.saturating_add(SEAL_TIME_SKEW_SECONDS) {
+        return Err(format!(
+            "the seal time claimed by the sealer, {claimed}, is later than the verification time \
+             {} by more than the {SEAL_TIME_SKEW_SECONDS} s of clock skew allowed; a record cannot \
+             have been sealed in the future (--at sets the verification time)",
+            format_utc(verification_time)
+        ));
+    }
+    Ok(secs)
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_claimed_seal_time_may_not_lie_in_the_verifiers_future() {
+        let now = parse_seal_time_seconds("2026-10-19T12:00:00Z").unwrap();
+        // The past, now, and up to the skew allowance after now are accepted.
+        for ok in [
+            "2020-01-01T00:00:00Z",
+            "2026-10-19T12:00:00Z",
+            "2026-10-19T12:05:00Z",
+        ] {
+            assert_eq!(
+                check_seal_time(ok, now),
+                Ok(parse_seal_time_seconds(ok).unwrap()),
+                "{ok}"
+            );
+        }
+        // One second past the allowance is refused, and the reason names both times.
+        let e = check_seal_time("2026-10-19T12:05:01Z", now).unwrap_err();
+        assert!(
+            e.contains("2026-10-19T12:05:01Z")
+                && e.contains("2026-10-19T12:00:00Z")
+                && e.contains("300 s")
+                && e.contains("sealed in the future"),
+            "{e}"
+        );
+        assert!(check_seal_time("2035-12-31T00:00:00Z", now).is_err());
+        assert!(check_seal_time("not a time", now).is_err());
+    }
 
     #[test]
     fn seal_time_parses_and_normalizes_to_utc() {

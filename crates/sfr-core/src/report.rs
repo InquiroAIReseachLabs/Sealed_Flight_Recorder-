@@ -262,8 +262,8 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         escape(&file_name)
     ));
     out.push_str(&format!(
-        "**Status: {}**. Sealed {} by {} {}, v1.0 evaluation release. This report is generated \
-         from the record {} alone.\n\n",
+        "**Status: {}**. Sealed (time claimed by the sealer) {} by {} {}, v1.0 evaluation release. \
+         This report is generated from the record {} alone.\n\n",
         escape(&s(r, "status", "record")?),
         escape(&s(seal, "time_utc", "seal")?),
         escape(&s(tool, "name", "tool")?),
@@ -507,7 +507,7 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     out.push_str("## Seal\n\n");
     item(
         &mut out,
-        "Sealed at",
+        "Seal time (claimed by the sealer, not proven)",
         &escape(&s(seal, "time_utc", "seal")?),
     );
     item(

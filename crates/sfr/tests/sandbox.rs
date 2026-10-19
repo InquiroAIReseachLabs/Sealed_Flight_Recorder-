@@ -329,7 +329,15 @@ fn both_verify(dir: &Path, record: &str, log: Option<&str>) -> (Output, sfr_wasm
         .join(&report_name)
         .is_file()
         .then(|| read(dir, &report_name));
+    // The page gives the engine its clock; here, this machine's.
+    let now = sfr_core::seal::format_utc(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+    );
     let out = sfr_wasm::verify(VerifyRequest {
+        now: &now,
         record: Input {
             name: record,
             bytes: &record_bytes,
