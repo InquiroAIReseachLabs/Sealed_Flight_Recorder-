@@ -1,12 +1,11 @@
 # Pinned toolchain (SPEC B1.2). Every build runs with --locked.
 # Bump deliberately, in its own commit, with CI green on the musl targets and wasm32.
+#
+# Only the host toolchain is listed, so a plain `cargo build --release --locked` installs only
+# what it needs. The jobs and scripts that cross-build add their own target with
+# `rustup target add`: the release workflow and scripts/build_release.sh (the musl targets),
+# scripts/build_engine.sh and scripts/build_site.sh (wasm32-unknown-unknown), the armv7 CI job.
 [toolchain]
 channel = "1.97.0"
 components = ["rustfmt", "clippy"]
-targets = [
-  "x86_64-unknown-linux-musl",
-  "aarch64-unknown-linux-musl",
-  "armv7-unknown-linux-musleabihf",
-  "wasm32-unknown-unknown",
-]
 profile = "minimal"

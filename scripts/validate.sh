@@ -33,6 +33,8 @@ run "forbid(unsafe_code) in every crate root" check_forbid_unsafe
 # 2. Formatting, lints as errors, tests, all --locked (SPEC B1.10, "Code quality").
 run "rustfmt --check" cargo fmt --all --check
 run "clippy -D warnings" cargo clippy --workspace --all-targets --locked --quiet -- -D warnings
+# rust-toolchain.toml lists no cross targets; the wasm32 target is added here, as the sandbox CI job does.
+run "wasm32 target installed" rustup target add wasm32-unknown-unknown
 run "clippy -D warnings, sfr-wasm for wasm32 (the page's bindings)" \
   cargo clippy -p sfr-wasm --target wasm32-unknown-unknown --locked --quiet -- -D warnings
 run "cargo test --locked" cargo test --workspace --locked --quiet
