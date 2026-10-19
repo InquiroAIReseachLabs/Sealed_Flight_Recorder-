@@ -5,11 +5,12 @@
 //! stack of every build (SPEC B1.10 Crypto). Only Ed25519 certificates and CRLs are accepted.
 //!
 //! A chain is valid when the signer certificate, through the record's intermediates, reaches a
-//! supplied trust anchor; every certificate is valid at the record's seal time; the signer
-//! certificate carries extended key usage code signing; and no certificate in the path is listed
-//! in a supplied CRL. A listed serial counts as revoked whatever its revocation date, because the
-//! seal time is the sealer's own statement: a key holder who backdates a seal must not escape a
-//! revocation. There is no online check (no OCSP, no CRL download), by design.
+//! supplied trust anchor; every certificate is valid at the verification time, which is the
+//! verifier's clock or the time given with `--at` and never the record's seal time (the sealer's
+//! own claim: a key holder could set it inside a certificate's window); the signer certificate
+//! carries extended key usage code signing; and no certificate in the path is listed in a
+//! supplied CRL. A listed serial counts as revoked whatever its revocation date, for the same
+//! reason. There is no online check (no OCSP, no CRL download), by design.
 
 use rustls_pki_types::{
     AlgorithmIdentifier, CertificateDer, InvalidSignature, SignatureVerificationAlgorithm,
@@ -158,8 +159,13 @@ pub fn certificate_fingerprint(der: &[u8]) -> String {
 fn why(e: &Error) -> String {
     match e {
         Error::UnknownIssuer => "the chain does not reach a supplied trust anchor".into(),
-        Error::CertExpired { .. } => "a certificate had expired at the seal time".into(),
-        Error::CertNotValidYet { .. } => "a certificate was not yet valid at the seal time".into(),
+        Error::CertExpired { .. } => {
+            "a certificate had expired at the verification time (the verifier's clock, or --at)".into()
+        }
+        Error::CertNotValidYet { .. } => {
+            "a certificate was not yet valid at the verification time (the verifier's clock, or --at)"
+                .into()
+        }
         Error::CertRevoked => "a certificate in the chain is revoked by a supplied CRL".into(),
         Error::RequiredEkuNotFoundContext(_) => {
             "the signer certificate lacks extended key usage code signing".into()
@@ -190,13 +196,14 @@ pub struct ChainOk {
 }
 
 /// Checks the signer certificate and its intermediates against the trust anchors and CRLs, at
-/// `seal_time` (Unix seconds).
+/// `verification_time` (Unix seconds): the verifier's clock or `--at`, never the record's
+/// claimed seal time.
 pub fn check_chain(
     signer: &[u8],
     intermediates: &[Vec<u8>],
     anchors: &[Vec<u8>],
     crls: &[Vec<u8>],
-    seal_time: i64,
+    verification_time: i64,
 ) -> Result<ChainOk, String> {
     let signer_der = CertificateDer::from(signer);
     let ee = EndEntityCert::try_from(&signer_der)
@@ -235,13 +242,14 @@ pub fn check_chain(
                 // A CRL speaks only for its issuer: a certificate whose issuer has no CRL here
                 // is not revoked by anything supplied.
                 .with_status_policy(UnknownStatusPolicy::Allow)
-                // The CRLs are offline files; their nextUpdate is compared with nothing, since
-                // the only time sfr has is the sealer's own.
+                // The CRLs are offline files; their nextUpdate is not compared with the
+                // verification time here.
                 .with_expiration_policy(ExpirationPolicy::Ignore)
                 .build(),
         )
     };
-    let secs = u64::try_from(seal_time).map_err(|_| "seal time before 1970".to_string())?;
+    let secs = u64::try_from(verification_time)
+        .map_err(|_| "verification time before 1970".to_string())?;
     let time = UnixTime::since_unix_epoch(Duration::from_secs(secs));
     let path = ee
         .verify_for_usage(

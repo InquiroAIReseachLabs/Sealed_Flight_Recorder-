@@ -140,7 +140,7 @@ export async function seal({ log, rules: rulesChoice = 'default', baseline, key,
  */
 export async function verify({ record, publicKey } = {}) {
   await load();
-  return call('verify', { record: input(record, 'record', 'record.sfr'), publicKey: input(publicKey, 'publicKey', 'sfr.pub') });
+  return call('verify', { record: input(record, 'record', 'record.sfr'), publicKey: input(publicKey, 'publicKey', 'sfr.pub'), now: nowRfc3339() });
 }
 
 /**
@@ -157,6 +157,7 @@ export async function verifyWithLog({ record, publicKey, log } = {}) {
     record: input(record, 'record', 'record.sfr'),
     publicKey: input(publicKey, 'publicKey', 'sfr.pub'),
     log: input(log, 'log', 'flight.ulg'),
+    now: nowRfc3339(),
   });
 }
 
