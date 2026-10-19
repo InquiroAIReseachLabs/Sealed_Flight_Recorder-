@@ -70,6 +70,8 @@ fn standalone_verify_of_10000_events_is_under_10_ms() {
         .arg(dir.join("k/sfr.key"))
         .args([
             "--evaluation-only",
+            // The synthetic log names no PX4 version (SPEC B1.5).
+            "--allow-untested-version",
             "--seal-time",
             "2026-10-18T15:00:00Z",
             "--out",

@@ -76,13 +76,14 @@ function link(dir, target, name) {
   fs.symlinkSync(path.resolve(root, target), path.join(dir, name));
 }
 
-const golden = execFileSync('bash', ['-c', '. scripts/testdata/golden_logs.sh; golden_logs'], { cwd: root, encoding: 'utf8' })
+const golden = execFileSync('bash', ['-c', '. scripts/testdata/golden_logs.sh; golden_logs | while read -r name log; do echo "$name $log $(golden_flags_for "$name")"; done'], { cwd: root, encoding: 'utf8' })
   .trim().split('\n').map((line) => {
-    const [name, log] = line.split(' ');
+    const [name, log, ...flags] = line.trim().split(' ');
     const own = `testdata/rules/${name}.toml`;
     return {
       name,
       log,
+      flags: flags.join(' '),
       rules: fs.existsSync(path.join(root, own)) ? own : 'examples/rules.default.toml',
       baseline: `testdata/baselines/${name}.params`,
     };
@@ -92,7 +93,7 @@ const keyDir = path.join(work, 'key');
 if (sfr(work, ['keygen', '--evaluation-only', '--out', 'key']).code !== 0) throw new Error('sfr keygen failed');
 
 // Seals one case with the CLI in its own directory, with bare file names, as the page names files.
-function cliSeal(id, log, rules, baselineName, baselineText) {
+function cliSeal(id, log, rules, baselineName, baselineText, refuses = false) {
   const dir = path.join(work, 'cli', id);
   fs.mkdirSync(dir, { recursive: true });
   const logName = path.basename(log);
@@ -102,6 +103,10 @@ function cliSeal(id, log, rules, baselineName, baselineText) {
   else link(dir, baselineName, path.basename(baselineName));
   const r = sfr(dir, ['seal', logName, '--rules', path.basename(rules), '--baseline', path.basename(baselineName),
     '--key', path.join(keyDir, 'sfr.key'), '--evaluation-only', '--seal-time', SEAL_TIME, '--out', 'out']);
+  // A log sfr is not tested on (golden_flags_for): the page never passes --allow-untested-version,
+  // so the CLI's refusal without it is what the page must match.
+  if (refuses && r.code !== 4) throw new Error(`sfr seal ${id}: expected a refusal (exit 4), got exit ${r.code}`);
+  if (refuses) return { ...r, refused: true, message: r.stderr.replace(/^sfr: /, '').trim() };
   if (r.code > 2) throw new Error(`sfr seal ${id}: ${r.stderr}`);
   const stem = logName.replace(/\.[^.]*$/, '');
   return {
@@ -119,7 +124,7 @@ const NO_BASELINE = JSON.parse(/pub const NO_BASELINE: &str = ("(?:[^"\\]|\\.)*"
 const NO_BASELINE_NAME = /pub const NO_BASELINE_NAME: &str = "([^"]+)";/.exec(lib)[1];
 
 const cli = {};
-for (const g of golden) cli[g.name] = cliSeal(g.name, g.log, g.rules, g.baseline);
+for (const g of golden) cli[g.name] = cliSeal(g.name, g.log, g.rules, g.baseline, undefined, g.flags !== '');
 const noBaselineLog = 'testdata/sitl/v1.17.0/mc_flight_1.ulg';
 cli['no baseline'] = cliSeal('no-baseline', noBaselineLog, 'examples/rules.default.toml', NO_BASELINE_NAME, NO_BASELINE);
 
@@ -420,6 +425,12 @@ for (const name of opt.browsers.split(',')) {
       key: path.join(keyDir, 'sfr.key'),
       sealTime: SEAL_TIME,
     });
+    if (want.refused) {
+      // The same refusal as the CLI's: no record, the same exit code and message.
+      if (r.links === 0 && r.banner.includes(`(exit ${want.code})`) && r.banner.includes(want.message)) same += 1;
+      else differ.push(`${c.id}: the page did not refuse it as the CLI does (${r.banner.trim()})`);
+      continue;
+    }
     if (r.links < 2) { differ.push(`${c.id}: no record (${r.banner.trim()})`); continue; }
     const record = await download(page, '#seal-downloads a:nth-child(1)', path.join(dl, `${c.id}.sfr`));
     const report = await download(page, '#seal-downloads a:nth-child(2)', path.join(dl, `${c.id}.sfr.md`));
