@@ -1,5 +1,5 @@
 //! Exit code integration tests (SPEC B1.4, B1.10 "Exit codes").
-//! Chunk 0 covers code 4 (usage). Codes 0 to 3 are added with the commands that produce them.
+//! Code 4 (usage) is covered here; codes 0 to 3 are tested with the commands that produce them.
 // A panicking test is a failing test, so tests may use expect and unwrap.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 

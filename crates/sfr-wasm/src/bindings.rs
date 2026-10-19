@@ -61,7 +61,7 @@ fn start() {
 }
 
 /// The message of the panic that ended the last call in a trap, or empty. A panic is a bug:
-/// the engine is built to return an error for every input (CLAUDEME section 5).
+/// the engine is built to return an error for every input (no silent fallback).
 #[wasm_bindgen(js_name = lastPanic)]
 pub fn last_panic() -> String {
     LAST_PANIC.lock().map(|s| s.clone()).unwrap_or_default()

@@ -1,4 +1,4 @@
-# The sfr demo image, x86_64 (Chunk 5). scripts/build_demo_image.sh assembles the build context:
+# The sfr demo image, x86_64. scripts/build_demo_image.sh assembles the build context:
 # the static sfr, the two golden logs the demo uses with their license and provenance notices,
 # the default rules and the two logs' baselines, and scripts/run_demo.sh. busybox supplies
 # /bin/sh and the tools the demo script runs (awk, cp, date, dd, dirname, mktemp, od, rm, sed,

@@ -1,4 +1,4 @@
-//! Chunk 4 gate: no content in the report that is absent from the record.
+//! Report gate: no content in the report that is absent from the record.
 //!
 //! [`check`] reads a report back line by line and compares every fact in it with the record
 //! field it shows: each table row and list item, the status line, the findings of failed

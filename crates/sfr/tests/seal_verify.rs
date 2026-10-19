@@ -1,4 +1,4 @@
-//! Chunk 3 gate tests: keygen, sealed records, standalone and deep verify (SPEC B1.3, B1.7,
+//! Gate tests: keygen, sealed records, standalone and deep verify (SPEC B1.3, B1.7,
 //! B1.10 Deterministic, Replay, Tamper property).
 // A panicking test is a failing test, so tests may use expect and unwrap.
 #![allow(
@@ -579,9 +579,8 @@ fn a_thousand_seeded_byte_flips_in_a_log_all_fail_verification() {
 }
 
 /// Sealed topics the flip tests cover, as (topic, golden flight, log): a PX4 topic in a SIH
-/// flight and the external vision odometry of the Gazebo vision flight (Change Order 01 item
-/// 3c), each from the shrunk fuzz seed of that flight (fuzz/README.md), and the synthetic custom
-/// topic in three instances (item 3d), so a wrong instance number is caught. The small logs keep
+/// flight and the external vision odometry of the Gazebo vision flight, each from the shrunk fuzz seed of that flight (fuzz/README.md), and the synthetic custom
+/// topic in three instances, so a wrong instance number is caught. The small logs keep
 /// a thousand deep verifies quick; each case is its own test, so the cases run in parallel.
 type SealedCase = (&'static str, &'static str, &'static str);
 const BATTERY_STATUS: SealedCase = (
@@ -642,7 +641,7 @@ fn sealed_topic_record((topic, golden, log): SealedCase) -> (Vec<u8>, Vec<u8>, [
     )
 }
 
-/// 1,000 seeded single-byte flips inside sealed topic messages in the log (Change Order 01).
+/// 1,000 seeded single-byte flips inside sealed topic messages in the log.
 /// Deep verify must name the topic and the instance whose message was flipped.
 #[test]
 fn a_thousand_flips_in_sealed_topic_messages_name_the_topic_and_instance() {

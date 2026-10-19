@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# check_workflows.sh: rules for the release workflows that a script can enforce (CLAUDEME
-# section 5: actions pinned to a full commit SHA; docs/RELEASE.md: no key and no secret in CI).
+# check_workflows.sh: rules for the release workflows that a script can enforce (actions
+# pinned to a full commit SHA; docs/RELEASE.md: no key and no secret in CI).
 #
 #   For every file in .github/workflows/:
 #     0. it parses as YAML (a workflow that does not parse fails every push with no job);

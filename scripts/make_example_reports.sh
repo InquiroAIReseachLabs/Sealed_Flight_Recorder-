@@ -7,7 +7,7 @@
 # default rules; gz_x500_vision_hover with its golden rules (which seal vehicle_visual_odometry)
 # plus [authorized_sources] listing only the autopilot itself, written to
 # examples/reports/gz_x500_vision_hover.rules.toml, so R7 fails on PX4's own start-up DO_GRIPPER
-# command (docs/DIAGNOSTIC.md item 12.3). Only the public half of the key, examples/reports/sfr.pub,
+# command (docs/RULES.md, R7). Only the public half of the key, examples/reports/sfr.pub,
 # is kept; the private half never leaves a temporary directory and is shredded at the end. Each
 # record is then verified against its log. Run it after a record or report format change:
 # crates/sfr/tests/seal_verify.rs fails when the examples no longer render from their records

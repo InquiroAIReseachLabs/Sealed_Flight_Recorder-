@@ -1,4 +1,4 @@
-//! Chunk 2 gate tests for `sfr seal --dry-run` (SPEC B1.4, B1.5, B1.6).
+//! Gate tests for `sfr seal --dry-run` (SPEC B1.4, B1.5, B1.6).
 // A panicking test is a failing test, so tests may use expect and unwrap.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
@@ -498,7 +498,7 @@ fn vtol_log_has_start_and_end_and_passes_r6() {
     );
 }
 
-/// Change Order 01 gate: the tailsitter golden log (Gazebo `gz_quadtailsitter`, `VT_TYPE` 0).
+/// Gate: the tailsitter golden log (Gazebo `gz_quadtailsitter`, `VT_TYPE` 0).
 #[test]
 fn tailsitter_log_has_start_and_end_passes_r6_and_shows_transition_tuning() {
     let log = "testdata/sitl/v1.17.0/gz_quadtailsitter_transition.ulg";
@@ -891,7 +891,7 @@ fn a_sealed_topic_missing_from_the_log_fails_r1_and_names_it() {
     }
 }
 
-/// Change Order 01 gate: removing a declared topic's data from a log that had it fails R1 with
+/// Gate: removing a declared topic's data from a log that had it fails R1 with
 /// exit 2 and names the topic. The vision flight's seed keeps its `vehicle_visual_odometry`
 /// subscription ('A' record) but loses every data record of it.
 #[test]
@@ -937,7 +937,7 @@ fn removing_a_sealed_topics_data_from_its_log_fails_r1_and_names_it() {
     );
 }
 
-/// Change Order 01 gate: the Gazebo vision flight seals `vehicle_visual_odometry`, a real PX4
+/// Gate: the Gazebo vision flight seals `vehicle_visual_odometry`, a real PX4
 /// topic, and the synthetic fixture seals `custom_detection`, a topic PX4 does not define.
 #[test]
 fn sealed_topics_give_one_digest_per_instance_on_real_and_custom_topics() {
@@ -1059,7 +1059,7 @@ fn r7_names_each_command_from_an_unlisted_source() {
     );
 }
 
-/// Change Order 01 gate: a changed `VT_B_TRANS_DUR` in the baseline fails R3 with both values
+/// Gate: a changed `VT_B_TRANS_DUR` in the baseline fails R3 with both values
 /// and shows DIFF in the transition tuning section, on the standard VTOL and the tailsitter.
 #[test]
 fn a_changed_watched_parameter_fails_r3_and_shows_diff_in_transition_tuning() {
@@ -1117,7 +1117,7 @@ fn a_changed_watched_parameter_fails_r3_and_shows_diff_in_transition_tuning() {
     }
 }
 
-/// Change Order 01 gate: the payload SITL flight (commands from a ground station, 255/190, and
+/// Gate: the payload SITL flight (commands from a ground station, 255/190, and
 /// a second source, 42/191, to the vehicle, system 6). Its golden rules list the ground station
 /// and the vehicle but not the second source.
 #[test]
@@ -1127,7 +1127,7 @@ fn payload_log_has_payload_events_and_r7_names_the_second_source() {
     let golden = "testdata/rules/v1.17.0_payload_two_sources.toml";
 
     // PAYLOAD events: actuator, gripper twice, image capture and winch from the flight, plus
-    // PX4's own boot-time DO_GRIPPER (docs/DIAGNOSTIC.md item 12.3).
+    // PX4's own boot-time DO_GRIPPER (docs/RULES.md, R7).
     let json = stdout(&dry_run(log, golden, baseline, true));
     assert_eq!(
         json.matches("\"category\": \"PAYLOAD\"").count(),

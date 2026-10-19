@@ -11,7 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # Cryptography on every target (SPEC B1.10 Crypto): SHA-256, Ed25519, and the supplementary BLAKE3
-# digest of the raw log bytes (founder ruling; never anchors trust).
+# digest of the raw log bytes (never anchors trust).
 sha2 = { workspace = true }
 ed25519-dalek = { workspace = true }
 blake3 = { workspace = true }

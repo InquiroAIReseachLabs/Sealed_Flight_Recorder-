@@ -10,9 +10,7 @@ Generated for this project in PX4 v1.14.4 SITL with the built-in SIH simulator. 
 | SHA-256 | `9324d50388738054afdcee8cb09e3a44e1956c64003978e6aa401be16f09a254` |
 | Size | 30583745 bytes |
 
-Full procedure, topic counts, and event sequence: `docs/DIAGNOSTIC.md`, item 3.
-
-The script that drove the flight (paths are those of the generating machine):
+The script that drove the flight (the working directory of the generating machine is written `/path/to/work`):
 
 ```bash
 #!/bin/bash
@@ -24,7 +22,7 @@ The script that drove the flight (paths are those of the generating machine):
 # on a non-zero instance so it cannot collide with another SITL on instance 0.
 # Usage: mc_flight.sh [working_dir]
 set -u
-S=/tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad
+S=/path/to/work
 T=$S/px4/PX4-Autopilot-v1.14.4
 BUILD=$T/build/px4_sitl_default
 B=$BUILD/bin

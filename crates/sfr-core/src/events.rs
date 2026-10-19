@@ -274,7 +274,7 @@ pub fn armed_intervals(rows: &[VehicleStatusRow]) -> Vec<ArmedInterval> {
     out
 }
 
-/// `arm_disarm_reason_t` from PX4 `src/lib/events/enums.json` (DIAGNOSTIC 4.2).
+/// `arm_disarm_reason_t` from PX4 `src/lib/events/enums.json`.
 pub fn reason_name(reason: u8, fw: &Firmware) -> Option<&'static str> {
     let series = supported_series(fw)?;
     Some(match reason {
@@ -302,7 +302,7 @@ fn supported_series(fw: &Firmware) -> Option<(u8, u8)> {
     fw.series().filter(|s| (1, 14) <= *s && *s <= (1, 17))
 }
 
-/// NAVIGATION_STATE_* names per version (DIAGNOSTIC 4.3). `None` outside v1.14 to v1.17.
+/// NAVIGATION_STATE_* names per version (PX4 `VehicleStatus.msg`). `None` outside v1.14 to v1.17.
 pub fn nav_state_name(state: u8, fw: &Firmware) -> Option<&'static str> {
     let series = supported_series(fw)?;
     let v114 = series == (1, 14);
@@ -349,7 +349,7 @@ pub fn nav_state_name(state: u8, fw: &Firmware) -> Option<&'static str> {
     })
 }
 
-/// The VTOL state that commander mirrors into `vehicle_status` (DIAGNOSTIC 4.4.1, item 6).
+/// The VTOL state that commander mirrors into `vehicle_status` (PX4 `VehicleStatus.msg`).
 /// PX4 commander sets `vehicle_type`, `in_transition_mode` and `in_transition_to_fw` together
 /// from one `vtol_vehicle_status` message (`Commander::vtolStatusUpdate`, v1.14.4 and v1.17.0),
 /// so consecutive rows never show a state that the vehicle was not in.

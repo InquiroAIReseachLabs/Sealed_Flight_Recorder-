@@ -1,4 +1,4 @@
-## B1. SHARED SPEC (Chunk 0 writes this into `docs/SPEC.md` verbatim)
+## B1. SPEC
 
 ### B1.1 Product
 - Name: **Sealed Flight Record**. Binary: `sfr`. Record file extension: `.sfr` (JSON). Report: `<name>.sfr.md` (Markdown).
@@ -15,7 +15,7 @@
 - `site/`: static sandbox page (HTML, CSS, JS that loads `sfr-wasm`). No third-party scripts, no analytics, no CDN calls.
 - `scripts/`: demo, benchmark, README-number regeneration, release.
 - `testdata/`: golden logs with license notices, expected records.
-- `docs/`: SPEC, THREAT_MODEL, RECORD_FORMAT, RULES, INTEGRATION_NOTES, DIAGNOSTIC (Chunk 1 output).
+- `docs/`: SPEC, THREAT_MODEL, RECORD_FORMAT, RULES, INTEGRATION_NOTES.
 - Pinned toolchain (`rust-toolchain.toml`). All builds `--locked`.
 
 ### B1.3 Commands
@@ -74,10 +74,10 @@ The log has no size limit. It is read once, as a stream. The reader keeps format
 
 ### B1.5 What is extracted from the log
 
-Supported: PX4 v1.14 through v1.17 ULog. Exact topic and field names per version come from `docs/DIAGNOSTIC.md` (Chunk 1), never from memory.
+Supported: PX4 v1.14 through v1.17 ULog. Exact topic and field names per version come from the PX4 message definitions of that version and are checked against the golden logs, never taken from memory.
 
 - **Log identity:** SHA-256 and BLAKE3 of the raw file bytes; file size; firmware version and git hash from the ULog info messages `ver_sw_release` and `ver_sw`; vehicle type from `vehicle_status.system_type` and `is_vtol`.
-- **`vtol_type`** (in the log identity's vehicle): when the vehicle is VTOL (`vehicle_status.is_vtol` true on some sample, as for R4 and R6), parameter `VT_TYPE` from the parameters at log start, recorded as its raw integer and its PX4 name: `0` tailsitter, `1` tiltrotor, `2` standard (the same in PX4 v1.14 and v1.17; `docs/DIAGNOSTIC.md` item 12 cites the source). Any other value is `unknown(<n>)`, never guessed; a log without an int32 `VT_TYPE` records value null and name `unknown`. Null for a vehicle that is not VTOL. `vehicle_status.system_type` uses MAVLink's MAV_TYPE numbering and is not mapped through `VT_TYPE`.
+- **`vtol_type`** (in the log identity's vehicle): when the vehicle is VTOL (`vehicle_status.is_vtol` true on some sample, as for R4 and R6), parameter `VT_TYPE` from the parameters at log start, recorded as its raw integer and its PX4 name: `0` tailsitter, `1` tiltrotor, `2` standard (the same in PX4 v1.14 and v1.17). Any other value is `unknown(<n>)`, never guessed; a log without an int32 `VT_TYPE` records value null and name `unknown`. Null for a vehicle that is not VTOL. `vehicle_status.system_type` uses MAVLink's MAV_TYPE numbering and is not mapped through `VT_TYPE`.
 - **Configuration:** the full parameter set at log start (the 'P' records before the first subscription) as a sorted key-to-value map, each value typed int32 or float32; firmware version.
 - **Events (the timeline), each with a sequence number, boot-time microseconds, UTC microseconds when GPS time is available, and its source (topic, instance, message index):** UTC comes only from the first GPS sample (`vehicle_gps_position`, else `sensor_gps` instance 0) with `fix_type` of at least 2 and a nonzero `time_utc_usec`, never from `boot_time_utc_us` or a host clock.
   - ARM, DISARM: edges of `vehicle_status.arming_state == 2`, with the reason decoded from PX4's events enum. A log that starts armed reports ARM at its first sample, marked `initial`.
@@ -114,10 +114,10 @@ Rules file format: TOML (Rust TOML tooling is actively maintained; the common Ru
 |---|---|---|
 | R7 | Every COMMAND event came from a source listed in `[authorized_sources]`; with `category`, only commands of that category are checked | FAIL names each unauthorized event (sequence number, command, category, source system and component); FAIL when its input is missing: no `vehicle_command` data record, one of the three fields absent, or a `vehicle_command` sample whose `command`, `source_system` or `source_component` is not an 8-, 16- or 32-bit unsigned integer (a log with no commands is no evidence of authorized ones); PASS when commands are present and none in scope is unauthorized; N/A when the rules file has no `[authorized_sources]` |
 
-**Optional rules file sections** (Change Order 01), each absent by default unless noted:
-- `[watched_parameters] names = [...]`: parameter names shown apart for presentation. R3 compares them exactly like every other parameter, with no extra rule and no double counting; a watched name the ignore list matches is a rules file error. The record lists them in `config.watched_parameters`, and the results table and report show them in a "Transition tuning" section with the `vtol_type`, each with its baseline and flown values and MATCH or DIFF. `examples/rules.default.toml` watches ten VTOL transition parameters, each confirmed in PX4 v1.14 and v1.17 (`docs/DIAGNOSTIC.md` item 12).
+**Optional rules file sections**, each absent by default unless noted:
+- `[watched_parameters] names = [...]`: parameter names shown apart for presentation. R3 compares them exactly like every other parameter, with no extra rule and no double counting; a watched name the ignore list matches is a rules file error. The record lists them in `config.watched_parameters`, and the results table and report show them in a "Transition tuning" section with the `vtol_type`, each with its baseline and flown values and MATCH or DIFF. `examples/rules.default.toml` watches ten VTOL transition parameters, each confirmed in PX4 v1.14 and v1.17.
 - `[sealed_topics] topics = [...]`: uORB topic names, at most 64. Each is required (R1) and digested (B1.5).
-- `[payload_commands] ids = [...]`: command ids whose COMMAND events are `PAYLOAD`. `examples/rules.default.toml` lists the actuator, servo, gripper, winch, payload deploy, camera trigger, and image capture commands, each id and name taken from PX4's `VehicleCommand.msg` for v1.14 and v1.17 (`docs/DIAGNOSTIC.md` item 12); flight termination and parachute commands are not in it.
+- `[payload_commands] ids = [...]`: command ids whose COMMAND events are `PAYLOAD`. `examples/rules.default.toml` lists the actuator, servo, gripper, winch, payload deploy, camera trigger, and image capture commands, each id and name taken from PX4's `VehicleCommand.msg` for v1.14 and v1.17; flight termination and parachute commands are not in it.
 - `[authorized_sources]`: `sources = [{ system = <id>, component = <id> }, ...]` and an optional `category = "PAYLOAD"` or `"GENERAL"`; enables R7.
 
 **Optional example rules** (shipped in `examples/rules.extended.toml`, off by default, thresholds labeled "set by your flight-test lead"): minimum battery, GPS fix at arm, estimator fault flags, accelerometer clipping and vibration, total dropout time.
@@ -136,7 +136,7 @@ Rules file format: TOML (Rust TOML tooling is actively maintained; the common Ru
 | X5 (dropouts) | the whole log |
 | PARAM_CHANGED_IN_FLIGHT (B1.5) | records with ARM < t ≤ DISARM, t being the last data timestamp before the record |
 
-**Volatile parameter ignore list:** configurable in the rules file. Default list is confirmed against real logs in Chunk 1; candidates are flight-time accumulators and per-flight identifiers.
+**Volatile parameter ignore list:** configurable in the rules file. Default list is confirmed against the golden logs; candidates are flight-time accumulators and per-flight identifiers.
 
 No rule threshold is presented as correct for any aircraft.
 
@@ -190,13 +190,13 @@ Then: sealing on the companion computer immediately after disarm (documented pos
 | Performance | Benchmark script reports seal time for 10, 50, and 100 MB logs and standalone verify time; gates: 100 MB seal under 2 s on x86_64 and under 4 s on real aarch64 hardware (not emulation); standalone verify under 10 ms for records up to 10,000 events, measured in-process (`sfr_core::verify` on the record bytes in memory) as the median of 101 runs on the CI runner (`crates/sfr/tests/verify_perf.rs`); the same test reports the end-to-end `sfr verify` time, which adds process start and reading the files, and that time is reported, not gated |
 | Code quality | `rustfmt --check` clean; `clippy` with warnings as errors; all tests green |
 | Supply chain | `cargo-deny` clean for licenses (no GPL, AGPL, or unknown) and advisories; CycloneDX SBOM per release. |
-| Crypto | On every target, SHA-256 (record, Merkle tree, log digest, key fingerprint) comes from `sha2`, Ed25519 key generation, signing and verification from `ed25519-dalek` (verification uses `verify_strict`), and the supplementary BLAKE3 digest of the raw log bytes from `blake3`, which never anchors trust. The keygen seed comes from the operating system's CSPRNG (`getrandom`). The same crates and versions build every target and the sandbox, so a record is byte-identical wherever it is sealed; `scripts/check_crypto_graph.sh` fails CI if another implementation (AWS-LC, ring, OpenSSL, BoringSSL) enters the graph of `sfr` or `sfr-wasm` on any target. `seal.crypto_crates` names each crate and its crate version, which a unit test holds to `Cargo.lock`. No CMVP-validated module is used and none is claimed (B1.12); the AWS-LC FIPS module was removed at Change Order 01 because it cannot be linked into a static armv7 binary (`docs/DIAGNOSTIC.md` item 11). Unit tests check RFC 8032 section 7.1 and the SHA-256 example of FIPS 180-4. No custom primitives; domain separation as specified |
+| Crypto | On every target, SHA-256 (record, Merkle tree, log digest, key fingerprint) comes from `sha2`, Ed25519 key generation, signing and verification from `ed25519-dalek` (verification uses `verify_strict`), and the supplementary BLAKE3 digest of the raw log bytes from `blake3`, which never anchors trust. The keygen seed comes from the operating system's CSPRNG (`getrandom`). The same crates and versions build every target and the sandbox, so a record is byte-identical wherever it is sealed; `scripts/check_crypto_graph.sh` fails CI if another implementation (AWS-LC, ring, OpenSSL, BoringSSL) enters the graph of `sfr` or `sfr-wasm` on any target. `seal.crypto_crates` names each crate and its crate version, which a unit test holds to `Cargo.lock`. No CMVP-validated module is used and none is claimed (B1.12); the AWS-LC FIPS module was removed because it cannot be linked into a static armv7 binary. Unit tests check RFC 8032 section 7.1 and the SHA-256 example of FIPS 180-4. No custom primitives; domain separation as specified |
 | Key custody | `seal` exits 4 unless given a hardware key source or `--evaluation-only`; every record sealed with a file key has custody `file-evaluation` and its report's first line says EVALUATION KEY; `seal` verifies every signature before writing. CI exercises `pkcs11-token` against SoftHSM v2 (CKM_EDDSA) and `tpm-sealed` against swtpm |
 | Certificates | `verify --trust-anchor` accepts an Ed25519 signer certificate only if it chains to the anchor offline, carries extended key usage code signing, is valid at the sealed time, is not revoked by a supplied CRL, and verifies the record signature with its own key; CI covers each rejection with generated test certificates |
 | Releases | Each release ships `SHA256SUMS` plus an Ed25519 signature over it, and the public release key in the README. Each release names its crypto crates and their crate versions. Release artifacts for aarch64 are built on native aarch64 hardware; cross-compiling and emulation are for CI feature branches only |
 | Reproducible claims | Every number in the README sits between markers and is written by `scripts/regen_readme_numbers.sh`; CI fails if the README drifts from the script output |
 | Sandbox | Files a person chooses are read in the browser and never uploaded: an automated headless test shows that sealing and verifying them makes no network request, that the tamper demo makes only same-origin GET requests for its sample log, that no request carries a body, and that none goes to another host; the browser engine produces records byte-identical to the CLI for the same inputs |
-| Docs | README quickstart a stranger completes in 15 minutes (founder-run test, not CI) |
+| Docs | README quickstart a stranger completes in 15 minutes (a manual test, not CI) |
 
 ### B1.11 Out of scope for v1
 Onboard or in-flight sealing; C/C++ library or ROS2 node; MAVLink `.tlog` and ArduPilot DataFlash (the ingest layer sits behind a `FlightLogIngestor` trait so ArduPilot is a clean v2 addition); computer-vision events; HTML report; any server, upload, or fleet database; hardware key attestation (PIV attestation, TPM2_Certify); online revocation (OCSP); quantum-resistant signatures; inclusion-proof export (format supports it; command is v2); reason-coded waivers; multi-flight trends; compliance mappings.
@@ -207,12 +207,12 @@ Onboard or in-flight sealing; C/C++ library or ROS2 node; MAVLink `.tlog` and Ar
 - No compliance claims (no "DoDD 3000.09 compliant" or similar).
 - No number that a script in the repo does not produce.
 - Describe as "v1.0 evaluation release."
-- No FIPS, validated, or compliant claim anywhere (founder ruling, Change Order 01): `sfr` uses no CMVP-validated module, and docs, output, and records describe its cryptography only by its crates and crate versions. IL4, IL5, and NIST SP 800-171 apply to whole systems and environments, never to a binary. Never write "FIPS compliant", "FIPS certified", "FIPS validated", or any compliant, certified, accredited, authorized, or validated status for `sfr`; `scripts/check_language.sh` fails CI on such wording.
+- No FIPS, validated, or compliant claim anywhere: `sfr` uses no CMVP-validated module, and docs, output, and records describe its cryptography only by its crates and crate versions. IL4, IL5, and NIST SP 800-171 apply to whole systems and environments, never to a binary. Never write "FIPS compliant", "FIPS certified", "FIPS validated", or any compliant, certified, accredited, authorized, or validated status for `sfr`; `scripts/check_language.sh` fails CI on such wording.
 - No em-dashes.
 
 ### Change log
 
-- Change Order 01: VTOL subtype and watched parameters; sealed topics; command categories and R7; armv7 build. With it, by founder ruling: one crypto stack (`sha2`, `ed25519-dalek`, `blake3`) on every target after the AWS-LC FIPS module could not be linked into a static armv7 binary; the record names its crypto by crate version; no FIPS, validated, or compliant claim anywhere.
-- Chunk 4 (Markdown report): B1.8 states that `seal` renders the report from the record bytes it has just signed, writes the record and the report together or neither, never overwrites either, and names both files in its JSON output; that no report table has more than five columns; that values are escaped and the verify command quoted. B1.10 armv7 compares reports as well as records.
-- Report addition (before Chunk 5): B1.8 adds the "Parameters changed in flight" table and the `initial` legend; `docs/RECORD_FORMAT.md` defines `initial`. The record format does not change.
-- Chunk 6 scope change (founder): the sandbox is delivered as an engine bundle with a JavaScript API (`docs/SANDBOX.md`); the production page is built with the Inquiro website, and `site/` is a test harness. B1.10 Sandbox states the exact privacy claim and how it is tested; the tamper demo's sample log loads on demand.
+- VTOL subtype and watched parameters; sealed topics; command categories and R7; armv7 build. With them: one crypto stack (`sha2`, `ed25519-dalek`, `blake3`) on every target after the AWS-LC FIPS module could not be linked into a static armv7 binary; the record names its crypto by crate version; no FIPS, validated, or compliant claim anywhere.
+- Markdown report: B1.8 states that `seal` renders the report from the record bytes it has just signed, writes the record and the report together or neither, never overwrites either, and names both files in its JSON output; that no report table has more than five columns; that values are escaped and the verify command quoted. B1.10 armv7 compares reports as well as records.
+- Report addition: B1.8 adds the "Parameters changed in flight" table and the `initial` legend; `docs/RECORD_FORMAT.md` defines `initial`. The record format does not change.
+- Sandbox scope: the sandbox is delivered as an engine bundle with a JavaScript API (`docs/SANDBOX.md`); the production page is built with the Inquiro website, and `site/` is a test harness. B1.10 Sandbox states the exact privacy claim and how it is tested; the tamper demo's sample log loads on demand.

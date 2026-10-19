@@ -1,4 +1,4 @@
-//! JSON values and their deterministic text forms (SPEC B1.7, DIAGNOSTIC item 8).
+//! JSON values and their deterministic text forms (SPEC B1.7).
 //!
 //! The value model has no floating-point numbers: integers are limited to the I-JSON safe
 //! range (|n| <= 2^53 - 1) and every unsigned 64-bit quantity (timestamps) is a decimal string.

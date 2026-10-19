@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # regen_readme_numbers.sh: write the README's numbers from the CI run that measured them
-# (CLAUDEME: no number in a doc that no script in this repo produced; SPEC B1.10 Reproducible
-# claims).
+# (no number in a doc that no script in this repo produced; SPEC B1.10 Reproducible claims).
 #
 # The numbers live in one receipt, docs/receipts/ci-run.txt: lines copied verbatim from the job
 # logs of one CI run, each prefixed with its job, plus the run id and the commit. `--receipt`

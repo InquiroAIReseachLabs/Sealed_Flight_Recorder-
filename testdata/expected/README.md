@@ -65,7 +65,7 @@ null and name `unknown` on `synthetic_r4_quadchute_on_disarm` (a VTOL log with n
 null on the others; COMMAND events of both categories occur; R7 is FAIL on
 `v1.17.0_payload_two_sources`, whose rules file lists two of its four command sources (the ground
 station 255/190 and the vehicle 6/1), so R7 names the second source 42/191 and the arbitrary
-source of PX4's boot-time DO_GRIPPER (`docs/DIAGNOSTIC.md` item 12.3), and N/A on every other
+source of PX4's boot-time DO_GRIPPER, and N/A on every other
 golden file (R7's PASS path is covered by `seal_dry_run.rs`, not by a golden file);
 sealed topics are `vehicle_visual_odometry` on `v1.17.0_gz_x500_vision_hover` (one instance) and
 `custom_detection` on `synthetic_custom_detection` (three instances, one with no data record).

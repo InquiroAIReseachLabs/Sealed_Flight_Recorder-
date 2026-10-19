@@ -12,7 +12,7 @@
 #           searched too.
 #       Patterns that fail the check: a home directory path (/home/, /Users/, /root/, C:\Users),
 #       a GitHub runner name, an email address, a session or tool path (/tmp/claude, .claude/,
-#       claude.ai, a session id), the words CLAUDEME and "change order", and every --forbid
+#       claude.ai, a session id), the two internal words c1 and c2 below, and every --forbid
 #       literal of four characters or more (the build machines' user name and host name, which
 #       the release workflow passes in).
 #       Exit 0 only when nothing matches. A missing tool (tar, strings, exiftool, grep) fails.
@@ -32,6 +32,7 @@ done
 # class|extended regex. Words are assembled from parts so this file does not hold them whole.
 c1='CLAUDE''ME'
 c2='change''[ _-]*order'
+c2w='Change'' Order'   # a sample of the second word, for the self-test
 classes=(
   "home-directory|(/home/[A-Za-z0-9._-]+|/Users/[A-Za-z0-9._-]+|/root/|[A-Za-z]:\\\\Users\\\\)"
   "runner-name|(/home/runner|runneradmin|runnervm|fv-az[0-9]+-[0-9]+)"
@@ -152,7 +153,7 @@ email-address|written by someone${at}example.com
 session-path|file /tmp/claude-1/scratch
 session-path|id session_01ABCDEFGHIJKLMNOP
 internal-word|see the $c1 standard
-internal-word|per Change Order 01
+internal-word|per $c2w 01
 EOF
   # a build-identity literal passed with --forbid
   make_release "$t/ident" "compiled by buildmaster7"

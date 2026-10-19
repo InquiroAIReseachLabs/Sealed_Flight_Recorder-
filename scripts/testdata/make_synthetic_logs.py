@@ -8,7 +8,7 @@ wing, disarms in fixed wing, and goes multicopter on the next, disarmed sample (
 after disarm, which R4 does not count). vehicle_status.failsafe is never set, so R4 fails on
 the first quadchute alone.
 
-custom_detection.ulg (Change Order 01): a multicopter flight that logs a topic PX4 does not
+custom_detection.ulg: a multicopter flight that logs a topic PX4 does not
 define, custom_detection, with a nested type (detection_box), in three instances: instance 0
 with five messages, instance 1 with two, and instance 2 subscribed with none. A rules file that
 lists it in [sealed_topics] seals it without knowing its structure.

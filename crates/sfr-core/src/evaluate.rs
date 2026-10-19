@@ -494,7 +494,7 @@ fn r5(f: &FlightLog, events: &[Event]) -> RuleResult {
     }
 }
 
-/// R6. On a VTOL vehicle its first detail line states the VTOL type (Change Order 01).
+/// R6. On a VTOL vehicle its first detail line states the VTOL type.
 fn r6(f: &FlightLog, events: &[Event], vtol: Option<&crate::ingest::VtolType>) -> RuleResult {
     let expected = "every VTOL transition START has an END; none aborted";
     let missing = missing_fields(f, &["is_vtol"]);
@@ -656,7 +656,7 @@ fn r7(f: &FlightLog, events: &[Event], rules: &Rules) -> RuleResult {
         return fail_missing("R7", NAME, &expected, missing);
     }
     // The ingest keeps only the samples whose three fields are 8-, 16- or 32-bit unsigned
-    // integers (the widths PX4 uses; docs/DIAGNOSTIC.md item 4).
+    // integers (the widths PX4 uses).
     let read = f.commands.len() as u64;
     if read != rows {
         return RuleResult::new(

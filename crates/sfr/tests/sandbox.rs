@@ -1,4 +1,4 @@
-//! Chunk 6: the sandbox engine (`sfr-wasm`) and the CLI are one engine (SPEC B1.10 Sandbox,
+//! The sandbox engine (`sfr-wasm`) and the CLI are one engine (SPEC B1.10 Sandbox,
 //! Deterministic). For the same log, rules, baseline, key and seal time, `sfr_wasm::seal` gives
 //! the CLI's record, report, exit code and output text, and `sfr_wasm::verify` the CLI's verify
 //! output, on golden logs that cover sealed topics, watched parameters on a tailsitter, payload
@@ -467,7 +467,7 @@ fn the_sandbox_refuses_bad_input_with_the_cli_exit_code_and_message() {
     let full = read(&dir, "c.ulg");
     std::fs::write(dir.join("truncated.ulg"), &full[..full.len() - 7]).unwrap();
     let topics: Vec<String> = (0..65).map(|i| format!("\"t{i}\"")).collect();
-    // The default rules plus 65 sealed topics: a usage error (exit 4, Change Order 01).
+    // The default rules plus 65 sealed topics: a usage error (exit 4).
     let default = std::fs::read_to_string(root().join("examples/rules.default.toml")).unwrap();
     std::fs::write(
         dir.join("many.toml"),
