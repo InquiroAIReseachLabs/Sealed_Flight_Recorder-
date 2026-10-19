@@ -41,6 +41,8 @@ Every other event in the records (`scripts/make_example_reports.sh` wrote them) 
 
 ## Verify
 
+Only the `.sfr` records are signed; each `.sfr.md` report is a readable view of its record, so check the record, not the report. The public key `sfr.pub` sits in the same repository as the records: verifying with it shows that the records have not changed since sealing, not who sealed them. For records you receive, get the signer's public key from the signer through a channel you trust.
+
 Each report gives the `sfr verify` command for a directory that holds the record, the log and `sfr.pub`. From the repository root, with `sfr` built as in the [README](../../README.md#quickstart) and the files where they are:
 
 ```sh doc-test
