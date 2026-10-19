@@ -61,11 +61,11 @@ It drops every other record after hashing it. The number of kept data records ha
 
 ## The sandbox's limit
 
-The sandbox page (`docs/SANDBOX.md`) adds one limit of its own, which is not a SPEC B1.4 limit and does not apply to the command line:
+The browser engine bundle (`docs/SANDBOX.md`) adds one limit of its own, which is not a SPEC B1.4 limit and does not apply to the command line:
 
 | Limit | Value | Why | Enforced in | Tested by |
 |---|---|---|---|---|
-| One log or record in the sandbox | 100 MiB (104,857,600 bytes) | The browser, not the machine, decides how much memory a tab may use, and a page that runs out of it stops without a message. The engine streams the log, so its own memory stays small, but the browser also holds the files a person chooses and the page's sample logs. A larger file belongs to the command line, which has no limit on the log. | `crates/sfr-wasm` `MAX_SANDBOX_FILE_BYTES`: refused by the size the browser reports, before a byte is read, and again by the bytes actually read (one byte past the limit) | `crates/sfr-wasm` `a_log_over_the_sandbox_limit_is_refused_by_size_and_by_length`; `tests/browser/sandbox.test.mjs` check `limit` (a file one byte over, in each browser) and check `memory` (Chromium: the largest log under the limit is sealed and verified with the log, and the peak memory of each browser process is reported in the CI job summary) |
+| One log or record in the browser engine | 100 MiB (104,857,600 bytes) | The browser, not the machine, decides how much memory a tab may use, and a page that runs out of it stops without a message. The engine streams the log, so its own memory stays small, but the browser also holds the files a person chooses and, after the tamper demo, its sample log. A larger file belongs to the command line, which has no limit on the log. | `crates/sfr-wasm` `MAX_SANDBOX_FILE_BYTES`: refused by the size the browser reports, before a byte is read, and again by the bytes actually read (one byte past the limit) | `crates/sfr-wasm` `a_log_over_the_sandbox_limit_is_refused_by_size_and_by_length`; `tests/browser/sandbox.test.mjs` check `limit` (a file one byte over, in each browser) and check `memory` (Chromium: the largest log under the limit is sealed and verified with the log, and the peak memory of each browser process is reported in the CI job summary) |
 
 A file over it is refused with exit 4 and this message, never truncated:
 

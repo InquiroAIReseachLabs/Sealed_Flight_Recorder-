@@ -13640,7 +13640,7 @@ Each has a `.provenance.md` beside it with the build, the exact commands, and th
 
 ## 13. The sandbox (Chunk 6)
 
-**Date:** 2026-10-19. Decisions taken building `crates/sfr-wasm` and `site/`, each with its evidence.
+**Date:** 2026-10-19. Decisions taken building `crates/sfr-wasm`, its engine bundle and the `site/` test harness, each with its evidence.
 
 | Decision | Why | Evidence |
 |---|---|---|
@@ -13651,7 +13651,9 @@ Each has a `.provenance.md` beside it with the build, the exact commands, and th
 | A worker reads the log a piece at a time | The page's thread cannot read a file synchronously; a worker can (`FileReaderSync`), 1 MiB at a time, straight into the engine's memory, so the engine never holds the whole log and the page stays responsive | browser check `memory` (engine memory after sealing the largest allowed log; CI job summary) |
 | Without a baseline: firmware `none`, no parameters | The CLI requires a baseline; the sandbox makes it optional by sealing against an empty one, so R2 and R3 fail and say what they found, and the same text given to the CLI gives the same record. A baseline built from the log itself would make R2 and R3 pass by construction | `NO_BASELINE` in `crates/sfr-wasm/src/lib.rs`; `sandbox.rs` `without_a_baseline_the_sandbox_seals_what_the_cli_seals_from_the_no_baseline_text` |
 | Limit: 100 MiB per log or record | Bounds a tab's memory; above the 100 MB benchmark log, so every benchmark size seals in the browser too | `docs/LIMITS.md` "The sandbox's limit" |
-| Sample logs gzip-compressed and loaded with the page | Cloudflare Pages serves files up to 25 MiB; the tailsitter log is 34,095,400 bytes. Compressed, the largest file is about 10 MB. They load before Ready, so the demo makes no request after load (SPEC B1.10 Sandbox) | `scripts/build_site.sh` output; browser check `network` |
+| One sample log, the smallest that shows both changes, fetched on demand | The tamper demo needs a COMMAND event to change in the record and a float parameter at log start to change in the log. `mc_flight_1.ulg` has both and every rule passes on it: 8,536,869 bytes, 3,107,003 gzip-compressed, against 10,217,078 and 3,759,964 for `failsafe_gps_loss.ulg` and 58 MB for the two logs `run_demo.sh` uses. It is fetched, compressed, only when the demo runs, and unpacked in the browser (`DecompressionStream`), so it travels compressed on any static host | `scripts/build_engine.sh`; browser checks `demo` and `network` |
+| Structured verify results read from `sfr-core`'s text | The page needs each mismatch's kind, event sequence number and kind, field, and sealed and found values. `sfr_core::verify` returns text; the wasm glue (Tier B) splits it (`crates/sfr-wasm/src/result.rs`) rather than changing `sfr-core` (Tier A). A text it does not know stays whole as kind `record`; tests on real changed records and logs fail CI if `sfr-core`'s wording changes | `result.rs` tests; `crates/sfr/tests/sandbox.rs`; browser checks `verify` and `demo` |
+| A separable bundle with a JavaScript API | The production page is built with the Inquiro website; this repository ships the engine, `sfr.js` and `sfr-worker.js`, the sample with its notices, `BUILDINFO` with the source commit, and `SHA256SUMS`, as the CI artifact `sfr-engine-<commit>` | `scripts/build_engine.sh`, `scripts/check_engine_bundle.sh` |
 
 ## Appendix A. Item 11 test programs
 

@@ -1,61 +1,153 @@
-# Sandbox
+# Sandbox: the engine bundle for the browser
 
-The sandbox is a static web page that runs `sfr` in the browser: it seals a PX4 log, verifies a record, and runs the tamper demo of `scripts/run_demo.sh` on two bundled golden logs. It is a v1.0 evaluation release, for people evaluating Sealed Flight Record who do not want to install anything.
+The engine bundle runs `sfr` in a web page: seal a PX4 log, verify a record, verify a record with its log, and the tamper demo of `scripts/run_demo.sh`. It is a v1.0 evaluation release. The production page that uses it is built and hosted with the Inquiro website; this repository delivers the bundle, its JavaScript API, and the tests that hold it to the command line.
 
-## What it is and what it promises
+## What it promises
 
-- **One engine.** The page runs `crates/sfr-wasm`, the `sfr-core` engine built for WebAssembly, with the same crypto crates as the command line (`sha2`, `ed25519-dalek`, `blake3`). Given the same log, rules, baseline, key and seal time, it writes a record and a report byte-identical to `sfr seal`, and prints what `sfr seal` and `sfr verify` print (SPEC B1.10 Sandbox). The CI job `sandbox` checks this on every golden log in Chromium, Firefox and WebKit.
-- **Your files never leave the browser.** The page loads its engine, the two example rules files and the two sample logs once. After the status line says Ready it makes no network request: files are read in the tab, and downloads are made from memory. The CI job checks that the server receives no request, and the browser reports none, after Ready. The page's security headers (`site/_headers`) let the browser contact only the site itself, and the page loads no third-party script, font, analytics or content delivery network.
-- **Evaluation keys only.** The page makes an Ed25519 key in the tab when it loads (the browser's random number generator), labeled `EVALUATION KEY (sandbox, in-browser)` in the record, custody `file-evaluation`. It is never written anywhere and is gone when the tab closes; the page offers its public key (`sfr.pub`) for download so records sealed with it can be verified later. Under "Same bytes as the command line", an evaluation key file from `sfr keygen --evaluation-only` and a seal time can be given instead. Operational records are sealed with the command line and a hardware key.
-- **Without a baseline**, the page seals with an empty baseline (firmware `none`, no parameters; `NO_BASELINE` in `crates/sfr-wasm/src/lib.rs`), so R2 and R3 fail and say what they found. Nothing is assumed.
-- **Limit.** One log or record of at most 100 MiB (104,857,600 bytes). A larger file is refused, unread, with a message naming the limit (`docs/LIMITS.md`). The engine streams the log, so its own memory stays small; the CI job reports the browser's peak memory for the largest allowed log.
+- **One engine.** The bundle runs `crates/sfr-wasm`, the `sfr-core` engine built for WebAssembly, with the command line's crypto crates (`sha2`, `ed25519-dalek`, `blake3`). For the same log, rules, baseline, key and seal time it writes a record and a report byte-identical to `sfr seal`, and returns the text `sfr seal` and `sfr verify` print (SPEC B1.10 Sandbox). CI checks this on every golden log in Chromium, Firefox and WebKit.
+- **Files a person chooses are read in the browser and never uploaded.** The bundle sends no file and no request body anywhere. It fetches files of its own bundle only, with GET, from the origin that serves it: the engine and the two example rules files when `load()` runs, and the sample log, its baseline and its manifest only when `loadSample()` or `runTamperDemo()` runs. CI checks, in each browser, that sealing and verifying files from disk make no request at all, that the tamper demo makes only those same-origin GET requests, that no request carries a body, and that no request goes to another host.
+- **Evaluation keys only.** `load()` makes an Ed25519 key in the browser (seed from the browser's CSPRNG), labeled `EVALUATION KEY (sandbox, in-browser)` in the record, custody `file-evaluation`. Its seed stays in the worker's memory and is gone when the page closes; only its public key leaves, as PEM. An evaluation key file from `sfr keygen --evaluation-only` may be given instead. Operational records are sealed with the command line and a hardware key.
+- **Without a baseline**, the engine seals against an empty one (firmware `none`, no parameters; `NO_BASELINE` in `crates/sfr-wasm/src/lib.rs`), so R2 and R3 fail and say what they found. Nothing is assumed.
+- **Limit.** One log or record of at most 100 MiB (104,857,600 bytes). A larger file is refused, unread, with exit 4 and a message naming the limit (`docs/LIMITS.md`). The engine streams the log through a worker, so its own memory stays small; CI reports the browser's peak memory for the largest allowed log.
 
-## Build
+## The bundle
 
-`scripts/build_site.sh <out-dir>` builds the engine (release profile, the checkout's commit as the build commit), generates its JavaScript glue with `wasm-bindgen-cli` of the version `Cargo.lock` pins (`WASM_BINDGEN` names the binary), and writes the page, the engine, the example rules and the gzip-compressed sample logs to `<out-dir>`. The largest file is about 10 MB, under the 25 MiB per-file limit of Cloudflare Pages. Every CI run uploads this directory as the artifact `sfr-sandbox-site`; that is what the founder deploys.
+`scripts/build_engine.sh <out-dir>` builds it; every CI run keeps it as the artifact `sfr-engine-<commit>`.
 
-`node tests/browser/sandbox.test.mjs --site <out-dir> --sfr <sfr built from the same commit> --out <dir>` is the browser gate (`npm ci` in `tests/browser` first). It writes `summary.md` and screenshots of the three panels, light and dark.
+| File | What it is |
+|---|---|
+| `sfr.js` | the API module a page imports |
+| `sfr-worker.js` | the engine's thread, started by `sfr.js` |
+| `pkg/sfr_wasm.js`, `pkg/sfr_wasm_bg.wasm` | the engine and its glue (`wasm-bindgen` 0.2.129) |
+| `rules/rules.default.toml`, `rules/rules.extended.toml` | the example rules |
+| `samples/mc_flight_1.ulg.gz` | the tamper demo's sample log, gzip-compressed |
+| `samples/v1.17.0_mc_flight_1.params` | its baseline |
+| `samples/mc_flight_1.provenance.md`, `samples/NOTICE.md`, `samples/TESTDATA.md` | its provenance and license notices |
+| `samples/samples.json` | its name, repository path, size, SHA-256, compressed size, and the parameter the demo changes |
+| `README.md` | a short guide to these files |
+| `BUILDINFO` | version, source commit, `rustc` and `wasm-bindgen` versions, the sample's SHA-256 |
+| `SHA256SUMS` | the SHA-256 of every other file: `sha256sum -c SHA256SUMS` |
 
-## Deploy on Cloudflare Pages behind Cloudflare Access (founder checklist)
+`scripts/check_engine_bundle.sh <dir> <commit>` checks that a bundle is whole: every file present, `SHA256SUMS` listing exactly the other files with matching digests, and `BUILDINFO` naming the commit. CI runs it on every bundle it keeps.
 
-The founder performs these steps. Cloudflare renames dashboard buttons from time to time; if a label differs, look for the nearest match. You need a Cloudflare account. Your domain's DNS must be on Cloudflare for the custom subdomain; without that, use only the `pages.dev` address (step 13 still protects it).
+**Serving it.** Serve the directory as it is, from the same origin as the page that imports `sfr.js` (a browser starts a module worker only from its own origin). The page's Content-Security-Policy must allow `script-src 'self' 'wasm-unsafe-eval'`, `worker-src 'self'` and `connect-src 'self'`; nothing else is needed. The sample log is about 8.5 MB, and is stored and sent gzip-compressed (about 3.1 MB). The bundle unpacks it in the browser with `DecompressionStream`, so it travels compressed on any static host; a host that itself sets `Content-Encoding: gzip` on the file also works. `loadSample()` reports the transfer size.
 
-**Get the files**
+**The sample.** `mc_flight_1.ulg` is the smallest golden log that shows both tamper changes: it has COMMAND events to change in the record and float parameters at log start to change in the log, and every rule passes on it. `failsafe_gps_loss.ulg` also shows them, at 10.2 MB (3.8 MB compressed), with R4 failing on its GPS failsafe; `scripts/build_engine.sh` names the sample in one place.
 
-1. Choose the subdomain, for example `sandbox.<your domain>`. Write it down; steps 9 and 12 use it.
-2. On GitHub, open the repository, then **Actions**, then the CI run of the commit to deploy (the one with every job green).
-3. At the bottom of the run page, under **Artifacts**, download **sfr-sandbox-site**. It is a zip file. Keep it as it is.
+## JavaScript API
 
-**Create the site**
+```js
+import * as sfr from './sfr-engine/sfr.js';
 
-4. Sign in to the Cloudflare dashboard and open **Workers & Pages**.
-5. Select **Create application**, then the **Pages** tab, then **Upload assets** (also called "drag and drop your files").
-6. Enter a project name, for example `sfr-sandbox`. It becomes `<project name>.pages.dev`.
-7. Drag the zip file from step 3 onto the upload area and select **Deploy site**. Wait for "Success".
-8. Do not turn on **Web Analytics** for this project, and do not enable Rocket Loader or Zaraz for the domain: each adds a script to the page, which the page's rules then block.
+const { version, limits, sessionKey } = await sfr.load();
+const sealed = await sfr.seal({ log: fileInput.files[0], rules: 'default', baseline: paramsFile });
+const checked = await sfr.verifyWithLog({
+  record: { name: sealed.recordName, data: sealed.record },
+  publicKey: { name: 'sfr.pub', data: sessionKey.publicKeyPem },
+  log: fileInput.files[0],
+});
+if (!checked.verified) console.log(checked.mismatch.kind, checked.mismatch.sealed, checked.mismatch.found);
+```
 
-**Add the subdomain**
+A **file** argument is a `File`, a `Blob` with a `name`, or `{ name, data }` with `data` a `Blob`, `ArrayBuffer`, typed array or string. The name appears in messages and output as the command line shows a file name. Every function returns a promise. A function rejects only when it is called wrongly, when the browser cannot read a file, or when the engine has stopped (a WebAssembly trap, which the engine is built never to hit; the error says so); an input the engine refuses resolves to a result with its exit code and message.
 
-9. In the project, open **Custom domains**, select **Set up a custom domain**, enter the subdomain from step 1, and confirm. Cloudflare adds the DNS record. Wait until the domain shows **Active**.
+| Function | What it does |
+|---|---|
+| `load()` | Starts the engine, fetches the example rules, makes the session's in-browser key. Resolves to `{ version, limits: { fileBytes, textBytes }, sessionKey: { keyId, fingerprint, publicKeyPem } }`. Later calls return the same. Every other function calls it first. |
+| `newEvaluationKey()` | A new in-browser key: `{ keyId, fingerprint, publicKeyPem }`. |
+| `seal({ log, rules, baseline, key, sealTime })` | `sfr seal`. `rules`: `'default'` (the default), `'extended'`, or a file. `baseline`: a file, or none (R2 and R3 then fail). `key`: `{ keyId }` from `newEvaluationKey()` or `load()`, or an evaluation key file; default the session key. `sealTime`: RFC 3339; default now. Resolves to a seal result. |
+| `verify({ record, publicKey })` | `sfr verify --pubkey`. Resolves to a verify result. |
+| `verifyWithLog({ record, publicKey, log })` | `sfr verify --pubkey --ulog`. Resolves to a verify result. |
+| `loadSample()` | Fetches the sample on first use (later calls make no request): `{ name, path, size, sha256, log: File, baseline: File, baselinePath, parameter, notices: { provenance, license }, transfer: { gzBytes, compressedBytes, transferBytes, unpackedHere } }`. `transferBytes` is the size on the wire as the browser reports it (Resource Timing), or `null` where it does not. |
+| `changeCommand(recordBytes)` | A copy of a record with one digit of the first COMMAND event's command id changed: `{ bytes, offset, from, to, description }`. |
+| `changeParameter(logBlob, name, value)` | A copy of a log with float parameter `name` at log start set to `value`: `{ blob, offset, before, after, description }`. |
+| `runTamperDemo({ onStep })` | Runs the demo on the sample (steps below), calling `onStep(step)` as each step ends. Resolves to `{ passed, seconds, sample, steps, error }`. |
+| `engineMemoryBytes()` | The engine's WebAssembly memory, in bytes, as of its last reply. |
 
-**Restrict it to your email list (Cloudflare Access)**
+**Seal result.** When the record was written (`sealed: true`; exit 0, 1 or 2):
 
-10. Open **Zero Trust** from the dashboard's left menu. The first time, choose a team name and the Free plan (up to 50 users).
-11. Go to **Access**, then **Applications**, then **Add an application**, and choose **Self-hosted**.
-12. Name it `SFR sandbox`. Under the application domain, enter the subdomain from step 1.
-13. Add a second application domain: `<project name>.pages.dev`. Add a third: `*.<project name>.pages.dev` (the preview addresses). Otherwise the page stays reachable at those addresses without a login.
-14. Leave the session duration at 24 hours or shorter. Select **Next**.
-15. Add a policy: name `Allowed evaluators`, action **Allow**. Under **Include**, choose **Emails** and enter each email address allowed in, one per entry. Select **Next**.
-16. Under login methods, keep **One-time PIN** (Cloudflare emails a code; no other account is needed). Save the application.
+| Field | Value |
+|---|---|
+| `sealed` | `true` |
+| `exitCode` | SPEC B1.4: 0 all rules PASS or N/A; 1 a rule FAIL; 2 a required topic missing. The record is written in each case. |
+| `status` | `PASS` or `FAIL` |
+| `record` | the record's bytes (`Uint8Array`), to save as `recordName` |
+| `report` | the Markdown report, to save as `reportName` |
+| `recordName`, `reportName` | `<log stem>.sfr`, `<log stem>.sfr.md` |
+| `text` | what `sfr seal` prints, with file names in place of paths |
+| `notes` | what `sfr seal` prints on standard error besides a failure, one per entry |
+| `results` | each rule: `{ id, name, status, expected, found, detail: [lines] }` |
+| `merkleRoot`, `leafCount`, `keyFingerprint`, `keyCustody`, `keyLabel`, `sealedUtc`, `eventCount` | as the record holds them |
+| `log` | `{ fileName, size, sha256, blake3, firmware }` |
 
-**Check it**
+When nothing was written: `{ sealed: false, exitCode: 3 or 4, message, text }`, with `text` what `sfr` prints on standard error (`sfr: <message>`).
 
-17. Open the subdomain in a private browser window. Cloudflare asks for an email address: enter one from step 15, then the code it emails. The sandbox page opens and, after a few seconds, says **Ready**.
-18. In the same window, open `<project name>.pages.dev`: it must also ask for the email first. Then try an address that is not on the list: it must not get in.
-19. Open the browser's developer tools (F12), **Network** tab, and clear it after the page says Ready. Run the **Tamper demo**, then seal one log in the **Seal** panel. The Network list must stay empty except for downloads you click (`blob:` addresses).
-20. Open the subdomain in **Safari** on a Mac (and, if you can, on an iPhone or iPad). Repeat step 17 and run the **Tamper demo**: it must end with **DEMO PASSED**. CI tests WebKit, Safari's engine, on Linux, not Safari itself, so this is the Safari check.
+**Verify result.**
 
-**Update it later**
+| Field | Value |
+|---|---|
+| `exitCode` | 0 VERIFIED, 1 verification failed, 4 the record, the public key or the log could not be used, or a file is over the limit (`message` says why) |
+| `verified` | `true` for exit 0 |
+| `checked` | `record`, or `record and log` |
+| `headline` | `VERIFIED (record)`, `VERIFIED (record and log)`, or `FAILED: <first mismatch>` |
+| `text` | exactly what `sfr verify` prints, with the record's file name in place of its path; for exit 4, what it prints on standard error |
+| `message` | for exit 4, the reason; otherwise `null` |
+| `keyCustody` | the record's custody, or what a record that failed claims (`null` if unreadable) |
+| `keyFingerprint`, `cryptoCrates`, `sealedUtc`, `status`, `eventCount` | what a verified record says; `null` otherwise |
+| `mismatch` | the first mismatch, or `null` |
+| `mismatches` | every mismatch, the first first (the text lists at most 21) |
 
-21. Download the new **sfr-sandbox-site** artifact (steps 2 and 3). In the Pages project, open **Deployments**, select **Create deployment** (or **Upload**), drag in the zip, and deploy. The Access rules stay in place.
-22. To add or remove a person, edit the policy from step 15.
+**A mismatch.** Every field is present; a field the kind does not have is `null`. `text` is always the whole line `sfr verify` prints after `FAILED: ` or `also: `. `sealed` and `found` are the values exactly as that line prints them (a typed parameter such as `f32:12`, or the JSON of an event or result field).
+
+| Field | Value |
+|---|---|
+| `kind` | what changed (table below) |
+| `text` | the whole line |
+| `seq` | `event`: the event's sequence number |
+| `eventKind` | `event`: the event's kind, for example `COMMAND` |
+| `rule` | `result`: the rule id |
+| `parameter` | `parameter`: its name |
+| `topic`, `instance` | `sealed_topic`: the topic and its `multi_id` |
+| `field` | the field that differs (see the kinds) |
+| `sealed` | the value in the record |
+| `found` | the value found: re-derived from the log, recomputed, or the given public key's fingerprint for `key` |
+| `note` | extra text, such as why the log no longer parses |
+
+| Kind | Meaning | Parts set |
+|---|---|---|
+| `event` | an event differs from the one re-derived from the log | `seq`, `eventKind`, `field`, `sealed`, `found` |
+| `parameter` | a parameter at log start differs | `parameter`, `sealed`, `found` |
+| `result` | a rule result differs | `rule`, `field`, `sealed`, `found` |
+| `sealed_topic` | a sealed topic digest differs | `topic`, `instance`, `field`, `sealed`, `found` |
+| `count` | the number of events or results differs | `field` (`events` or `results`), `sealed`, `found` |
+| `sealed_topic_instances` | the sealed topic instances differ | `sealed`, `found` |
+| `config` | the configuration's firmware or watched parameters differ | `field`, `sealed`, `found` |
+| `log` | the log's firmware or vehicle differs | `field`, `sealed`, `found` |
+| `log_digest` | the log's SHA-256, BLAKE3 or size differs | `field`, `sealed`, `found`, `note` |
+| `log_unparseable` | the log's digest matches but it no longer parses | `note` |
+| `merkle_root` | a leaf changed after sealing | `sealed` (recorded root), `found` (computed root) |
+| `merkle_leaf_count` | the leaf count differs | `sealed`, `found` |
+| `key` | the record was signed by another key | `sealed` (the record's key fingerprint), `found` (the given key's) |
+| `signature` | the signature does not verify | |
+| `status` | the overall status contradicts the results | `sealed`, `found` |
+| `rules_digest` | the embedded rules text does not match its digest | |
+| `custody` | an evaluation key where a hardware key was required | |
+| `record` | the record's form (JSON, schema, fields, order), or any other text | |
+
+The parts are read from the text `sfr-core` writes (`crates/sfr-wasm/src/result.rs`); `crates/sfr/tests/sandbox.rs` and the browser test hold each kind to the text of real changed records and logs, so a change of wording fails CI.
+
+**Demo steps.** Each step is `{ id, title, runs: [{ command, result }], passed, expected, note }`, with `command` the `sfr` command it stands for and `result` a seal or verify result.
+
+| Step | What it does | Expected |
+|---|---|---|
+| a | makes an evaluation key | an in-browser EVALUATION KEY |
+| b | seals the sample with the default rules and its baseline | exit 0, status PASS |
+| c | verifies the record alone, then with the log | VERIFIED twice |
+| d | changes one byte of a COMMAND event in a copy of the record, verifies it alone and with the log | exit 1: kind `merkle_root`, then kind `event` naming the event, `COMMAND`, field `command`, sealed and found values |
+| e | changes `MPC_XY_VEL_MAX` to 7.0 in a copy of the log, verifies the record with it | exit 1: kind `parameter`, `MPC_XY_VEL_MAX`, found `f32:7` |
+
+These are the steps of `scripts/run_demo.sh`, on one smaller log. The browser test runs the same steps with `sfr` on the same log and requires the same exit codes and output, keys, digests and times aside.
+
+## Test harness and tests
+
+`site/` is a plain page over the bundle, for CI only; `scripts/build_site.sh <out-dir>` puts it next to a fresh bundle (`<out-dir>/engine/`). `tests/browser/sandbox.test.mjs` drives it in Chromium, Firefox and WebKit (`npm ci` in `tests/browser` first; `node tests/browser/sandbox.test.mjs --site <out-dir> --sfr <sfr built from the same commit> --out <dir>`) and writes `summary.md`, `summary.json` and screenshots. CI tests WebKit, Safari's engine on Linux, not Safari itself; the production page should also be opened in Safari before it goes live.

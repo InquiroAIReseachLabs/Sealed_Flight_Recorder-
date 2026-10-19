@@ -53,7 +53,8 @@ Your code fits ONE place. Know where before you type. `verify` walks the same pi
 // LANGUAGES
 // Rust:  everything that ships (sfr-core, sfr, sfr-wasm). #![forbid(unsafe_code)] in every crate.
 // Shell: scripts/ (demo, benchmark, README numbers, release, validation).
-// JS:    site/, loading sfr-wasm. No third-party scripts. No CDN. No analytics.
+// JS:    crates/sfr-wasm/js/ (the engine bundle's API module and worker) and site/ (its test
+//        harness page). No third-party scripts. No CDN. No analytics.
 //        tests/browser/: the headless browser gate for site/ (Playwright, pinned by its
 //        package-lock.json). A test tool: never shipped, never served.
 // Python: offline tooling only, never in the runtime path, never shipped.
@@ -203,10 +204,10 @@ sealed-flight-record/
 ├── crates/
 │   ├── sfr-core/             # engine: ingest, events, rules, record, Merkle, signing, verify
 │   ├── sfr/                  # CLI: seal, verify, keygen
-│   └── sfr-wasm/             # browser build of the same engine
+│   └── sfr-wasm/             # browser build of the same engine; js/ holds the bundle's API (scripts/build_engine.sh)
 ├── fuzz/                     # cargo-fuzz targets: ULog parser, .sfr reader
-├── site/                     # static sandbox page, zero network requests after load (scripts/build_site.sh)
-├── tests/browser/            # headless browser gate for site/: same records as the CLI, no request after load
+├── site/                     # test harness page for the engine bundle (scripts/build_site.sh); not deployed
+├── tests/browser/            # headless browser gate: same records as the CLI; user files never sent
 ├── scripts/                  # validate, check_deny_list, check_language, run_demo, benchmark, regen_readme_numbers, release
 ├── testdata/                 # golden logs with license notices; expected/ records
 ├── examples/                 # added with the rules engine: rules.extended.toml (SPEC B1.6) and the default rules and baseline the demo uses

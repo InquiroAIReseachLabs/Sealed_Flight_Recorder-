@@ -1,15 +1,11 @@
 # site/
 
-The sandbox page (SPEC B1.2, B1.10 Sandbox; `docs/SANDBOX.md`): HTML, CSS and JavaScript that load `crates/sfr-wasm`, the `sfr` engine built for WebAssembly.
+The test harness page for the engine bundle (`docs/SANDBOX.md`): a plain page that CI's browser gate (`tests/browser/sandbox.test.mjs`) drives in Chromium, Firefox and WebKit. The production page is built elsewhere on the same bundle; this page has no design work and is not deployed.
 
 | File | What it does |
 |---|---|
-| `index.html`, `style.css` | the page: Seal, Verify and Tamper demo panels, light and dark |
-| `app.js` | loading, the three panels, the tamper demo (the steps of `scripts/run_demo.sh`) |
-| `worker.js` | the engine's thread: loads `sfr-wasm`, reads the chosen files a piece at a time, runs seal and verify |
+| `index.html`, `style.css` | the page: Seal, Verify and Tamper demo panels |
+| `app.js` | the three panels, over `engine/sfr.js` (the bundle's API) |
 | `markdown.js` | shows the `.sfr.md` report as a page, setting text only, never HTML |
-| `_headers` | the security headers Cloudflare Pages sends: the browser may contact this site only |
 
-`scripts/build_site.sh <out-dir>` assembles a site ready to serve from these files, the built engine, the example rules and the two sample logs. `tests/browser/sandbox.test.mjs` is its gate.
-
-Rules: no third-party scripts, fonts, analytics or CDN; zero network requests after the page says Ready. Files chosen on the page never leave the browser.
+`scripts/build_site.sh <out-dir>` puts these files next to a fresh engine bundle in `<out-dir>/engine/`. Files chosen on the page are read in the browser and never uploaded.
