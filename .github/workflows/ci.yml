@@ -27,7 +27,7 @@ env:
 jobs:
   code-quality:
     name: rustfmt, clippy, tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Install the pinned toolchain (rust-toolchain.toml)
@@ -76,7 +76,7 @@ jobs:
   # and records, from the release tarballs, beside this job.
   armv7:
     name: armv7 full test suite under QEMU (SPEC B1.10 armv7)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       # Rust's own linker and the target's bundled musl startup files: no cross C toolchain.
       CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER: rust-lld
@@ -100,7 +100,7 @@ jobs:
 
   golden-oracle:
     name: golden files agree with the independent pyulog oracle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Compare testdata/expected with testdata/expected/oracle (Python standard library only)
@@ -112,7 +112,7 @@ jobs:
 
   fuzz:
     name: fuzz ulog_ingest, sfr_verify and rules_parse for 60 s each (SPEC B1.10)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       # cargo-fuzz sets its own sanitizer flags; -D warnings still applies to the target.
       RUSTFLAGS: -D warnings
@@ -147,7 +147,7 @@ jobs:
 
   no-network:
     name: deny list (networking and async runtimes)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Install the pinned toolchain (rust-toolchain.toml)
@@ -159,7 +159,7 @@ jobs:
 
   supply-chain:
     name: cargo-deny (licenses, advisories, bans, sources)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1 (commit; the tag is annotated)
@@ -169,7 +169,7 @@ jobs:
 
   language:
     name: language rules (SPEC B1.12)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Language self-test
@@ -188,7 +188,7 @@ jobs:
   # and makes the release (docs/RELEASE.md).
   release-build:
     name: static ${{ matrix.target }} tarball, built twice from clean (SPEC B1.10 Static binaries)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -220,7 +220,7 @@ jobs:
 
   release-kit-sbom:
     name: benchmark kit and one CycloneDX SBOM per target (SPEC B1.10 Supply chain)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Install the pinned toolchain (rust-toolchain.toml) and cargo-cyclonedx
@@ -246,7 +246,7 @@ jobs:
   demo:
     name: demo image; run_demo.sh under docker run --network=none in under 60 s (SPEC B1.10 No network)
     needs: release-build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
@@ -279,7 +279,7 @@ jobs:
   records:
     name: every golden log seals to the same bytes on x86_64, aarch64 and armv7 (QEMU) (SPEC B1.10 Deterministic)
     needs: release-build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
@@ -315,7 +315,7 @@ jobs:
   benchmark:
     name: benchmark from the x86_64 release tarball, no build tools (SPEC B1.10 Performance, Peak memory)
     needs: [release-build, release-kit-sbom]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
@@ -342,7 +342,7 @@ jobs:
   release-assemble:
     name: SHA256SUMS over every artifact; release signing script with a test key (SPEC B1.10 Releases)
     needs: [release-build, release-kit-sbom, demo]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0

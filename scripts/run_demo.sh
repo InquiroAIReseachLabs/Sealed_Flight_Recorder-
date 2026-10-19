@@ -12,7 +12,7 @@
 #      with its sealed and found values
 #   f. print the one-line command that seals the evaluator's own logs
 #
-# POSIX sh with busybox tools (sh, awk, cp, dd, od, strings, mktemp), so it runs in the demo
+# POSIX sh with busybox tools (sh, awk, cp, date, dd, mktemp, od, sed, strings, tr), so it runs in the demo
 # image (scripts/build_demo_image.sh) as well as on a Linux machine. Exits 1 if any step does not
 # give the expected result. The files come from the directory above this script (testdata/,
 # examples/); sfr is $SFR, else bin/sfr there, else sfr on PATH.
@@ -122,10 +122,11 @@ case "$out" in *"found f32:7"*) ;; *) fail "verify did not name the found value 
 step "f. seal your own logs"
 if [ -n "${SFR_DEMO_IMAGE:-}" ]; then
   echo "With your logs in ./logs and your vehicle's baseline (a QGroundControl .params export plus a '# Firmware:' line) in ./baseline.params, from the directory that holds them:"
-  echo "docker run --rm --network=none -v \"\$PWD:/work\" -w /work $SFR_DEMO_IMAGE sh -c 'mkdir -p sealed && { [ -f sealed/key/sfr.key ] || sfr keygen --evaluation-only --out sealed/key; } && for f in logs/*.ulg; do sfr seal \"\$f\" --rules /sfr/examples/rules.default.toml --baseline baseline.params --key sealed/key/sfr.key --evaluation-only --out sealed; done'"
+  echo "docker run --rm --network=none --user \"\$(id -u):\$(id -g)\" -v \"\$PWD:/work\" -w /work $SFR_DEMO_IMAGE sh -c 'mkdir -p sealed && { [ -f sealed/key/sfr.key ] || sfr keygen --evaluation-only --out sealed/key; } && for f in logs/*.ulg; do sfr seal \"\$f\" --rules /sfr/examples/rules.default.toml --baseline baseline.params --key sealed/key/sfr.key --evaluation-only --out sealed; done'"
 else
   echo "With your logs in ./logs and your vehicle's baseline (a QGroundControl .params export plus a '# Firmware:' line) in ./baseline.params:"
-  echo "mkdir -p sealed && { [ -f sealed/key/sfr.key ] || sfr keygen --evaluation-only --out sealed/key; } && for f in logs/*.ulg; do sfr seal \"\$f\" --rules $rules --baseline baseline.params --key sealed/key/sfr.key --evaluation-only --out sealed; done"
+  quoted="'$(printf '%s' "$rules" | sed "s/'/'\\\\''/g")'"
+  echo "mkdir -p sealed && { [ -f sealed/key/sfr.key ] || sfr keygen --evaluation-only --out sealed/key; } && for f in logs/*.ulg; do sfr seal \"\$f\" --rules $quoted --baseline baseline.params --key sealed/key/sfr.key --evaluation-only --out sealed; done"
 fi
 
 printf '\nDEMO PASSED in %s s: every step gave the expected result.\n' "$(($(date +%s) - start))"

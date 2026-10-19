@@ -10,10 +10,13 @@
 # Usage: scripts/build_demo_image.sh <sfr-<version>-x86_64-unknown-linux-musl.tar.gz> <out-dir>
 # Prints the saved image path.
 set -euo pipefail
+caller="$PWD"
+# A relative path argument is relative to the directory the script was started in.
+abs() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller/$1" ;; esac; }
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 die() { echo "build_demo_image.sh: $*" >&2; exit 1; }
 [ $# -eq 2 ] || die "usage: $0 <x86_64 release tarball> <out-dir>"
-tarball="$1" out="$2"
+tarball="$(abs "$1")" out="$(abs "$2")"
 command -v docker > /dev/null || die "docker is required"
 name="$(basename "$tarball" .tar.gz)"
 [[ "$name" =~ ^sfr-(.+)-x86_64-unknown-linux-musl$ ]] || die "not an x86_64 release tarball: $tarball"

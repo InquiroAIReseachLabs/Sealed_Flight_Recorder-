@@ -15,7 +15,12 @@
 #   benchmark      benchmark job: the output of scripts/benchmark.sh (x86_64 only: no armv7
 #                  timing is published, SPEC B1.10 armv7)
 #
-# A block is required in README.md, between its markers, exactly when the receipt holds its lines.
+#   release-key    release/sfr-release.pub, the release public key, with its fingerprint; until
+#                  the founder generates it (scripts/release_sign.sh keygen), a line saying so
+#
+# The release-key block is always required in README.md. Each other block is required, between its
+# markers, exactly when the receipt holds its lines, and a marker of a block the receipt cannot
+# fill is an error, so no number between markers comes from anywhere else.
 #
 # Usage:
 #   scripts/regen_readme_numbers.sh                    rewrite README.md from the receipt
@@ -41,7 +46,7 @@ job_pattern() {
     code-quality) echo '^(perf|tests): ' ;;
     records) echo '^byte-identical records and reports, ' ;;
     demo) echo '^(DEMO PASSED in |demo: )' ;;
-    benchmark) echo '^((benchmark|hardware|note|gate|memory): |\| )' ;;
+    benchmark) echo '^((benchmark|hardware|note|gate|memory): |\|)' ;;
     *) die "unknown job $1 (code-quality, records, demo, benchmark)" ;;
   esac
 }
@@ -158,6 +163,25 @@ $(end benchmark)
 EOF
 }
 
+# The release-key block: the committed release public key and its fingerprint (SHA-256 of the
+# SubjectPublicKeyInfo DER, as sfr computes key fingerprints), or a line saying it is not generated.
+render_release_key() {
+  local key="$1" fp
+  begin release-key
+  if [ -f "$key" ]; then
+    fp="$(openssl pkey -pubin -in "$key" -outform DER | sha256sum | cut -d' ' -f1)" \
+      || die "$key is not a public key openssl reads"
+    echo "Release public key \`release/sfr-release.pub\`, fingerprint \`sha256:$fp\`:"
+    echo
+    echo '```'
+    cat "$key"
+    echo '```'
+  else
+    echo "Release public key: not generated yet. The founder generates the release key on an offline machine with \`scripts/release_sign.sh keygen <offline path>\`, which writes its public half to \`release/sfr-release.pub\`; \`scripts/regen_readme_numbers.sh\` then shows it here, and both are committed before the first release."
+  fi
+  end release-key
+}
+
 # The blocks the receipt holds lines for, in README order.
 blocks() {
   local r="$1"
@@ -179,22 +203,30 @@ splice() {
   ' "$1"
 }
 
-# regenerate <readme> <receipt> <out>: the README with every block the receipt holds rewritten.
+# regenerate <readme> <receipt> <release key> <out>: the README with the release-key block and
+# every block the receipt holds rewritten; fails on a marker of any other block.
 regenerate() {
-  local readme="$1" r="$2" out="$3" block
+  local readme="$1" r="$2" key="$3" out="$4" block rendered marker
   [ -f "$r" ] || die "no receipt $r"
   [[ "$(field "$r" run)" =~ ^[0-9]+$ ]] || die "$r has no run id"
   [[ "$(field "$r" commit)" =~ ^[0-9a-f]{40}$ ]] || die "$r has no commit"
-  cp "$readme" "$out"
-  for block in $(blocks "$r"); do
+  rendered="$(blocks "$r")"
+  while IFS= read -r marker; do
+    block="$(printf '%s\n' "$marker" | sed -E 's/^<!-- (BEGIN|END) ([a-z-]+).*$/\2/')"
+    [ "$block" = release-key ] || printf '%s\n' "$rendered" | grep -q -x -F -- "$block" \
+      || die "$readme holds a $block block, but the receipt $r has no lines for it"
+  done < <(grep -E '^<!-- (BEGIN|END) ' "$readme" || true)
+  render_release_key "$key" > "$work/block"
+  splice "$readme" release-key "$work/block" > "$out"
+  for block in $rendered; do
     "render_${block//-/_}" "$r" > "$work/block"
     splice "$out" "$block" "$work/block" > "$work/spliced"
     cp "$work/spliced" "$out"
   done
 }
 
-main() { # main <write|check> <readme> <receipt>
-  regenerate "$2" "$3" "$work/new"
+main() { # main <write|check> <readme> <receipt> [<release key>]
+  regenerate "$2" "$3" "${4:-$root/release/sfr-release.pub}" "$work/new"
   case "$1" in
     write) cp "$work/new" "$2" ;;
     check) diff -u "$2" "$work/new" || die "$2 differs from the numbers in $3; run scripts/regen_readme_numbers.sh" ;;
@@ -217,8 +249,10 @@ self_test() {
     "gate: x86_64 large_100mb seal median 0.700 s, under 2 s: PASS" "memory: large_100mb seal peak RSS 4000 KB" > "$t/bench.log"
   receipt "$t/receipt" 7 "$(printf 'a%.0s' {1..40})" code-quality="$t/cq.log" records="$t/records.log" \
     demo="$t/demo.log" benchmark="$t/bench.log"
-  { echo "# Title"; for b in verify-timing tests benchmark; do echo; begin "$b"; echo stale; end "$b"; done; echo; echo tail; } > "$t/README.md"
-  main write "$t/README.md" "$t/receipt"
+  # readme <file> <block>...: a README holding these blocks, each with a stale line.
+  readme() { local f="$1" b; shift; { echo "# Title"; for b in "$@"; do echo; begin "$b"; echo stale; end "$b"; done; echo; echo tail; } > "$f"; }
+  readme "$t/README.md" verify-timing tests benchmark release-key
+  main write "$t/README.md" "$t/receipt" "$t/no-such.pub"
   grep -q -F '| In-process verify | `sfr_core::verify` on the record bytes already in memory | 1.00 ms | 0.90 ms | 2.00 ms | 101 |' "$t/README.md" \
     || die "self-test: the in-process row is wrong"
   grep -q -F '| 3.00 ms | 2.50 ms | 4.00 ms | 101 | not gated, reported only |' "$t/README.md" || die "self-test: the end-to-end row is wrong"
@@ -227,21 +261,39 @@ self_test() {
   grep -q -F 'armv7 (QEMU) | byte-identical records and reports: 14 of 14 golden logs |' "$t/README.md" || die "self-test: the armv7 row is wrong"
   grep -q -F '| passed, wall time 2.50 s |' "$t/README.md" || die "self-test: the demo row is wrong"
   grep -q -x -F '| large_100mb | 100 |' "$t/README.md" || die "self-test: the benchmark table is missing"
+  grep -q -x -F '|---|---|' "$t/README.md" || die "self-test: the benchmark table has no separator row"
+  grep -q -F 'Release public key: not generated yet.' "$t/README.md" || die "self-test: the missing release key is not said"
   grep -q -x -F -- '- gate: x86_64 large_100mb seal median 0.700 s, under 2 s: PASS' "$t/README.md" || die "self-test: the gate line is missing"
   ! grep -q -x stale "$t/README.md" || die "self-test: an old block was kept"
   [ "$(head -1 "$t/README.md")" = "# Title" ] && [ "$(tail -1 "$t/README.md")" = "tail" ] || die "self-test: text outside the markers changed"
-  main check "$t/README.md" "$t/receipt" > /dev/null || die "self-test: check fails on a fresh write"
+  main check "$t/README.md" "$t/receipt" "$t/no-such.pub" > /dev/null || die "self-test: check fails on a fresh write"
   sed -i 's/1.00 ms/1.01 ms/' "$t/README.md"
-  if (main check "$t/README.md" "$t/receipt" > /dev/null 2>&1); then die "self-test: check passes on drift"; fi
-  main write "$t/README.md" "$t/receipt"
+  if (main check "$t/README.md" "$t/receipt" "$t/no-such.pub" > /dev/null 2>&1); then die "self-test: check passes on drift"; fi
+  main write "$t/README.md" "$t/receipt" "$t/no-such.pub"
   grep -v -F "$(begin benchmark)" "$t/README.md" > "$t/no-marker.md"
-  if (main check "$t/no-marker.md" "$t/receipt" > /dev/null 2>&1); then die "self-test: a missing marker is accepted"; fi
+  if (main check "$t/no-marker.md" "$t/receipt" "$t/no-such.pub" > /dev/null 2>&1); then die "self-test: a missing marker is accepted"; fi
+  # A block the receipt has no lines for: hand-written numbers between its markers fail.
+  receipt "$t/cq-receipt" 7 "$(printf 'a%.0s' {1..40})" code-quality="$t/cq.log" records="$t/records.log" demo="$t/demo.log"
+  readme "$t/orphan.md" verify-timing tests release-key
+  main write "$t/orphan.md" "$t/cq-receipt" "$t/no-such.pub"
+  printf '%s\n' "$(begin benchmark)" '| large_100mb | 9 |' "$(end benchmark)" >> "$t/orphan.md"
+  if (main check "$t/orphan.md" "$t/cq-receipt" "$t/no-such.pub" > /dev/null 2>&1); then die "self-test: a block the receipt cannot fill is accepted"; fi
+  # The release key, with its fingerprint, once release/sfr-release.pub exists.
+  openssl genpkey -algorithm ed25519 -out "$t/k.key" 2> /dev/null
+  openssl pkey -in "$t/k.key" -pubout -out "$t/k.pub"
+  main write "$t/README.md" "$t/receipt" "$t/k.pub"
+  grep -q -F "fingerprint \`sha256:$(openssl pkey -pubin -in "$t/k.pub" -outform DER | sha256sum | cut -d' ' -f1)\`" "$t/README.md" \
+    || die "self-test: the release key fingerprint is missing"
+  grep -q -x -F -- "$(sed -n 2p "$t/k.pub")" "$t/README.md" || die "self-test: the release key is missing"
+  if (main check "$t/README.md" "$t/receipt" "$t/no-such.pub" > /dev/null 2>&1); then die "self-test: a removed release key passes"; fi
+  readme "$t/bench-only.md" benchmark release-key
   sed -i 's/binary x86_64, machine x86_64/binary armv7, machine armv7l/' "$t/bench.log"
   receipt "$t/armv7-receipt" 7 "$(printf 'a%.0s' {1..40})" benchmark="$t/bench.log"
-  if (main write "$t/README.md" "$t/armv7-receipt" > /dev/null 2>&1); then die "self-test: an armv7 timing is published"; fi
+  if (main write "$t/bench-only.md" "$t/armv7-receipt" "$t/no-such.pub" > /dev/null 2>&1); then die "self-test: an armv7 timing is published"; fi
+  readme "$t/cq-only.md" verify-timing tests release-key
   sed -i 's/0 failed/1 failed/' "$t/cq.log"
-  receipt "$t/failed-receipt" 7 "$(printf 'a%.0s' {1..40})" code-quality="$t/cq.log"
-  if (main write "$t/README.md" "$t/failed-receipt" > /dev/null 2>&1); then die "self-test: a failed test run is published"; fi
+  receipt "$t/failed-receipt" 7 "$(printf 'a%.0s' {1..40})" code-quality="$t/cq.log" records="$t/records.log" demo="$t/demo.log"
+  if (main write "$t/cq-only.md" "$t/failed-receipt" "$t/no-such.pub" > /dev/null 2>&1); then die "self-test: a failed test run is published"; fi
   if (receipt "$t/r" 7 "$(printf 'a%.0s' {1..40})" demo="$t/cq.log" > /dev/null 2>&1); then die "self-test: a log without the job's lines is accepted"; fi
   echo "regen_readme_numbers.sh self-test: ok"
 }

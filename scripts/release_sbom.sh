@@ -4,17 +4,22 @@
 #
 # Writes <out-dir>/sfr-<version>-<target>.cdx.json (CycloneDX 1.5 JSON) for
 # x86_64-unknown-linux-musl, aarch64-unknown-linux-musl and armv7-unknown-linux-musleabihf: the
-# crates linked into sfr for that target, each with its version, license, and the SHA-256 that
-# Cargo.lock holds; build-time crates are listed with scope "excluded". Then checks each file
+# resolved dependency graph of sfr for that target (cargo metadata, so a superset of the crates
+# linked: optional dependencies of toml appear too), each crate with its version, license, and the
+# SHA-256 that Cargo.lock holds; build-time crates are listed with scope "excluded", and the
+# workspace crate sfr-core has neither a license nor a hash (no license is set). Then checks each file
 # names its target and lists sha2, ed25519-dalek and blake3. SOURCE_DATE_EPOCH (the commit time)
 # fixes the timestamp.
 #
 # Usage: scripts/release_sbom.sh <out-dir>     Prints the SBOM paths.
 set -euo pipefail
+caller="$PWD"
+# A relative path argument is relative to the directory the script was started in.
+abs() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller/$1" ;; esac; }
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 die() { echo "release_sbom.sh: $*" >&2; exit 1; }
 [ $# -eq 1 ] || { echo "usage: $0 <out-dir>" >&2; exit 2; }
-out="$1"
+out="$(abs "$1")"
 command -v cargo-cyclonedx > /dev/null || die "cargo-cyclonedx is required: cargo install cargo-cyclonedx --version 0.5.9 --locked"
 command -v jq > /dev/null || die "jq is required"
 version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"

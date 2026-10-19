@@ -6,7 +6,8 @@
 #   scripts/release_sign.sh keygen <private-key-file>
 #       Once, offline: a new Ed25519 release key. Writes the private key (PKCS#8 PEM, mode 0600)
 #       to <private-key-file>, which must not exist and must stay off the repository, and its
-#       public half to release/sfr-release.pub, which is committed and shown in the README.
+#       public half to release/sfr-release.pub, which is committed and shown in the README
+#       (scripts/regen_readme_numbers.sh writes it there with its fingerprint).
 #   scripts/release_sign.sh sign <SHA256SUMS> <private-key-file> [--pubkey <public-key>]
 #       Writes <SHA256SUMS>.sig (a raw 64-byte Ed25519 signature), refusing a private key whose
 #       public half is not the release key (default release/sfr-release.pub), then checks the
@@ -20,6 +21,9 @@
 #       SHA256SUMS, a changed signature, and a different key each fail; sign refuses a key that
 #       is not the release key.
 set -euo pipefail
+caller="$PWD"
+# A relative path argument is relative to the directory the script was started in.
+abs() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller/$1" ;; esac; }
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 release_pub=release/sfr-release.pub
 die() { echo "release_sign.sh: $*" >&2; exit 1; }
@@ -37,6 +41,7 @@ keygen() { # keygen <private-key-file> <public-key-file>
   public_of "$1" > "$2"
   echo "private key $1 (mode 0600; keep it offline, never commit it)"
   echo "public key  $2"
+  echo "next: scripts/regen_readme_numbers.sh shows the key in README.md; commit both files"
 }
 
 verify() { # verify <SHA256SUMS> <public-key-file>
@@ -82,15 +87,15 @@ self_test() {
 
 # pubkey_arg <args...>: the --pubkey value, else the committed release key.
 pubkey_arg() {
-  if [ "${1:-}" = --pubkey ]; then [ -n "${2:-}" ] || die "--pubkey needs a file"; echo "$2"; else echo "$release_pub"; fi
+  if [ "${1:-}" = --pubkey ]; then [ -n "${2:-}" ] || die "--pubkey needs a file"; abs "$2"; else echo "$release_pub"; fi
 }
 
 case "${1:-}" in
-  keygen) [ $# -eq 2 ] || die "usage: $0 keygen <private-key-file>"; keygen "$2" "$release_pub" ;;
+  keygen) [ $# -eq 2 ] || die "usage: $0 keygen <private-key-file>"; keygen "$(abs "$2")" "$release_pub" ;;
   sign) [ $# -eq 3 ] || [ $# -eq 5 ] || die "usage: $0 sign <SHA256SUMS> <private-key-file> [--pubkey <file>]"
-    sign "$2" "$3" "$(pubkey_arg "${@:4}")" ;;
+    sign "$(abs "$2")" "$(abs "$3")" "$(pubkey_arg "${@:4}")" ;;
   verify) [ $# -eq 2 ] || [ $# -eq 4 ] || die "usage: $0 verify <SHA256SUMS> [--pubkey <file>]"
-    verify "$2" "$(pubkey_arg "${@:3}")" ;;
+    verify "$(abs "$2")" "$(pubkey_arg "${@:3}")" ;;
   --self-test) self_test ;;
   *) die "usage: $0 keygen <private-key-file> | sign <SHA256SUMS> <private-key-file> [--pubkey <file>] | verify <SHA256SUMS> [--pubkey <file>] | --self-test" ;;
 esac

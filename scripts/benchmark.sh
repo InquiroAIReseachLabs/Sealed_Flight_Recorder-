@@ -4,8 +4,9 @@
 #
 # Runs from the repository or from the benchmark kit (scripts/build_benchmark_kit.sh) and builds
 # nothing: it needs bash 5 or later, GNU time at /usr/bin/time (the Debian and Ubuntu package
-# "time") for the maximum resident set size, and head, tail, sha256sum, sort, awk, mktemp. No
-# compiler, no Python. docs/BENCHMARK.md says how to run it on another machine.
+# "time") for the maximum resident set size, and the coreutils, awk, sed, find and getconf it
+# checks for at start. No compiler, no Python. A missing tool stops it with exit 2.
+# docs/BENCHMARK.md says how to run it on another machine.
 #
 # For every golden log, and for logs of 10, 50 and 100 MB built from the golden VTOL flight, it
 # seals RUNS times with an evaluation key and reports the median seal wall time, the median wall
@@ -49,7 +50,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 [ "${BASH_VERSINFO[0]}" -ge 5 ] || die "bash 5 or later is required (EPOCHREALTIME), this is $BASH_VERSION"
 /usr/bin/time -f %M true > /dev/null 2>&1 || die "GNU time at /usr/bin/time is required (package \"time\")"
-for tool in head tail sha256sum sort awk mktemp wc; do
+for tool in awk cat cp cut find getconf head mkdir mktemp od sed sha256sum sort tail tr uname wc; do
   command -v "$tool" > /dev/null || die "$tool is required"
 done
 version="$("$sfr" --version 2> /dev/null | head -1)" || die "cannot run $sfr"
@@ -138,7 +139,7 @@ case "$(od -A n -t u1 -j 18 -N 2 "$sfr" 2> /dev/null | tr -s ' ' | sed 's/^ //')
   "62 0") arch=x86_64 ;;
   "183 0") arch=aarch64 ;;
   "40 0") arch=armv7 ;;
-  *) arch=unknown ;;
+  *) die "$sfr is not an x86_64, aarch64 or armv7 ELF executable" ;;
 esac
 native=no
 case "$arch:$machine" in
@@ -153,7 +154,7 @@ status=0
 gates=()
 while read -r name log rules baseline; do
   seals=() verifies=() peak=0
-  for i in $(seq 1 "$runs"); do
+  for ((i = 1; i <= runs; i++)); do
     out="$work/out/$name/$i"
     mkdir -p "$out"
     rc=0 start="$(now_us)"
@@ -167,12 +168,14 @@ while read -r name log rules baseline; do
     [ -n "$record" ] || { cat "$out.err" >&2; die "$name: no record written"; }
     seals+=("$((end - start))")
     rss="$(tail -1 "$out.time")"
+    [[ "$rss" =~ ^[1-9][0-9]*$ ]] || die "$name: GNU time gave no maximum resident set size: $rss"
     [ "$rss" -gt "$peak" ] && peak="$rss"
     start="$(now_us)"
     "$sfr" verify "$record" --pubkey "$work/key/sfr.pub" > /dev/null || die "$name: standalone verify failed"
     end="$(now_us)"
     verifies+=("$((end - start))")
   done
+  [ "${#seals[@]}" -eq "$runs" ] && [ "${#verifies[@]}" -eq "$runs" ] || die "$name: not every run was timed"
   seal_s="$(printf '%s\n' "${seals[@]}" | median | awk '{ printf "%.3f", $1 / 1e6 }')"
   verify_ms="$(printf '%s\n' "${verifies[@]}" | median | awk '{ printf "%.2f", $1 / 1e3 }')"
   echo "| $name | $(wc -c < "$log") | $seal_s | $verify_ms | $peak |"

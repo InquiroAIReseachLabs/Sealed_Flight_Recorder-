@@ -14,10 +14,13 @@
 #
 # Usage: scripts/release_assemble.sh <dir>     Writes <dir>/SHA256SUMS and prints it.
 set -euo pipefail
+caller="$PWD"
+# A relative path argument is relative to the directory the script was started in.
+abs() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller/$1" ;; esac; }
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 die() { echo "release_assemble.sh: $*" >&2; exit 1; }
 [ $# -eq 1 ] || { echo "usage: $0 <dir>" >&2; exit 2; }
-dir="$1"
+dir="$(abs "$1")"
 version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
 [ -n "$version" ] || die "no version in Cargo.toml"
 expected=()

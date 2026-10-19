@@ -13,20 +13,25 @@
 #   sfr-<version>-<target>/examples/        rules files and the example records and reports
 #   sfr-<version>-<target>/BUILDINFO        version, target, commit, toolchain, binary SHA-256
 #
-# The build does not depend on where it runs: --remap-path-prefix replaces the checkout, the
-# Cargo home, and the target directory in the binary; SFR_BUILD_COMMIT is the checkout's commit;
-# the tarball has sorted names, the commit time as every mtime, owner 0, and no gzip timestamp.
+# The build is meant not to depend on where it runs (scripts/check_reproducible.sh compares two
+# builds on one machine): --remap-path-prefix replaces the checkout, the Cargo home, and the target
+# directory in the binary; SFR_BUILD_COMMIT is the checkout's commit;
+# the tarball has sorted names, modes 755 and 644 whatever the umask, the commit time as every
+# mtime, owner 0, and no gzip timestamp.
 # scripts/check_reproducible.sh builds a target twice from clean and compares.
 #
 # Usage: scripts/build_release.sh <target> <out-dir>
 # Prints the tarball path. CARGO_TARGET_DIR, when set, is the build directory.
 set -euo pipefail
+caller="$PWD"
+# A relative path argument is relative to the directory the script was started in.
+abs() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller/$1" ;; esac; }
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 root="$(pwd -P)"
 
 die() { echo "build_release.sh: $*" >&2; exit 1; }
 [ $# -eq 2 ] || die "usage: $0 <target> <out-dir>"
-target="$1" out="$2"
+target="$1" out="$(abs "$2")"
 case "$target" in
   x86_64-unknown-linux-musl | aarch64-unknown-linux-musl | armv7-unknown-linux-musleabihf) ;;
   *) die "unknown target $target (x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, armv7-unknown-linux-musleabihf)" ;;
@@ -93,6 +98,6 @@ install -m 0644 examples/reports/* "$pkg/examples/reports/"
 } > "$pkg/BUILDINFO"
 chmod 0644 "$pkg/BUILDINFO"
 tarball="$out/$name.tar.gz"
-tar -C "$stage" --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \
+tar -C "$stage" --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX' \
   --format=gnu -cf - "$name" | gzip -n -9 > "$tarball"
 echo "$tarball"

@@ -13,13 +13,17 @@
 #                                                           the golden rules files
 #
 # Run it with the sfr of a release tarball: docs/BENCHMARK.md. Same tarball conventions as
-# scripts/build_release.sh: sorted names, the commit time as every mtime, owner 0, no gzip time.
+# scripts/build_release.sh: sorted names, modes 755 and 644, the commit time as every mtime, owner
+# 0, no gzip time.
 #
 # Usage: scripts/build_benchmark_kit.sh <out-dir>    Prints the tarball path.
 set -euo pipefail
+caller="$PWD"
+# A relative path argument is relative to the directory the script was started in.
+abs() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller/$1" ;; esac; }
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 [ $# -eq 1 ] || { echo "usage: $0 <out-dir>" >&2; exit 2; }
-out="$1"
+out="$(abs "$1")"
 version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
 [ -n "$version" ] || { echo "build_benchmark_kit.sh: no version in Cargo.toml" >&2; exit 1; }
 epoch="$(git log -1 --format=%ct HEAD)"
@@ -54,6 +58,6 @@ while read -r log; do
     || { echo "build_benchmark_kit.sh: $log has no notice" >&2; exit 1; }
 done < <(find "$kit/testdata" -name '*.ulg')
 tarball="$out/$name.tar.gz"
-tar -C "$stage" --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \
+tar -C "$stage" --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX' \
   --format=gnu -cf - "$name" | gzip -n -6 > "$tarball"
 echo "$tarball"

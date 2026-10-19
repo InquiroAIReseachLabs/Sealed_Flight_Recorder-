@@ -20,7 +20,7 @@ Each build holds, for the version in `Cargo.toml`:
 | File | Contents |
 |---|---|
 | `sfr-<version>-<target>.tar.gz` | the static `sfr` for `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, or `armv7-unknown-linux-musleabihf`, this README, `examples/`, and `BUILDINFO` |
-| `sfr-<version>-<target>.cdx.json` | the CycloneDX SBOM of that `sfr`: every crate it links, with version, license, and SHA-256 |
+| `sfr-<version>-<target>.cdx.json` | the CycloneDX SBOM of that `sfr`: its resolved dependency graph for the target from `Cargo.lock` (a superset of the crates it links; build-time crates marked `excluded`), with version, license, and SHA-256 |
 | `sfr-<version>-benchmark.tar.gz` | `scripts/benchmark.sh` and the golden logs it reads, for any architecture ([docs/BENCHMARK.md](docs/BENCHMARK.md)) |
 | `sfr-<version>-demo-image.tar.gz` | the demo image above |
 | `SHA256SUMS` | the SHA-256 of every file above |
@@ -28,7 +28,7 @@ Each build holds, for the version in `Cargo.toml`:
 
 CI builds every file but the signature on each commit and keeps them as the `sfr-release-unsigned` artifact of the run. It publishes nothing; [docs/RELEASE.md](docs/RELEASE.md) says how a release is signed and made.
 
-Check a download with OpenSSL 3 and coreutils alone, in the directory that holds the files and `sfr-release.pub`:
+Check a download with OpenSSL 3 and coreutils alone, in the directory that holds the files and `sfr-release.pub`, the release public key below (`release/sfr-release.pub` in this repository at the release's commit):
 
 ```
 openssl pkeyutl -verify -pubin -inkey sfr-release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
@@ -37,7 +37,9 @@ sha256sum -c --ignore-missing SHA256SUMS
 
 The first prints `Signature Verified Successfully` only for a good signature by the release key.
 
-Release public key: not generated yet. The founder generates the release key on an offline machine with `scripts/release_sign.sh keygen <offline path>`, which writes its public half to `release/sfr-release.pub`; that file is committed and shown here before the first release.
+<!-- BEGIN release-key: written by scripts/regen_readme_numbers.sh, do not edit by hand -->
+Release public key: not generated yet. The founder generates the release key on an offline machine with `scripts/release_sign.sh keygen <offline path>`, which writes its public half to `release/sfr-release.pub`; `scripts/regen_readme_numbers.sh` then shows it here, and both are committed before the first release.
+<!-- END release-key -->
 
 ## The record and its report
 
