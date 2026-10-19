@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod report_facts;
+
 const RULES: &str = "examples/rules.default.toml";
 const SEAL_TIME: &str = "2026-10-18T15:00:00Z";
 
@@ -267,6 +269,22 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
             std::fs::read(&again).unwrap(),
             "{log}: two seals with the same key and --seal-time differ"
         );
+        // The report beside each record (SPEC B1.8): written by seal, byte-identical across the
+        // two seals, and exactly what the record renders to.
+        let (report, report_again) = (format!("{record}.md"), format!("{again}.md"));
+        let md = std::fs::read(&report).unwrap_or_else(|e| panic!("{report}: {e}"));
+        assert_eq!(
+            md,
+            std::fs::read(&report_again).unwrap(),
+            "{log}: two seals give different reports"
+        );
+        let parsed = sfr_core::json::parse(&std::fs::read(&record).unwrap()).unwrap();
+        assert_eq!(
+            String::from_utf8(md.clone()).unwrap(),
+            sfr_core::report::render(&parsed).unwrap(),
+            "{log}: the report is not the record's rendering"
+        );
+        report_facts::check(&parsed, &String::from_utf8(md).unwrap());
         let o = sfr(&["verify", &record, "--pubkey", &public, "--ulog", log]);
         assert_eq!(o.status.code(), Some(0), "{log}: {}", text(&o));
         let t = text(&o);
@@ -276,6 +294,212 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
         );
         let o = sfr(&["verify", &record, "--pubkey", &public]);
         assert_eq!(o.status.code(), Some(0), "{log}: {}", text(&o));
+    }
+}
+
+/// The committed examples (examples/reports/, made by scripts/make_example_reports.sh): each
+/// report is what its record renders to, every fact in it comes from the record, and each record
+/// verifies against its log with the committed public key.
+#[test]
+fn the_example_reports_render_from_their_records_and_verify() {
+    for name in ["vtol_transition", "failsafe_gps_loss"] {
+        let record = format!("examples/reports/{name}.sfr");
+        let parsed = sfr_core::json::parse(&std::fs::read(root().join(&record)).unwrap()).unwrap();
+        let md = std::fs::read_to_string(root().join(format!("{record}.md"))).unwrap();
+        assert_eq!(
+            md,
+            sfr_core::report::render(&parsed).unwrap(),
+            "{record}: the committed report is not the record's rendering; run scripts/make_example_reports.sh"
+        );
+        report_facts::check(&parsed, &md);
+        let log = format!("testdata/sitl/v1.17.0/{name}.ulg");
+        let o = sfr(&[
+            "verify",
+            &record,
+            "--pubkey",
+            "examples/reports/sfr.pub",
+            "--ulog",
+            &log,
+        ]);
+        assert_eq!(o.status.code(), Some(0), "{record}: {}", text(&o));
+    }
+}
+
+/// A baseline whose VT_B_TRANS_DUR differs from the flown value: R3 fails, and the report shows
+/// the difference in the parameter differences table and marks it DIFF under transition tuning.
+#[test]
+fn a_report_shows_r3_differences_and_the_facts_check_catches_any_stray_line() {
+    let dir = scratch();
+    let (key, _) = keygen(&dir.join("k"));
+    let log = "testdata/sitl/v1.17.0/vtol_transition.ulg";
+    let original =
+        std::fs::read_to_string(root().join("testdata/baselines/v1.17.0_vtol_transition.params"))
+            .unwrap();
+    let changed = original.replace("\tVT_B_TRANS_DUR\t10.0\t", "\tVT_B_TRANS_DUR\t12.0\t");
+    assert_ne!(changed, original, "the baseline holds VT_B_TRANS_DUR 10.0");
+    let baseline = dir.join("changed.params");
+    std::fs::write(&baseline, changed).unwrap();
+    let (record, code) = seal(log, baseline.to_str().unwrap(), &key, &dir.join("out"));
+    assert_eq!(code, 1, "R3 fails, the record is still written, exit 1");
+    let parsed = sfr_core::json::parse(&std::fs::read(&record).unwrap()).unwrap();
+    let md = std::fs::read_to_string(format!("{record}.md")).unwrap();
+    report_facts::check(&parsed, &md);
+    for want in [
+        "### R3 FAIL",
+        "| Parameter | Baseline | Flown |",
+        "| VT\\_B\\_TRANS\\_DUR | f32\\:12 | f32\\:10 |",
+        "| VT\\_B\\_TRANS\\_DUR | f32\\:12 | f32\\:10 | DIFF |",
+    ] {
+        assert!(md.lines().any(|l| l == want), "line {want:?} in\n{md}");
+    }
+    // The check is not vacuous: one added line, one changed value, or one dropped line fails it.
+    let lines: Vec<&str> = md.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with("- SHA-256: "))
+        .unwrap();
+    let mut added = lines.clone();
+    added.insert(at + 1, "- Pilot: not in the record");
+    let mut altered = lines.clone();
+    let wrong = lines[at].replacen('`', "`0", 1);
+    altered[at] = &wrong;
+    let mut dropped = lines.clone();
+    dropped.remove(at);
+    for (what, bad) in [("added", added), ("altered", altered), ("dropped", dropped)] {
+        let bad = format!("{}\n", bad.join("\n"));
+        let caught = std::panic::catch_unwind(|| report_facts::check(&parsed, &bad)).is_err();
+        assert!(caught, "the facts check misses a line {what}");
+    }
+}
+
+/// Log text that Markdown, HTML, or a shell would read as something else, and file names
+/// that a shell would split or read as an option: the report shows each value as its own text
+/// (the facts check requires every ASCII punctuation character escaped) and its verify command,
+/// run as written by bash in the directory that holds the files, verifies the record.
+#[test]
+fn hostile_log_text_and_file_names_give_a_literal_report_and_a_working_verify_command() {
+    let dir = scratch();
+    let (key, public) = keygen(&dir.join("k"));
+    let mut log = std::fs::read(root().join("testdata/synthetic/custom_detection.ulg")).unwrap();
+    let texts = [
+        "abc|def &lt;b&gt;x&lt;/b&gt; &amp; ~~gone~~ $$x$$ :x: *em* _u_ [l](http://x) `t` \\ #1",
+        "<script>alert(1)</script> - 1. + 2) > q\tafter tab",
+    ];
+    for (i, t) in texts.iter().enumerate() {
+        // A ULog logging message ('L'): level '4' (warning), timestamp, text.
+        let mut payload = vec![b'4'];
+        payload.extend_from_slice(&(1_000_000u64 + i as u64).to_le_bytes());
+        payload.extend_from_slice(t.as_bytes());
+        log.extend_from_slice(&u16::try_from(payload.len()).unwrap().to_le_bytes());
+        log.push(b'L');
+        log.extend_from_slice(&payload);
+    }
+    for name in ["-x.ulg", "--ulog", "tab\there 'q' $(x).ulg"] {
+        let case = dir.join(format!("case{}", name.len()));
+        std::fs::create_dir_all(&case).unwrap();
+        let log_path = case.join(name);
+        std::fs::write(&log_path, &log).unwrap();
+        let (record, _) = seal_with(
+            log_path.to_str().unwrap(),
+            &rules_for("synthetic_custom_detection"),
+            "testdata/baselines/synthetic_custom_detection.params",
+            &key,
+            &case,
+        );
+        let parsed = sfr_core::json::parse(&std::fs::read(&record).unwrap()).unwrap();
+        let md = std::fs::read_to_string(format!("{record}.md")).unwrap();
+        report_facts::check(&parsed, &md);
+        for t in texts {
+            assert!(
+                md.contains(
+                    &t.replace('\t', " ")
+                        .chars()
+                        .fold(String::new(), |mut e, c| {
+                            if c.is_ascii_punctuation() {
+                                e.push('\\');
+                            }
+                            e.push(c);
+                            e
+                        })
+                ),
+                "{name}: the log text, escaped, in\n{md}"
+            );
+        }
+        std::fs::copy(&public, case.join("sfr.pub")).unwrap();
+        let command = md
+            .lines()
+            .find(|l| l.starts_with("sfr verify "))
+            .expect("verify command");
+        let bin = report_facts::shell_arg(env!("CARGO_BIN_EXE_sfr"));
+        let o = Command::new("bash")
+            .arg("-c")
+            .arg(format!("{bin} {}", &command["sfr ".len()..]))
+            .current_dir(&case)
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(0), "{name}: {command}: {}", text(&o));
+        assert!(
+            text(&o).contains("VERIFIED (record and log)"),
+            "{}",
+            text(&o)
+        );
+    }
+}
+
+/// Seal writes a record and its report together or neither: an existing report, or a symbolic
+/// link where the report would go (even a dangling one), stops it before it writes anything.
+#[test]
+fn seal_refuses_an_existing_report_or_a_link_in_its_place_and_writes_nothing() {
+    let dir = scratch();
+    let (key, _) = keygen(&dir.join("k"));
+    let log = "testdata/synthetic/custom_detection.ulg";
+    let seal_into = |out: &Path| {
+        sfr(&[
+            "seal",
+            log,
+            "--rules",
+            &rules_for("synthetic_custom_detection"),
+            "--baseline",
+            "testdata/baselines/synthetic_custom_detection.params",
+            "--key",
+            &key,
+            "--evaluation-only",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+    };
+    let only_report = dir.join("only_report");
+    std::fs::create_dir_all(&only_report).unwrap();
+    std::fs::write(only_report.join("custom_detection.sfr.md"), "kept\n").unwrap();
+    let o = seal_into(&only_report);
+    assert_eq!(o.status.code(), Some(4), "{}", text(&o));
+    assert!(text(&o).contains("never overwrites"), "{}", text(&o));
+    assert!(!only_report.join("custom_detection.sfr").exists());
+    assert_eq!(
+        std::fs::read_to_string(only_report.join("custom_detection.sfr.md")).unwrap(),
+        "kept\n"
+    );
+    #[cfg(unix)]
+    {
+        let link = dir.join("link");
+        std::fs::create_dir_all(&link).unwrap();
+        std::os::unix::fs::symlink(
+            dir.join("no_such_dir/target"),
+            link.join("custom_detection.sfr.md"),
+        )
+        .unwrap();
+        let o = seal_into(&link);
+        assert_eq!(o.status.code(), Some(4), "{}", text(&o));
+        assert!(
+            !link.join("custom_detection.sfr").exists(),
+            "no record left"
+        );
+        // With the link gone, the same seal writes both files.
+        std::fs::remove_file(link.join("custom_detection.sfr.md")).unwrap();
+        let o = seal_into(&link);
+        assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+        assert!(link.join("custom_detection.sfr").exists());
+        assert!(link.join("custom_detection.sfr.md").exists());
     }
 }
 

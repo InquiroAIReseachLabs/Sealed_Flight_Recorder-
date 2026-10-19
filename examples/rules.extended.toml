@@ -60,10 +60,11 @@ ids = [
 # R7, authorized command sources: every COMMAND event (or, with category, every command of
 # that category) must come from one of these MAVLink system and component ids. Off by default:
 # only the operator knows their own ids. Source ids are what the log recorded; MAVLink source
-# ids are self-reported unless MAVLink message signing is enabled on the link. PX4 v1.17 logs
-# start with a DO_GRIPPER (211, PAYLOAD) that PX4 itself publishes with arbitrary source ids
-# (docs/DIAGNOSTIC.md item 12.3), so with category "PAYLOAD" or no category R7 reports it on
-# every v1.17 flight; with category "GENERAL" it is not checked.
+# ids are self-reported unless MAVLink message signing is enabled on the link. PX4 v1.17 builds
+# that include payload_deliverer (SITL among them) start each log with a DO_GRIPPER (211,
+# PAYLOAD) that PX4 itself publishes with arbitrary source ids (docs/DIAGNOSTIC.md item 12.3),
+# so with category "PAYLOAD" or no category R7 reports it on those flights; with category
+# "GENERAL" it is not checked.
 # [authorized_sources]
 # category = "PAYLOAD"
 # sources = [

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# check_same_records.sh: two sfr builds seal byte-identical records (SPEC B1.10 Crypto).
+# check_same_records.sh: two sfr builds seal byte-identical records and reports (SPEC B1.10
+# Crypto and Deterministic).
 #
 # Seals every golden log (scripts/testdata/regenerate.sh list) with each build, using one
 # evaluation key, the log's golden rules (testdata/rules/<name>.toml, else the default rules),
-# its golden baseline, and one --seal-time, and
-# compares the records byte for byte. CI runs it with the x86_64 build and the armv7 build
-# (under QEMU) to show that a record does not depend on where it is sealed.
+# its golden baseline, and one --seal-time, and compares the records and their reports
+# (<name>.sfr.md) byte for byte. CI runs it with the x86_64 build and the armv7 build (under
+# QEMU) to show that a record and its report do not depend on where they are sealed.
 #
 # Usage: scripts/check_same_records.sh <sfr-a> <sfr-b>
 set -euo pipefail
@@ -34,12 +35,12 @@ while read -r name log; do
     fi
   done
   ra="$(find "$work/a/$name" -name '*.sfr')" rb="$(find "$work/b/$name" -name '*.sfr')"
-  if [ -n "$ra" ] && [ -n "$rb" ] && cmp -s "$ra" "$rb"; then
+  if [ -n "$ra" ] && [ -n "$rb" ] && cmp -s "$ra" "$rb" && cmp -s "$ra.md" "$rb.md"; then
     same=$((same + 1))
   else
-    echo "  $name: the records differ or are missing"; status=1
+    echo "  $name: the records or their reports differ or are missing"; status=1
   fi
 done < <(scripts/testdata/regenerate.sh list)
-echo "byte-identical records: $same of $total golden logs"
+echo "byte-identical records and reports: $same of $total golden logs"
 [ "$total" -gt 0 ] || status=1
 exit $status
