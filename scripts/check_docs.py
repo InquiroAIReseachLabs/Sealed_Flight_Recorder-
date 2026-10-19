@@ -9,6 +9,10 @@ Every public doc is held to four rules:
                            exit 0. Blocks of one doc run in order, so a later block may use files
                            an earlier one wrote. A doc runs with `try/` removed first, and `try/`
                            is removed again at the end.
+       ```sh doc-release   a step of the download path of the README quickstart. It needs a
+                           published release, so the docs test only syntax-checks it (the
+                           paragraph above must say "post-release check"); the post-release
+                           workflow runs it with --release, in an empty directory.
        ```text doc-output  the exact stdout and stderr of the doc-test block above it (prose may
                            sit between them; another fenced block may not).
        ```sh doc-syntax    a command that cannot run in CI (an install, a release step, a unit
@@ -36,6 +40,9 @@ Usage:
   scripts/check_docs.py              run every rule (commands need target/ and network for cargo)
   scripts/check_docs.py --static     rules 2 to 4 and the block labels and syntax, nothing run
   scripts/check_docs.py --update     run the commands and rewrite each doc-output block
+  scripts/check_docs.py --release <dir>   run the doc-release blocks of README.md, in order, with
+                                     <dir> (empty, created if missing) as the working directory;
+                                     SFR_VERSION and SFR_TARGET select the release and the target
   ... --doc <doc>...                 any of the above for these docs only
   scripts/check_docs.py --self-test
 """
@@ -146,11 +153,18 @@ def check_labels(doc, blocks, errors):
             errors.append(f"{b.where()}: a fenced block must name its language (sh doc-test, text, toml, ...)")
             continue
         if b.lang in SHELLS:
-            kinds = b.tags & {"doc-test", "doc-syntax"}
+            kinds = b.tags & {"doc-test", "doc-syntax", "doc-release"}
             if len(kinds) != 1:
-                errors.append(f"{b.where()}: a {b.lang} block must say exactly one of doc-test or doc-syntax")
+                errors.append(f"{b.where()}: a {b.lang} block must say exactly one of doc-test, doc-syntax or doc-release")
                 continue
-            if "doc-syntax" in kinds:
+            if "doc-release" in kinds:
+                if "post-release check" not in b.prose_before.lower():
+                    errors.append(f"{b.where()}: the paragraph above a doc-release block must say that the \"post-release check\" runs it")
+                r = subprocess.run(["bash", "-n"], input=b.text, capture_output=True, text=True)
+                if r.returncode != 0:
+                    errors.append(f"{b.where()}: shell syntax error: {r.stderr.strip()}")
+                last_test = None
+            elif "doc-syntax" in kinds:
                 if "not run in ci" not in b.prose_before.lower():
                     errors.append(f"{b.where()}: the paragraph above a doc-syntax block must say \"not run in CI\" and why")
                 r = subprocess.run(["bash", "-n"], input=b.text, capture_output=True, text=True)
@@ -169,8 +183,8 @@ def check_labels(doc, blocks, errors):
                 last_test.output = b
             last_test = None
             continue
-        if b.tags & {"doc-test", "doc-syntax"}:
-            errors.append(f"{b.where()}: doc-test and doc-syntax are for shell blocks only")
+        if b.tags & {"doc-test", "doc-syntax", "doc-release"}:
+            errors.append(f"{b.where()}: doc-test, doc-syntax and doc-release are for shell blocks only")
         last_test = None
 
 
@@ -358,6 +372,33 @@ def run_doc(root, doc, blocks, errors, update):
     return new_outputs
 
 
+def run_release(root, workdir):
+    """Runs the doc-release blocks of README.md in order in workdir; returns a list of errors."""
+    errors = []
+    path = os.path.join(root, "README.md")
+    blocks, _ = parse("README.md", open(path, encoding="utf-8").read())
+    steps = [b for b in blocks if b.lang in SHELLS and "doc-release" in b.tags]
+    if not steps:
+        return ["README.md has no doc-release block: nothing to run"]
+    os.makedirs(workdir, exist_ok=True)
+    if os.listdir(workdir):
+        return [f"{workdir} is not empty: the quickstart must run in a clean directory"]
+    # One shell for all the blocks, in order, as a reader's terminal is: a variable set in one
+    # block is there in the next.
+    script = "".join(f"echo 'BLOCK {b.where()}'\n{b.text}" for b in steps)
+    r = subprocess.run(["bash", "-euo", "pipefail", "-c", script], cwd=workdir, env=dict(os.environ),
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=3600)
+    out = r.stdout.decode("utf-8", "replace")
+    print(out, end="" if out.endswith("\n") or not out else "\n")
+    if r.returncode != 0:
+        last = [l for l in out.splitlines() if l.startswith("BLOCK ")]
+        errors.append(f"{last[-1][6:] if last else 'README.md'}: the doc-release steps exited {r.returncode}")
+        return errors
+    for b in steps:
+        print(f"PASS: {b.where()} ran")
+    return errors
+
+
 def rewrite_outputs(root, doc, new_outputs):
     path = os.path.join(root, doc)
     lines = open(path, encoding="utf-8").read().split("\n")
@@ -458,6 +499,32 @@ def self_test():
                                                          .replace("| a | b |", "From `scripts/count.sh`:\n\n| a | b |"))
         check(tmp, run=True, update=True)
         assert "```text doc-output\nhello\n```" in open(os.path.join(tmp, "README.md")).read()
+        # doc-release blocks: syntax-checked here, run by --release in a clean directory.
+        rel = good.replace("| a | b |", "From `scripts/count.sh`:\n\n| a | b |") + (
+            "The post-release check runs these steps on clean runners.\n\n"
+            "```sh doc-release\necho step-one > got.txt\ntest \"$SFR_VERSION\" = 9.9.9\n```\n")
+        open(os.path.join(tmp, "README.md"), "w").write(rel)
+        _, errors = check(tmp, run=True)
+        assert errors == [], errors
+        os.environ["SFR_VERSION"] = "9.9.9"
+        wd = os.path.join(tmp, "wd")
+        assert run_release(tmp, wd) == [], "release blocks run"
+        assert open(os.path.join(wd, "got.txt")).read() == "step-one\n"
+        assert any("not empty" in e for e in run_release(tmp, wd)), "a used directory is refused"
+        os.environ["SFR_VERSION"] = "1.0.0"
+        shutil.rmtree(wd)
+        assert any("exited 1" in e for e in run_release(tmp, wd)), "a failing release block fails"
+        del os.environ["SFR_VERSION"]
+        for name, text, expect in [
+            ("a doc-release block that does not name the post-release check", rel.replace("The post-release check runs", "Somebody runs"), "post-release check"),
+            ("a doc-release block with bad syntax", rel.replace("echo step-one", "if then"), "syntax error"),
+            ("two kinds", rel.replace("```sh doc-release", "```sh doc-release doc-test"), "exactly one of"),
+        ]:
+            open(os.path.join(tmp, "README.md"), "w").write(text)
+            _, errors = check(tmp, run=False)
+            assert any(expect in e for e in errors), f"{name}: expected {expect!r} in {errors}"
+        open(os.path.join(tmp, "README.md"), "w").write(good.replace("| a | b |", "From `scripts/count.sh`:\n\n| a | b |"))
+        assert run_release(tmp, os.path.join(tmp, "wd2")) == ["README.md has no doc-release block: nothing to run"]
         # Exempt files and generated reports are not public docs; generated blocks are not prose.
         open(os.path.join(tmp, "CLAUDEME.md"), "w").write("```\nanything 1234\n```\n")
         os.makedirs(os.path.join(tmp, "examples/reports"))
@@ -474,6 +541,17 @@ def self_test():
 def main(argv):
     if argv == ["--self-test"]:
         self_test()
+        return 0
+    if argv[:1] == ["--release"]:
+        if len(argv) != 2:
+            fail("usage: --release <dir>")
+        errors = run_release(ROOT, argv[1])
+        if errors:
+            print("FAIL: README quickstart (download path):")
+            for e in errors:
+                print(f"  {e}")
+            return 1
+        print("PASS: README quickstart, download path, every doc-release block ran in a clean directory")
         return 0
     only = None
     if "--doc" in argv:

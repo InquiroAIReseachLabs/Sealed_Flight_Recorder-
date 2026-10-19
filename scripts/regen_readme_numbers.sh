@@ -18,6 +18,13 @@
 #   release-key    release/sfr-release.pub, the release public key, with its fingerprint; until
 #                  the founder generates it (scripts/release_sign.sh keygen), a line saying so
 #
+# docs/RELEASE.md holds the same release-key block, and docs/BENCHMARK.md holds the block
+# benchmark-arm-vm: the output of scripts/benchmark.sh on GitHub's arm64 hosted runner, from the
+# receipt docs/receipts/aarch64-benchmark.txt (written by --aarch64-receipt from the
+# benchmark-aarch64 workflow's output; until it exists, a line saying so). It is labelled
+# "aarch64, Arm cloud VM" and nothing else: the runner is a cloud virtual machine on Arm
+# processors, not embedded or companion-computer hardware.
+#
 # The release-key block is always required in README.md. Each other block is required, between its
 # markers, exactly when the receipt holds its lines, and a marker of a block the receipt cannot
 # fill is an error, so no number between markers comes from anywhere else.
@@ -25,6 +32,9 @@
 # Usage:
 #   scripts/regen_readme_numbers.sh                    rewrite README.md from the receipt
 #   scripts/regen_readme_numbers.sh --check            exit 1 if README.md differs from the receipt
+#   scripts/regen_readme_numbers.sh --aarch64-receipt <run-id> <commit> <log>
+#       write docs/receipts/aarch64-benchmark.txt from the output of scripts/benchmark.sh run
+#       with an aarch64 binary on an aarch64 machine (anything else is refused)
 #   scripts/regen_readme_numbers.sh --receipt <run-id> <commit> <job>=<log> ...
 #       write the receipt from CI job logs; <job> is code-quality, records, demo, or benchmark;
 #       a log may carry the timestamps GitHub puts before each line
@@ -183,6 +193,61 @@ render_release_key() {
   end release-key
 }
 
+# The aarch64 block of docs/BENCHMARK.md, from docs/receipts/aarch64-benchmark.txt (or a line saying
+# there is none yet).
+AARCH64_LABEL="aarch64, Arm cloud VM"
+render_benchmark_arm_vm() { # render_benchmark_arm_vm <receipt, may not exist>
+  local r="$1" head
+  begin benchmark-arm-vm
+  if [ -f "$r" ]; then
+    head="$(one "$r" benchmark '^benchmark: ')"
+    [[ "$head" == *"; binary aarch64, machine aarch64;"* ]] \
+      || die "the aarch64 block is for an aarch64 binary on an aarch64 machine, not emulation: $head"
+    cat <<TEXT
+Measured on **$AARCH64_LABEL**: a GitHub-hosted arm64 virtual machine (runner \`ubuntu-24.04-arm\`). It is not embedded or companion-computer hardware. \`scripts/benchmark.sh\` run from the aarch64 release tarball and the benchmark kit by the \`benchmark-aarch64\` workflow, run $(field "$r" run) on commit \`$(field "$r" commit)\`.
+
+- ${head#benchmark: }
+- $(one "$r" benchmark '^hardware: ')
+- $(one "$r" benchmark '^note: ')
+
+$(lines "$r" benchmark '^\|')
+
+$(lines "$r" benchmark '^(gate|memory): ' | sed 's/^/- /')
+TEXT
+  else
+    echo "Not measured yet. Run the \`benchmark-aarch64\` workflow (Actions, benchmark-aarch64, Run workflow), put the receipt it uploads at \`docs/receipts/aarch64-benchmark.txt\`, and run \`scripts/regen_readme_numbers.sh\`. The result will be labelled \"$AARCH64_LABEL\"."
+  fi
+  end benchmark-arm-vm
+}
+
+# splice_only <file> <block> <render fn> <fn args...>: the file with the block rewritten, in
+# $work/extra-out, after checking every marker line in it is exactly one this script writes.
+splice_only() {
+  local file="$1" block="$2" fn="$3" marker
+  shift 3
+  while IFS= read -r marker; do
+    [ "$marker" = "$(begin "$block")" ] || [ "$marker" = "$(end "$block")" ] \
+      || die "$file has a marker line that is not exactly one this script writes: \"$marker\""
+  done < <(grep -i -E '<!--[[:space:]]*(BEGIN|END)' "$file" || true)
+  "$fn" "$@" > "$work/extra-block"
+  splice "$file" "$block" "$work/extra-block" > "$work/extra-out"
+}
+
+# extras <write|check> <release md> <benchmark md> <aarch64 receipt> <release key>
+extras() {
+  local mode="$1" rel="$2" bench="$3" r="$4" key="$5"
+  splice_only "$rel" release-key render_release_key "$key"
+  case "$mode" in
+    write) cp "$work/extra-out" "$rel" ;;
+    check) diff -u "$rel" "$work/extra-out" || die "$rel differs from the release key; run scripts/regen_readme_numbers.sh" ;;
+  esac
+  splice_only "$bench" benchmark-arm-vm render_benchmark_arm_vm "$r"
+  case "$mode" in
+    write) cp "$work/extra-out" "$bench" ;;
+    check) diff -u "$bench" "$work/extra-out" || die "$bench differs from the numbers in $r; run scripts/regen_readme_numbers.sh" ;;
+  esac
+}
+
 # The blocks the receipt holds lines for, in README order.
 blocks() {
   local r="$1"
@@ -323,16 +388,51 @@ self_test() {
   receipt "$t/failed-receipt" 7 "$(printf 'a%.0s' {1..40})" code-quality="$t/cq.log" records="$t/records.log" demo="$t/demo.log"
   if (main write "$t/cq-only.md" "$t/failed-receipt" "$t/no-such.pub" > /dev/null 2>&1); then die "self-test: a failed test run is published"; fi
   if (receipt "$t/r" 7 "$(printf 'a%.0s' {1..40})" demo="$t/cq.log" > /dev/null 2>&1); then die "self-test: a log without the job's lines is accepted"; fi
+  # docs/RELEASE.md and docs/BENCHMARK.md: the release key block, and the aarch64 block with and
+  # without a receipt, native and emulated.
+  local rel="$t/RELEASE.md" bench="$t/BENCHMARK.md" ar="$t/aarch64-receipt"
+  { echo "# Release"; begin release-key; echo stale; end release-key; echo tail; } > "$rel"
+  { echo "# Benchmark"; begin benchmark-arm-vm; echo stale; end benchmark-arm-vm; echo tail; } > "$bench"
+  extras write "$rel" "$bench" "$t/no-such-receipt" "$t/no-such.pub"
+  grep -q -F 'Release public key: not generated yet.' "$rel" || die "self-test: RELEASE.md misses the not-generated line"
+  grep -q -F 'Not measured yet.' "$bench" || die "self-test: BENCHMARK.md misses the not-measured line"
+  extras write "$rel" "$bench" "$t/no-such-receipt" "$t/k.pub"
+  grep -q -F "fingerprint \`sha256:$(openssl pkey -pubin -in "$t/k.pub" -outform DER | sha256sum | cut -d' ' -f1)\`" "$rel" \
+    || die "self-test: RELEASE.md misses the fingerprint"
+  sed -i 's/binary armv7, machine armv7l/binary aarch64, machine aarch64/' "$t/bench.log"
+  receipt "$ar" 9 "$(printf 'b%.0s' {1..40})" benchmark="$t/bench.log"
+  extras write "$rel" "$bench" "$ar" "$t/k.pub"
+  grep -q -F "Measured on **$AARCH64_LABEL**" "$bench" || die "self-test: the aarch64 label is missing"
+  grep -q -F 'It is not embedded or companion-computer hardware.' "$bench" || die "self-test: the hardware disclaimer is missing"
+  grep -q -F -- '- gate: x86_64 large_100mb seal median 0.700 s, under 2 s: PASS' "$bench" || die "self-test: the gate line is missing"
+  extras check "$rel" "$bench" "$ar" "$t/k.pub" > /dev/null || die "self-test: check fails on a fresh write"
+  sed -i 's/0.700 s/0.600 s/' "$bench"
+  if (extras check "$rel" "$bench" "$ar" "$t/k.pub" > /dev/null 2>&1); then die "self-test: BENCHMARK.md drift passes"; fi
+  sed -i 's/binary aarch64, machine aarch64/binary aarch64, machine x86_64/' "$t/bench.log"
+  receipt "$t/emulated" 9 "$(printf 'b%.0s' {1..40})" benchmark="$t/bench.log"
+  if (extras write "$rel" "$bench" "$t/emulated" "$t/k.pub" > /dev/null 2>&1); then die "self-test: an emulated aarch64 run is published"; fi
+  { echo "# Benchmark"; begin benchmark-arm-vm; echo hand-written 99; end benchmark-arm-vm; printf '%s\n' "  $(begin benchmark-arm-vm)"; end benchmark-arm-vm; } > "$t/b2.md"
+  if (extras write "$rel" "$t/b2.md" "$ar" "$t/k.pub" > /dev/null 2>&1); then die "self-test: a second, indented marker is accepted"; fi
   echo "regen_readme_numbers.sh self-test: ok"
 }
 
 readme="$root/README.md" receipt_file="$root/docs/receipts/ci-run.txt"
+release_md="$root/docs/RELEASE.md" bench_md="$root/docs/BENCHMARK.md"
+aarch64_receipt="$root/docs/receipts/aarch64-benchmark.txt" release_key_file="$root/release/sfr-release.pub"
 case "${1:-}" in
   --self-test) self_test ;;
-  --check) [ $# -eq 1 ] || die "usage: --check"; main check "$readme" "$receipt_file" ;;
+  --check) [ $# -eq 1 ] || die "usage: --check"; main check "$readme" "$receipt_file"
+    extras check "$release_md" "$bench_md" "$aarch64_receipt" "$release_key_file" ;;
+  --aarch64-receipt) [ $# -eq 4 ] || die "usage: --aarch64-receipt <run-id> <commit> <log>"
+    receipt "$work/receipt" "$2" "$3" benchmark="$4"
+    [[ "$(one "$work/receipt" benchmark '^benchmark: ')" == *"; binary aarch64, machine aarch64;"* ]] \
+      || die "$4 is not a run of an aarch64 binary on an aarch64 machine; an emulated run is not published"
+    mkdir -p "$(dirname "$aarch64_receipt")"; cp "$work/receipt" "$aarch64_receipt"
+    echo "wrote $aarch64_receipt" ;;
   --receipt) [ $# -ge 4 ] || die "usage: --receipt <run-id> <commit> <job>=<log> ..."
     receipt "$work/receipt" "${@:2}"; mkdir -p "$(dirname "$receipt_file")"; cp "$work/receipt" "$receipt_file"
     echo "wrote $receipt_file" ;;
-  "") main write "$readme" "$receipt_file" ;;
+  "") main write "$readme" "$receipt_file"
+    extras write "$release_md" "$bench_md" "$aarch64_receipt" "$release_key_file" ;;
   *) die "unknown argument $1" ;;
 esac

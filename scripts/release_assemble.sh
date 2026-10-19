@@ -12,14 +12,23 @@
 #   sfr-<version>-<target>.cdx.json, one per target     scripts/release_sbom.sh
 # Any other file in the directory is an error, so SHA256SUMS covers exactly the release.
 #
-# Usage: scripts/release_assemble.sh <dir>     Writes <dir>/SHA256SUMS and prints it.
+# With --set github, the set is the one the GitHub release holds (.github/workflows/release.yml):
+# the three tarballs and the three SBOMs, without the benchmark kit and the demo image.
+#
+# Usage: scripts/release_assemble.sh [--set github] <dir>     Writes <dir>/SHA256SUMS and prints it.
 set -euo pipefail
 caller="$PWD"
 # A relative path argument is relative to the directory the script was started in.
 abs() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller/$1" ;; esac; }
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 die() { echo "release_assemble.sh: $*" >&2; exit 1; }
-[ $# -eq 1 ] || { echo "usage: $0 <dir>" >&2; exit 2; }
+set_name=all
+if [ "${1:-}" = --set ]; then
+  [ "${2:-}" = github ] || die "--set takes github"
+  set_name=github
+  shift 2
+fi
+[ $# -eq 1 ] || { echo "usage: $0 [--set github] <dir>" >&2; exit 2; }
 dir="$(abs "$1")"
 version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
 [ -n "$version" ] || die "no version in Cargo.toml"
@@ -27,7 +36,7 @@ expected=()
 for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf; do
   expected+=("sfr-$version-$target.tar.gz" "sfr-$version-$target.cdx.json")
 done
-expected+=("sfr-$version-benchmark.tar.gz" "sfr-$version-demo-image.tar.gz")
+[ "$set_name" = github ] || expected+=("sfr-$version-benchmark.tar.gz" "sfr-$version-demo-image.tar.gz")
 for f in "${expected[@]}"; do
   [ -s "$dir/$f" ] || die "missing or empty: $dir/$f"
 done

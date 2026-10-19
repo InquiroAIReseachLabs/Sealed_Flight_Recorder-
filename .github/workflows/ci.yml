@@ -225,6 +225,28 @@ jobs:
       - name: Docs tests (scripts/check_docs.py)
         run: python3 -I scripts/check_docs.py
 
+  # The release workflows' own rules and tests (.github/workflows/release.yml, docs/RELEASE.md):
+  # the workflow rules, the hygiene scan, and the offline signing flow with a throwaway key.
+  release-scripts:
+    name: release workflow rules, hygiene scan and offline signing flow (SPEC B1.10 Releases)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install exiftool for the hygiene scan
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q libimage-exiftool-perl
+      - name: Workflow rules, signing script, hygiene scan, signing flow
+        run: |
+          set -euo pipefail
+          scripts/check_workflows.sh --self-test
+          scripts/check_workflows.sh
+          scripts/release_sign.sh --self-test
+          scripts/check_release_hygiene.sh --self-test
+          scripts/check_release_flow.sh
+          scripts/regen_readme_numbers.sh --self-test
+
   # The engine bundle (Chunk 6): built from this commit, checked, then driven in three browser
   # engines through its test harness page by tests/browser/sandbox.test.mjs. Safari itself
   # cannot run on a Linux runner; WebKit is its engine. The bundle is kept as the artifact

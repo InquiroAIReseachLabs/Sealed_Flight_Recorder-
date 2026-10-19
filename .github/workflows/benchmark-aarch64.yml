@@ -1,0 +1,65 @@
+# The aarch64 benchmark, by hand (docs/BENCHMARK.md). Runs scripts/benchmark.sh on GitHub's
+# arm64 hosted runner and keeps its output and the receipt that scripts/regen_readme_numbers.sh
+# turns into the aarch64 block of docs/BENCHMARK.md. The runner is a cloud virtual machine on
+# Arm processors: the result is labelled "aarch64, Arm cloud VM" and is never presented as
+# embedded or companion-computer hardware. The workflow commits nothing; a person puts the
+# receipt in docs/receipts/ and runs the script.
+name: benchmark-aarch64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: scripts/benchmark.sh on the arm64 runner
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain (rust-toolchain.toml) and GNU time
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          sudo apt-get update -q
+          sudo apt-get install -y -q time
+      - name: Build the aarch64 tarball here and the benchmark kit
+        run: |
+          set -euo pipefail
+          scripts/build_release.sh aarch64-unknown-linux-musl dist
+          scripts/build_benchmark_kit.sh dist
+      - name: Run the benchmark from the unpacked tarballs
+        run: |
+          set -euo pipefail
+          mkdir bench
+          tar -C bench -xzf dist/sfr-*-aarch64-unknown-linux-musl.tar.gz
+          tar -C bench -xzf dist/sfr-*-benchmark.tar.gz
+          uname -m
+          rc=0
+          (cd bench && sfr-*-benchmark/scripts/benchmark.sh --sfr "$(ls -d sfr-*-aarch64-unknown-linux-musl)/bin/sfr") > benchmark-aarch64.txt || rc=$?
+          cat benchmark-aarch64.txt
+          echo "$rc" > benchmark-exit.txt
+      - name: The receipt for docs/BENCHMARK.md, and the result
+        run: |
+          set -euo pipefail
+          # Fails unless the binary and the machine are both aarch64: an emulated run is not published.
+          scripts/regen_readme_numbers.sh --aarch64-receipt "$GITHUB_RUN_ID" "$GITHUB_SHA" benchmark-aarch64.txt
+          mkdir out
+          cp docs/receipts/aarch64-benchmark.txt benchmark-aarch64.txt out/
+          {
+            echo "### aarch64, Arm cloud VM (GitHub-hosted runner ubuntu-24.04-arm)"
+            echo
+            grep -E '^(benchmark|hardware|gate|memory): ' benchmark-aarch64.txt | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        if: always()
+        with:
+          name: benchmark-aarch64
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Fail if the benchmark script missed a gate
+        run: |
+          set -euo pipefail
+          [ "$(cat benchmark-exit.txt)" = 0 ] || { echo "scripts/benchmark.sh exited $(cat benchmark-exit.txt)"; exit 1; }

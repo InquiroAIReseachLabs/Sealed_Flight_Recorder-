@@ -11,6 +11,7 @@
 #   sfr-<version>-<target>/bin/sfr
 #   sfr-<version>-<target>/README.md
 #   sfr-<version>-<target>/examples/        rules files and the example records and reports
+#   sfr-<version>-<target>/examples/sample/ a 1.3 KB synthetic log and its baseline, for the quickstart
 #   sfr-<version>-<target>/BUILDINFO        version, target, commit, toolchain, binary SHA-256
 #
 # The build is meant not to depend on where it runs (scripts/check_reproducible.sh compares two
@@ -80,14 +81,25 @@ name="sfr-$version-$target"
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 pkg="$stage/$name"
-mkdir -p "$pkg/bin" "$pkg/examples/reports"
+mkdir -p "$pkg/bin" "$pkg/examples/reports" "$pkg/examples/sample"
 install -m 0755 "$bin" "$pkg/bin/sfr"
 install -m 0644 README.md "$pkg/README.md"
 install -m 0644 examples/rules.default.toml examples/rules.extended.toml "$pkg/examples/"
 install -m 0644 examples/reports/* "$pkg/examples/reports/"
+# The quickstart seals this log (docs: README.md). It is synthetic: written by
+# scripts/testdata/make_synthetic_logs.py, not a flight and not a third-party log.
+install -m 0644 testdata/synthetic/custom_detection.ulg "$pkg/examples/sample/sample.ulg"
+install -m 0644 testdata/baselines/synthetic_custom_detection.params "$pkg/examples/sample/sample.params"
+printf '%s\n' \
+  'sample.ulg is a synthetic PX4 log of 1,338 bytes. It is not a flight and not a third-party log.' \
+  'sample.params is its baseline. Seal it with the default rules (see README.md, Quickstart):' \
+  '  bin/sfr seal examples/sample/sample.ulg --rules examples/rules.default.toml \' \
+  '    --baseline examples/sample/sample.params --key <your evaluation key> --evaluation-only --out out' \
+  > "$pkg/examples/sample/README.txt"
+chmod 0644 "$pkg/examples/sample/README.txt"
 {
   echo "name: sfr"
-  echo "version: $version (v1.0 evaluation release)"
+  echo "version: $version (evaluation release)"
   echo "target: $target"
   echo "commit: $commit"
   echo "rustc: $(rustc -V)"

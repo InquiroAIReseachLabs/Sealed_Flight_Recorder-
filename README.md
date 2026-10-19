@@ -12,7 +12,71 @@ It does not prove that the log was honest, that the vehicle did what the log say
 
 ## Quickstart
 
-**What is published today:** nothing yet. No container image and no binary has been published. CI builds static `sfr` binaries for Linux (`x86_64`, `aarch64`, `armv7`) and an offline demo image on every commit, but keeps them only as CI artifacts of that run, which are not a release; the first release will publish them with a signature ([docs/RELEASE.md](docs/RELEASE.md)). Until then, build from source as below.
+Two paths. The first needs no build tools: it downloads a release, checks it without trusting anyone, and runs a demo. The second builds `sfr` from source.
+
+### Path 1: download the release
+
+Evaluation release 0.1.0 (tag `v0.1.0`) is a pre-release at [github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-/releases](https://github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-/releases). It holds a static `sfr` for Linux (`x86_64`, `aarch64` and `armv7`), one SBOM per target, `SHA256SUMS`, `SHA256SUMS.sig` and the release public key `sfr-release.pub`. You need `curl`, `tar`, `sha256sum` and OpenSSL 3. Every command below is run, in this order and in an empty directory, by the post-release check (`.github/workflows/post-release-check.yml`) on clean machines; the quickstart has no steps beyond these.
+
+1. Download your target's tarball and the three files that check it. The two lines at the top choose the release and the target (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` or `armv7-unknown-linux-musleabihf`); the post-release check sets `SFR_VERSION` and `SFR_TARGET`, and you can edit the lines:
+
+   ```sh doc-release
+   VERSION="${SFR_VERSION:-0.1.0}"
+   TARGET="${SFR_TARGET:-x86_64-unknown-linux-musl}"
+   BASE="https://github.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-/releases/download/v$VERSION"
+   curl -fsSLO "$BASE/sfr-$VERSION-$TARGET.tar.gz"
+   curl -fsSLO "$BASE/SHA256SUMS"
+   curl -fsSLO "$BASE/SHA256SUMS.sig"
+   curl -fsSLO "$BASE/sfr-release.pub"
+   ```
+
+2. Compare the key's fingerprint with the one in the Release files section below (and in [docs/RELEASE.md](docs/RELEASE.md), and anywhere else you trust). The signature proves only that the holder of this key signed `SHA256SUMS`, so stop here if the fingerprints differ. The post-release check runs this step and compares its output with the committed key:
+
+   ```sh doc-release
+   FINGERPRINT="$(openssl pkey -pubin -in sfr-release.pub -outform DER | sha256sum | cut -d' ' -f1)"
+   echo "release key fingerprint sha256:$FINGERPRINT"
+   ```
+
+3. Verify the signature on `SHA256SUMS`, then the tarball against it. The first command prints `Signature Verified Successfully`; the second prints the tarball's name and `OK`, and fails if the tarball is not listed or does not match. The post-release check runs both:
+
+   ```sh doc-release
+   openssl pkeyutl -verify -pubin -inkey sfr-release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
+   sha256sum --check --strict --ignore-missing SHA256SUMS
+   ```
+
+4. Optionally check the build provenance attestation, which says which workflow (the release workflow of this repository) built this exact file from which tag. It needs the GitHub CLI (`gh`) logged in to GitHub. The post-release check runs it:
+
+   ```sh doc-release
+   gh attestation verify "sfr-$VERSION-$TARGET.tar.gz" --repo InquiroAIReseachLabs/Sealed_Flight_Recorder- \
+     --signer-workflow InquiroAIReseachLabs/Sealed_Flight_Recorder-/.github/workflows/release.yml --source-ref "refs/tags/v$VERSION"
+   ```
+
+5. Unpack it, make an evaluation key, and seal the bundled sample log. The sample is `testdata/synthetic/custom_detection.ulg`, a synthetic log of 1,338 bytes, not a flight. A record is written to `out/`. The post-release check runs these commands:
+
+   ```sh doc-release
+   tar -xzf "sfr-$VERSION-$TARGET.tar.gz"
+   cd "sfr-$VERSION-$TARGET"
+   bin/sfr --version
+   mkdir -p keys out
+   bin/sfr keygen --evaluation-only --out keys > /dev/null
+   bin/sfr seal examples/sample/sample.ulg --rules examples/rules.default.toml \
+     --baseline examples/sample/sample.params --key keys/sfr.key --evaluation-only --out out | grep -E '^(status|record)'
+   bin/sfr verify out/sample.sfr --pubkey keys/sfr.pub --ulog examples/sample/sample.ulg | grep -E '^(VERIFIED|status)'
+   ```
+
+6. Tamper, then verify. Change one parameter value in a copy of the record, and one byte of a copy of the log. Each verify exits 1 and says what no longer matches. The post-release check runs these commands and requires both exits to be 1:
+
+   ```sh doc-release
+   sed 's/"SYS_AUTOSTART":"i32:10040"/"SYS_AUTOSTART":"i32:10041"/' out/sample.sfr > out/changed.sfr
+   rc=0; bin/sfr verify out/changed.sfr --pubkey keys/sfr.pub || rc=$?; echo "record changed: exit $rc"; test "$rc" = 1
+   cp examples/sample/sample.ulg out/changed.ulg
+   printf '\377' | dd of=out/changed.ulg bs=1 seek=600 conv=notrunc 2> /dev/null
+   rc=0; bin/sfr verify out/sample.sfr --pubkey keys/sfr.pub --ulog out/changed.ulg || rc=$?; echo "log changed: exit $rc"; test "$rc" = 1
+   ```
+
+What the signature, the checksums and the attestation each prove, and what they do not, is in [docs/RELEASE.md](docs/RELEASE.md).
+
+### Path 2: build from source
 
 You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essential`), and [rustup](https://rustup.rs). `rust-toolchain.toml` pins the Rust version, and `cargo` installs it on the first build. The first build downloads the dependencies from crates.io; after that, `sfr` needs no network. CI builds and tests on Linux `x86_64`; other systems have not been tested.
 
@@ -41,7 +105,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    VERIFIED (record and log)
    record    examples/reports/vtol_transition.sfr
    custody   file-evaluation
-   key       sha256:e9189283def3921d2c7489ceed37e4680b4768b78faa311fdf49cf6325b5e4f4
+   key       sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f
    crypto    blake3 1.8.7, ed25519-dalek 3.0.0, sha2 0.11.1 (crate versions)
    sealed    2026-10-18T15:00:00Z
    status    PASS
@@ -60,7 +124,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
 
    ```text doc-output
    EVALUATION KEY: not for operational use
-   FAILED: Merkle root mismatch: a leaf changed after sealing (recorded 31577a8e29ea34a41f09692efeb856903162f605e62702ba1c2fb8b6dda304c2, computed 95f6c952bbbb0539d677755b628dffa26ccae7250cf03869a81bd5b549146e04)
+   FAILED: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
    exit 1
    ```
 
@@ -147,25 +211,17 @@ CI runs every command on these pages that can run there and compares its output 
 
 ## Release files
 
-Not published yet. Each release will hold, for the version in `Cargo.toml`:
+Evaluation release 0.1.0 holds these files, for the version in `Cargo.toml`:
 
 | File | Contents |
 |---|---|
-| `sfr-<version>-<target>.tar.gz` | the static `sfr` for `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, or `armv7-unknown-linux-musleabihf`, this README, `examples/`, and `BUILDINFO` |
+| `sfr-<version>-<target>.tar.gz` | the static `sfr` for `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, or `armv7-unknown-linux-musleabihf`, this README, `examples/` (rules files, example records and reports, and a synthetic sample log with its baseline), and `BUILDINFO` |
 | `sfr-<version>-<target>.cdx.json` | the CycloneDX SBOM of that `sfr`: its resolved dependency graph for the target from `Cargo.lock` (a superset of the crates it links; build-time crates marked `excluded`), with version, license, and SHA-256 |
-| `sfr-<version>-benchmark.tar.gz` | `scripts/benchmark.sh` and the golden logs it reads, for any architecture ([docs/BENCHMARK.md](docs/BENCHMARK.md)) |
-| `sfr-<version>-demo-image.tar.gz` | an offline demo image (x86_64): the static `sfr`, two golden SITL logs, the default rules, and `scripts/run_demo.sh`, which seals, verifies, and shows verify naming a changed event and a changed parameter |
 | `SHA256SUMS` | the SHA-256 of every file above |
 | `SHA256SUMS.sig` | the Ed25519 signature over `SHA256SUMS`, made offline with the release key |
+| `sfr-release.pub` | the release public key, shown below |
 
-CI builds every file but the signature on each commit and keeps them as the `sfr-release-unsigned` artifact of the run; [docs/RELEASE.md](docs/RELEASE.md) says how a release is signed and made. To check release files with OpenSSL 3 and coreutils alone, in the directory that holds them and `sfr-release.pub` (the release public key below), run these. Not run in CI: no release has been signed yet.
-
-```sh doc-syntax
-openssl pkeyutl -verify -pubin -inkey sfr-release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
-sha256sum -c --ignore-missing SHA256SUMS
-```
-
-The first prints `Signature Verified Successfully` only for a good signature by the release key.
+Each tarball also has a GitHub build provenance attestation. No container image is published. The commands that check these files are steps 2 to 4 of the quickstart, and [docs/RELEASE.md](docs/RELEASE.md) says what each check proves.
 
 <!-- BEGIN release-key: written by scripts/regen_readme_numbers.sh, do not edit by hand -->
 Release public key: not generated yet. The founder generates the release key on an offline machine with `scripts/release_sign.sh keygen <offline path>`, which writes its public half to `release/sfr-release.pub`; `scripts/regen_readme_numbers.sh` then shows it here, and both are committed before the first release.
