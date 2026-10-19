@@ -4,7 +4,7 @@ How `sfr` fits into a flight operation: which parts of a PX4 log it reads, how t
 
 ## What `sfr` reads from a log
 
-`sfr` reads a PX4 ULog file (PX4 v1.14 to v1.17) once, as a stream, and hashes every byte. The decoders are in `crates/sfr-core/src/ingest.rs`; [RULES.md](RULES.md) says which rule reads what.
+`sfr` reads a PX4 ULog file (PX4 v1.14 to v1.17; tested on v1.14.4 and v1.17.0 logs; other versions are accepted with a warning but not tested, [RULES.md](RULES.md)) once, as a stream, and hashes every byte. The decoders are in `crates/sfr-core/src/ingest.rs`; [RULES.md](RULES.md) says which rule reads what.
 
 | Topic | Fields | Why | Needed |
 |---|---|---|---|
@@ -22,7 +22,7 @@ How `sfr` fits into a flight operation: which parts of a PX4 log it reads, how t
 
 Besides topics, `sfr` reads the info messages `ver_sw_release` and `ver_sw` (firmware identity, R2), the parameters ('P' records: those before the first subscription are the configuration that flew, later ones are PARAM_CHANGED_IN_FLIGHT events), logged messages at warning level or above ('L' and 'C', LOG_MESSAGE events), and dropouts ('O', LOG_DROPOUT events and X5). It does not decode the `event` topic, and it does not read `vtol_vehicle_status`. [LIMITS.md](LIMITS.md) gives the limits a log must stay within.
 
-**PX4 logging.** The repository's research (`docs/DIAGNOSTIC.md` item 4) finds `vehicle_status`, `failsafe_flags`, `vehicle_command` and `vehicle_command_ack` in PX4's default logging profile at every publication, from the PX4 source; every golden log in `testdata/` was recorded in SITL with a larger profile, so no hardware log with the default profile has been checked. With PX4's default logging modes the log file is closed at disarm, so a sealed log ends shortly after the DISARM event. A `logger_topics.txt` file on the flight controller replaces the profiles: if you use one, keep the topics above in it.
+**PX4 logging.** The PX4 source puts `vehicle_status`, `failsafe_flags`, `vehicle_command` and `vehicle_command_ack` in PX4's default logging profile at every publication; every golden log in `testdata/` was recorded in SITL with a larger profile, so no hardware log with the default profile has been checked. With PX4's default logging modes the log file is closed at disarm, so a sealed log ends shortly after the DISARM event. A `logger_topics.txt` file on the flight controller replaces the profiles: if you use one, keep the topics above in it.
 
 ## Sealing on a companion computer after disarm
 

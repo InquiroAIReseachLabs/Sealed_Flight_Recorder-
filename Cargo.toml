@@ -1,7 +1,7 @@
 # Sealed Flight Record workspace (SPEC B1.2).
 # One engine (sfr-core), two thin wrappers (sfr CLI, sfr-wasm browser build), and the PKCS#11
 # signing helper, which runs as its own process (SPEC B1.2).
-# fuzz/ becomes a separate cargo-fuzz package in Chunk 2; it is excluded from the workspace on purpose.
+# fuzz/ is a separate cargo-fuzz package; it is excluded from the workspace on purpose.
 [workspace]
 resolver = "3"
 members = [
@@ -19,18 +19,17 @@ rust-version = "1.97"
 publish = false
 description = "Sealed Flight Record: a signed, self-verifying record of a PX4 flight's configuration, readiness rule results, and events."
 
-# Dependency pins decided in docs/DIAGNOSTIC.md (items 7, 8, 11). Declared here so later chunks
-# cannot drift; a crate enters Cargo.lock only when a member uses it.
+# Dependency pins. Declared here so the members cannot drift; a crate enters Cargo.lock only when a member uses it.
 [workspace.dependencies]
 # Cryptography (SPEC B1.10 Crypto): the same crates on every target, so a record is byte-identical
 # wherever it is sealed. Exact pins: a record names these crate versions (seal.crypto_crates), and
-# a unit test holds the names in sfr-core to Cargo.lock. The AWS-LC FIPS module was removed at
-# Change Order 01: it cannot be linked into a static armv7 binary (docs/DIAGNOSTIC.md item 11).
+# a unit test holds the names in sfr-core to Cargo.lock. The AWS-LC FIPS module was removed: it
+# cannot be linked into a static armv7 binary.
 # Certificate path validation (SPEC B1.3 verify --trust-anchor) is not in this build; its crate is
 # chosen when certificate chains are implemented.
 sha2 = { version = "=0.11.1", default-features = false }
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }
-# Supplementary digest of the raw log bytes; never anchors trust (founder ruling).
+# Supplementary digest of the raw log bytes; never anchors trust.
 blake3 = { version = "=1.8.7", default-features = false, features = ["std"] }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 # sfr keygen only: the seed comes from the operating system's CSPRNG.

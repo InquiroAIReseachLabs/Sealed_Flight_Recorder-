@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn roots_match_an_independent_rfc6962_computation() {
-        // Python hashlib, leaves are the single bytes 0..n (see the Chunk 3 commit message).
+        // Python hashlib, leaves are the single bytes 0..n.
         let expected = [
             (
                 1,

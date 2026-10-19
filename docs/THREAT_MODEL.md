@@ -2,16 +2,21 @@
 
 The signature binds the sealed record to the holder of the signing key at the moment of sealing. It proves the record and, with `--ulog`, the log have not changed since then. It does not prove the flight stack wrote a truthful log, that nothing happened to the log between disarm and sealing, or that the sealing machine was uncompromised.
 
+## What is signed
+
+Only the record, `<name>.sfr`, is signed: the Ed25519 signature covers its Merkle root, and the root covers every field of the record (the format is in [RECORD_FORMAT.md](RECORD_FORMAT.md)). The report `<name>.sfr.md` is a readable view that `seal` renders from the record; it has no signature and no digest of its own, and `sfr verify` never reads it. A report proves nothing by itself: verify its record.
+
 ## What a seal proves
 
 A record that `sfr verify` reports VERIFIED proves that this record, signed by the key with this fingerprint, holds these rule results, this configuration and these events; with `--ulog`, that they match these log bytes (SHA-256 and BLAKE3 of the whole file) and that the embedded rules and baseline give the same results from them. The format is in [RECORD_FORMAT.md](RECORD_FORMAT.md).
 
 ## What a seal does not prove
 
+- **That the data was accurate before sealing.** The seal proves that nothing changed after sealing. It says nothing about the log before then.
 - **That the log was honest.** `sfr` checks what the log says, not whether the flight stack, its sensors or its estimator told the truth.
 - **That the vehicle did what the log says.** A log is the flight stack's account of the flight, not the flight.
-- **That the key holder is who they claim.** The record names a key by fingerprint. Who holds that key, and how (`key_custody`), is the sealer's statement until a signer certificate chain proves it, and this build cannot attach one. Get the public key from its owner by a channel you trust.
-- **When the log was made, or sealed.** `seal.time_utc` is the sealing machine's clock or the `--seal-time` given, signed but not proven. Only a trusted time supplied from outside the sealer would prove it; `sfr` takes none.
+- **That the key holder is who they claim.** The record names a key by fingerprint. Who holds that key, and how (`key_custody`), is the sealer's statement until a signer certificate chain proves it, and this build cannot attach one. Get the public key from its owner by a channel you trust: `sfr verify` checks the signature against the key given with `--pubkey`, and verifies nothing without one. A public key that came with the record proves nothing about who signed it.
+- **When the log was made, or sealed.** `seal.time_utc` is self-asserted: the sealing machine's clock or the `--seal-time` given, signed but not proven. Only a trusted time supplied from outside the sealer would prove it; `sfr` takes none.
 - **That nothing changed the log before sealing.** The window from disarm to seal is open; see below.
 
 ## Attacks and what detects them
@@ -27,6 +32,7 @@ A record that `sfr verify` reports VERIFIED proves that this record, signed by t
 | A record with an unknown `schema_version` | refused, never guessed at | `unknown_schema_version_wrong_key_and_evaluation_custody_are_refused` |
 | A malleable signature or a weak public key | `ed25519-dalek` `verify_strict` | code only, `crates/sfr-core/src/crypto.rs`; no test in this repository covers either |
 | An evaluation key passed off as an operational one | a record sealed with a key file holds custody `file-evaluation`, and its report, `seal` and `verify` start with EVALUATION KEY; `verify --require-hardware-key` refuses declared `file-evaluation` custody | `the_in_browser_key_seals_an_evaluation_record_the_cli_verifies`, `every_golden_log_seals_byte_identically_twice_and_replays`, `unknown_schema_version_wrong_key_and_evaluation_custody_are_refused` |
+| Edit a report (`.sfr.md`) | nothing in the report: it is not signed. Verifying its record shows what was sealed | not tested: the report is outside the signature by design |
 | Log text or a file name built to forge report content or a shell command | the report escapes every punctuation character of every value and quotes each file name in its `sfr verify` command | `hostile_log_text_and_file_names_give_a_literal_report_and_a_working_verify_command` |
 | A log built to exhaust memory or time | input limits, refused with exit 3, and fuzzing | [LIMITS.md](LIMITS.md) |
 | Edit the log between disarm and sealing | **not detected** | narrowed by sealing at once, below |

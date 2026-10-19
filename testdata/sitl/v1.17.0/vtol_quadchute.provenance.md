@@ -13,8 +13,8 @@ Generated for this project in PX4 v1.17.0 SITL with the built-in SIH simulator. 
 ## How it was made
 
 - Run on 2026-10-18 from 16:37:41 to 16:39:07 UTC (wall clock from `vtol_quadchute.cmd.log`), one run, first attempt. ULog info field `boot_time_utc_us` is 1792341462192614.
-- Invocation: `cd /tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/c3/quadchute && /tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/sitl_runs/v1.17.0/nsrun.sh ./vtol_quadchute.sh /tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/c3/quadchute/rootfs vtol_quadchute`. `nsrun.sh` gives the run a private `/tmp` and loopback, so PX4 runs as instance 0 with its default configuration.
-- PX4 server start (fresh, empty rootfs): `cd <rootfs> && PX4_SIM_MODEL=sihsim_standard_vtol PX4_SIMULATOR=sihsim /tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/px4/PX4-Autopilot-v1.17.0/build/px4_sitl_default/bin/px4 -d /tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/px4/PX4-Autopilot-v1.17.0/build/px4_sitl_default/etc`. No `PX4_SIM_SPEED_FACTOR` was set; px4 printed `Simulation loop with 250 Hz (4000 us sim time interval)`, and the SITL build uses the lockstep scheduler (`boards/px4/sitl/sitl.cmake` line 12). The build was used as is, not rebuilt.
+- Invocation: `cd /path/to/work/quadchute && /path/to/work/sitl_runs/v1.17.0/nsrun.sh ./vtol_quadchute.sh /path/to/work/quadchute/rootfs vtol_quadchute`. `nsrun.sh` gives the run a private `/tmp` and loopback, so PX4 runs as instance 0 with its default configuration.
+- PX4 server start (fresh, empty rootfs): `cd <rootfs> && PX4_SIM_MODEL=sihsim_standard_vtol PX4_SIMULATOR=sihsim /path/to/work/px4/PX4-Autopilot-v1.17.0/build/px4_sitl_default/bin/px4 -d /path/to/work/px4/PX4-Autopilot-v1.17.0/build/px4_sitl_default/etc`. No `PX4_SIM_SPEED_FACTOR` was set; px4 printed `Simulation loop with 250 Hz (4000 us sim time interval)`, and the SITL build uses the lockstep scheduler (`boards/px4/sitl/sitl.cmake` line 12). The build was used as is, not rebuilt.
 - Commands were sent with the px4 client binaries (`px4-param`, `px4-commander`, `px4-logger`, `px4-shutdown`), and each step was confirmed by polling `px4-listener` output. The log is the newest `.ulg` in `<rootfs>/log/2026-10-18/` (`16_37_42.ulg`, same SHA-256 as the copy).
 - Host load average (from `/proc/loadavg` in the command log): 0.99 at start, 1.27 at end. `ulog_info` reports no dropouts.
 
@@ -215,7 +215,7 @@ Topics used above (from the same output): `failsafe_flags (0, 91) 146`, `vehicle
 
 ## Extraction commands
 
-All were run in `/tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/c3/quadchute` with pyulog 1.2.4 (`/usr/local/lib/python3.13/dist-packages/pyulog`).
+All were run in `/path/to/work/quadchute` with pyulog 1.2.4 (`/usr/local/lib/python3.13/dist-packages/pyulog`).
 
 ```bash
 sha256sum vtol_quadchute.ulg; stat -c '%s bytes' vtol_quadchute.ulg
@@ -282,7 +282,7 @@ awk 'BEGIN{
 
 ## The script that drove the flight
 
-Paths are those of the generating machine. Run it with `nsrun.sh` as shown above.
+The working directory of the generating machine is written `/path/to/work`. Run it with `nsrun.sh` as shown above.
 
 ```bash
 #!/bin/bash
@@ -297,10 +297,10 @@ Paths are those of the generating machine. Run it with `nsrun.sh` as shown above
 # the COM_QC_ACT action (Land). The failsafe lands and auto-disarms; `commander land` only if still armed after 90 s.
 # Fresh rootfs. Run via nsrun.sh (private /tmp + loopback, instance 0).
 set -u
-PX4_DIR=/tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/px4/PX4-Autopilot-v1.17.0
+PX4_DIR=/path/to/work/px4/PX4-Autopilot-v1.17.0
 BIN=$PX4_DIR/build/px4_sitl_default/bin
 ETC=$PX4_DIR/build/px4_sitl_default/etc
-OUT=/tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/c3/quadchute
+OUT=/path/to/work/quadchute
 ROOTFS=${1:?rootfs}; SCENARIO=${2:?scenario}
 MODEL=sihsim_standard_vtol
 rm -rf "$ROOTFS"; mkdir -p "$ROOTFS" "$OUT"; cd "$ROOTFS"

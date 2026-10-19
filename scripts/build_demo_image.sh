@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build_demo_image.sh: the sfr demo image, x86_64 (Chunk 5), from the x86_64 release tarball.
+# build_demo_image.sh: the sfr demo image, x86_64, from the x86_64 release tarball.
 #
 # The image holds /sfr/bin/sfr from the tarball, /sfr/scripts/run_demo.sh, the two golden logs
 # the demo uses (testdata/sitl/v1.17.0/vtol_transition.ulg and gz_quadtailsitter_transition.ulg)

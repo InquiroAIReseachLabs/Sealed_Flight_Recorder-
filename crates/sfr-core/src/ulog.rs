@@ -1,6 +1,6 @@
 //! Streaming PX4 ULog reader (file format versions 0 and 1), bounded and panic-free.
 //!
-//! Design rules from `docs/DIAGNOSTIC.md` item 2.6.4: every read is bounds-checked and errors
+//! Design rules: every read is bounds-checked and errors
 //! carry the byte offset; a record whose size exceeds the bytes left is `Truncated`, never padded;
 //! formats flatten lazily at subscription time with nesting depth at most 8 and a flattened size
 //! of at most 65,535 bytes; unknown incompatible flag bits are rejected; unknown message types

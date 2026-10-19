@@ -8,7 +8,13 @@ This is an evaluation release, provided without warranty, and in development: re
 
 `sfr seal` runs the rules R1 to R7 on a PX4 ULog file and writes a signed record (`.sfr`) and a plain report (`.sfr.md`). `sfr verify` checks the record, and with `--ulog` checks it against the log. A record that verifies proves that this record, signed by this key, matches these log bytes and these rule results.
 
-It does not prove that the log was honest, that the vehicle did what the log says, that the key holder is who they claim, or when the log was made: the seal time is the sealer's own statement. [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) gives the details and the attacks that are and are not detected.
+- **Only the record is signed.** The `.sfr` file is what the signature covers and what `sfr verify` checks. The `.sfr.md` report is a readable view generated from the record; it carries no signature of its own, so anyone can edit a copy of it. Trust what `sfr verify` says about the `.sfr`, not the report.
+- **The seal proves no change since sealing, not accuracy before it.** A record that verifies has not changed since it was sealed, and with `--ulog` neither has the log. It does not prove that the log was accurate or honest when it was sealed, that the vehicle did what the log says, or that nothing changed the log between the flight and the seal.
+- **Who signed needs the signer's public key.** The record names its signing key only by fingerprint. `sfr verify` checks the signature against the public key you give it with `--pubkey`, so it tells you who signed only if you got that key from the signer through a channel you trust. A key that arrives with the record proves nothing about who signed it. Without `--pubkey`, `sfr verify` checks nothing.
+- **The seal time is self-asserted.** `sealed` is the sealing machine's clock, or the time given with `--seal-time`. It is signed, so it cannot change after sealing, but nothing checks that it was right.
+- **PX4 versions.** `sfr` is tested on logs from PX4 v1.14.4 and v1.17.0 (`testdata/sitl/`); v1.15 and v1.16 are decoded from the PX4 source's message definitions, but no log from them is in the tests. A log from a version outside v1.14 to v1.17, or with no version, is still accepted and sealed: `seal` prints a warning on standard error, the version-dependent names in its events are left empty, and no such log is tested.
+
+[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) gives the details and the attacks that are and are not detected.
 
 ## Quickstart
 
@@ -232,7 +238,7 @@ CI runs every command on these pages that can run there and compares its output 
 
 ## The record and its report
 
-`sfr seal` writes the signed record `<name>.sfr` and, beside it, the report `<name>.sfr.md`: Markdown that GitHub and GitLab render, generated only from the record, with the `sfr verify` command that checks it. `examples/reports/` holds the records and reports of four golden SITL flights (standard VTOL, GPS loss failsafe, quad tailsitter, and a multicopter with a sealed topic and an R7 failure), sealed with an evaluation key.
+`sfr seal` writes the signed record `<name>.sfr` and, beside it, the report `<name>.sfr.md`: Markdown that GitHub and GitLab render, generated only from the record, with the `sfr verify` command that checks it. Only the record is signed: the report is a readable view of it, not evidence, and an edited report still looks like a report. To check one, verify its record with the signer's public key. `examples/reports/` holds the records and reports of four golden SITL flights (standard VTOL, GPS loss failsafe, quad tailsitter, and a multicopter with a sealed topic and an R7 failure), sealed with an evaluation key.
 
 ## Release files
 

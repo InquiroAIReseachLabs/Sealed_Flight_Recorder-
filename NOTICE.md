@@ -4,7 +4,7 @@ This repository includes or quotes the third-party material below. Everything el
 
 ## PX4
 
-`docs/DIAGNOSTIC.md`, `docs/RULES.md`, `examples/rules.default.toml` and `examples/rules.extended.toml` quote short excerpts of the PX4 source (PX4-Autopilot): message field names and types, command ids and names from `VehicleCommand.msg`, enum values, comments and lines of the startup script `rcS`, and short code excerpts, each cited by file and line. The golden logs in `testdata/sitl/` were recorded by running unmodified PX4 in simulation; each log's `.provenance.md` gives the PX4 version and commit. PX4 is licensed under the BSD 3-Clause License, as its `LICENSE` file in the PX4-Autopilot repository states:
+`docs/RULES.md`, `examples/rules.default.toml` and `examples/rules.extended.toml` quote short excerpts of the PX4 source (PX4-Autopilot): message field names and types, command ids and names from `VehicleCommand.msg`, enum values, comments and lines of the startup script `rcS`, and short code excerpts, each cited by file and line. The golden logs in `testdata/sitl/` were recorded by running unmodified PX4 in simulation; each log's `.provenance.md` gives the PX4 version and commit. PX4 is licensed under the BSD 3-Clause License, as its `LICENSE` file in the PX4-Autopilot repository states:
 
 ```text
 BSD 3-Clause License

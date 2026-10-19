@@ -2,7 +2,7 @@
 """Independent oracle for Sealed Flight Record event extraction and core rules.
 
 Written only from docs/SPEC.md B1.5/B1.6/B1.7, docs/RECORD_FORMAT.md (sealed topic digests)
-and docs/DIAGNOSTIC.md items 4, 5, 6.
+and the PX4 message definitions.
 Usage: python3 -I oracle.py <log.ulg> <rules.toml> [--required vehicle_status,failsafe_flags]
        [--ptime literal|max] [--param-index all|data] [--debug]
 
@@ -171,7 +171,7 @@ def decode_release(v):
 RESULT_NAMES = {0: "ACCEPTED", 1: "TEMPORARILY_REJECTED", 2: "DENIED", 3: "UNSUPPORTED",
                 4: "FAILED", 5: "IN_PROGRESS", 6: "CANCELLED"}
 
-# failsafe_flags flag -> mode_req field (DIAGNOSTIC 4.5)
+# failsafe_flags flag -> mode_req field
 MODE_REQ = {
     'angular_velocity_invalid': 'mode_req_angular_velocity',
     'attitude_invalid': 'mode_req_attitude',

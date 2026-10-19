@@ -3,7 +3,7 @@
 //! [`Px4Ingestor`] streams a PX4 ULog once: every byte is hashed (SHA-256 through the caller's
 //! [`CryptoBackend`], BLAKE3 alongside) while [`crate::ulog::read`] decodes it, and only the
 //! fields that the events and rules need are kept. Topic and field names come from
-//! `docs/DIAGNOSTIC.md` item 4; a field that a version does not log stays `None`, and the rule
+//! the PX4 message definitions of each supported version; a field that a version does not log stays `None`, and the rule
 //! that needs it reports FAIL rather than guessing.
 
 use crate::crypto::{CryptoBackend, Sha256Stream};
@@ -99,7 +99,7 @@ pub struct VtolType {
 }
 
 impl VtolType {
-    /// From the parameter set at log start (docs/DIAGNOSTIC.md item 12 cites PX4's mapping).
+    /// From the parameter set at log start (PX4's mapping).
     pub fn from_params(params: &BTreeMap<String, ParamValue>) -> VtolType {
         match params.get("VT_TYPE") {
             Some(ParamValue::I32(n)) => VtolType {
@@ -491,7 +491,7 @@ fn field(layout: &Layout, name: &str) -> Option<FlatField> {
     layout.field(name).cloned()
 }
 
-/// A field that PX4 declares as `uint8_t`, `uint16_t` or `uint32_t` (DIAGNOSTIC 4.6). Any other
+/// A field that PX4 declares as `uint8_t`, `uint16_t` or `uint32_t`. Any other
 /// type is not PX4's schema and is treated as absent, so the record's integers stay small.
 fn small_uint(layout: &Layout, name: &str) -> Option<FlatField> {
     field(layout, name).filter(|f| matches!(f.scalar, Scalar::U8 | Scalar::U16 | Scalar::U32))
@@ -1038,7 +1038,7 @@ impl Visitor for Collector<'_> {
     fn logging(&mut self, level: u8, _tag: Option<u16>, timestamp: u64, text: &[u8]) {
         let index = self.log_index;
         self.log_index = self.log_index.saturating_add(1);
-        // PX4 writes the level as an ASCII digit, '0' emergency to '7' debug (DIAGNOSTIC 4.7).
+        // PX4 writes the level as an ASCII digit, '0' emergency to '7' debug.
         if (b'0'..=b'4').contains(&level) {
             self.flight.log_records.push(LogRecord {
                 level: level - b'0',

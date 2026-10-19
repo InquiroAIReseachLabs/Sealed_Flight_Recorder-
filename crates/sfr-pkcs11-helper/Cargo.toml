@@ -10,7 +10,7 @@ description = "Signs one Sealed Flight Record payload with an Ed25519 key held i
 name = "sfr-pkcs11-helper"
 path = "src/main.rs"
 
-# cryptoki =0.12.1 arrives with the signing code in Chunk 3 (docs/DIAGNOSTIC.md item 11).
+# cryptoki =0.12.1 is added with the signing code, which is not in this build.
 [dependencies]
 
 [lints]

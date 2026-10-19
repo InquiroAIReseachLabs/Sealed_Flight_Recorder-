@@ -10,9 +10,7 @@ Generated for this project in PX4 v1.17.0 SITL with the built-in SIH simulator. 
 | SHA-256 | `7bd1633b26acba457f67a575fa9ddace0535e0411c5fdbacbfad777e0eddd75c` |
 | Size | 9208891 bytes |
 
-Full procedure, topic counts, and event sequence: `docs/DIAGNOSTIC.md`, item 3.
-
-The script that drove the flight (paths are those of the generating machine):
+The script that drove the flight (the working directory of the generating machine is written `/path/to/work`):
 
 ```bash
 #!/bin/bash
@@ -21,10 +19,10 @@ The script that drove the flight (paths are those of the generating machine):
 # battery reported empty -> battery_warning EMERGENCY -> COM_LOW_BAT_ACT 3 = Land). Also one real in-flight param change
 # (COM_DISARM_LAND 2 -> 3 s) to show how PARAM_CHANGED_IN_FLIGHT appears. Fresh rootfs.
 set -u
-PX4_DIR=/tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/px4/PX4-Autopilot-v1.17.0
+PX4_DIR=/path/to/work/px4/PX4-Autopilot-v1.17.0
 BIN=$PX4_DIR/build/px4_sitl_default/bin
 ETC=$PX4_DIR/build/px4_sitl_default/etc
-OUT=/tmp/claude-0/-home-user/b7365ea0-3216-568f-9836-831840fbb145/scratchpad/sitl_logs/v1.17.0
+OUT=/path/to/work/sitl_logs/v1.17.0
 ROOTFS=${1:?rootfs}; SCENARIO=${2:?scenario}
 MODEL=sihsim_quadx
 rm -rf "$ROOTFS"; mkdir -p "$ROOTFS" "$OUT"; cd "$ROOTFS"
