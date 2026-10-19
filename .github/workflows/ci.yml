@@ -120,9 +120,13 @@ jobs:
           fi
           qemu-arm-static --version | head -1
       # Profile qemu-test (Cargo.toml): optimized, with overflow checks and debug assertions on;
-      # an unoptimized build under emulation was the slowest step of CI.
+      # an unoptimized build under emulation was the slowest step of CI. sfr-pkcs11-helper is left
+      # out: it loads a vendor PKCS#11 module with dlopen, which a static musl build cannot do, so
+      # it is the one dynamically linked program and is never built for musl (SPEC B1.2).
       - name: Full test suite on armv7 under QEMU (correctness only; no armv7 timing is gated)
-        run: cargo test --workspace --locked --profile qemu-test --target armv7-unknown-linux-musleabihf
+        run: >-
+          cargo test --workspace --exclude sfr-pkcs11-helper --locked --profile qemu-test
+          --target armv7-unknown-linux-musleabihf
 
   golden-oracle:
     name: golden files agree with the independent pyulog oracle
