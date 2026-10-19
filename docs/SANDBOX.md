@@ -90,7 +90,7 @@ When nothing was written: `{ sealed: false, exitCode: 3 or 4, message, text }`, 
 | `verified` | `true` for exit 0 |
 | `checked` | `record`, or `record and log` |
 | `headline` | `Integrity: VERIFIED (record)`, `Integrity: VERIFIED (record and log)`, or `Integrity: FAILED: <first mismatch>` |
-| `text` | exactly what `sfr verify` prints, with the record's file name in place of its path; for exit 4, what it prints on standard error |
+| `text` | exactly what `sfr verify` prints, with the record's file name in place of its path; for exit 4, what it prints on standard error. The page takes no report, so its `report` line says the report was not checked |
 | `message` | for exit 4, the reason; otherwise `null` |
 | `keyCustody` | the record's custody, or what a record that failed claims (`null` if unreadable) |
 | `keyFingerprint`, `cryptoCrates`, `sealedUtc`, `status`, `eventCount` | what a verified record says; `null` otherwise |

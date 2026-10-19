@@ -303,6 +303,12 @@ fn both_verify(dir: &Path, record: &str, log: Option<&str>) -> (Output, sfr_wasm
     let pubkey = read(dir, "sfr.pub");
     let log_bytes = log.map(|l| read(dir, l));
     let mut reader = log_bytes.as_deref();
+    // The CLI checks <record>.md beside the record when it exists; the sandbox is given it.
+    let report_name = format!("{record}.md");
+    let report_bytes = dir
+        .join(&report_name)
+        .is_file()
+        .then(|| read(dir, &report_name));
     let out = sfr_wasm::verify(VerifyRequest {
         record: Input {
             name: record,
@@ -316,6 +322,10 @@ fn both_verify(dir: &Path, record: &str, log: Option<&str>) -> (Output, sfr_wasm
             name,
             size: log_bytes.as_ref().map_or(0, |b| b.len() as u64),
             reader: r,
+        }),
+        report: report_bytes.as_deref().map(|bytes| Input {
+            name: &report_name,
+            bytes,
         }),
     })
     .unwrap();

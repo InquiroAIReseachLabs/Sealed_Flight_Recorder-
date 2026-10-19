@@ -1123,3 +1123,128 @@ fn verify_without_a_trusted_key_says_the_signer_is_not_checked() {
     }
     assert!(!out.contains("VERIFIED"), "{out}");
 }
+
+/// The report is bound to its record (SPEC B1.8): verify re-renders it from the verified record
+/// and requires the `.sfr.md` beside the record, or the one `--report` names, to be identical.
+/// Any edit to the report is an integrity failure naming the line; a missing report is said to
+/// be unchecked.
+#[test]
+fn an_edited_report_fails_verification_and_names_the_line() {
+    let dir = scratch();
+    let (key, public) = keygen(&dir);
+    let out = dir.join("out");
+    let (record, code) = seal(
+        "testdata/sitl/v1.17.0/vtol_transition.ulg",
+        "testdata/baselines/v1.17.0_vtol_transition.params",
+        &key,
+        &out,
+    );
+    assert_eq!(code, 0);
+    let report = format!("{record}.md");
+    let original = std::fs::read_to_string(&report).unwrap();
+    // The sibling report matches.
+    let o = sfr(&["verify", &record, "--pubkey", &public]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    assert!(
+        String::from_utf8_lossy(&o.stdout)
+            .contains(&format!("report    {report} matches the record\n")),
+        "{}",
+        text(&o)
+    );
+    // Edits to the report, each alone: a status, a rule result, a digest, a deleted line, an
+    // added line, a trailing byte.
+    let lines: Vec<&str> = original.split('\n').collect();
+    let status_line = lines
+        .iter()
+        .position(|l| l.contains("**Status: PASS**"))
+        .unwrap();
+    let edits: Vec<(&str, String, usize)> = vec![
+        (
+            "status",
+            original.replacen("**Status: PASS**", "**Status: FAIL**", 1),
+            status_line + 1,
+        ),
+        (
+            "rule result",
+            original.replacen("| R3 | PASS |", "| R3 | FAIL |", 1),
+            0,
+        ),
+        ("digest", original.replacen("sha256", "sha265", 1), 0),
+        (
+            "deleted line",
+            lines
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != status_line)
+                .map(|(_, l)| *l)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            status_line + 1,
+        ),
+        (
+            "added line",
+            format!("{original}Approved by the operator.\n"),
+            0,
+        ),
+        ("trailing byte", format!("{original} "), 0),
+    ];
+    for (what, edited, line) in edits {
+        assert_ne!(edited, original, "{what}: the edit changed nothing");
+        std::fs::write(&report, &edited).unwrap();
+        let o = sfr(&["verify", &record, "--pubkey", &public]);
+        assert_eq!(o.status.code(), Some(1), "{what}: {}", text(&o));
+        let shown = String::from_utf8_lossy(&o.stdout).to_string();
+        assert!(
+            shown.contains(&format!("Integrity: FAILED: report {report}: ")),
+            "{what}: {shown}"
+        );
+        if line > 0 {
+            assert!(shown.contains(&format!("line {line} ")), "{what}: {shown}");
+        }
+        assert!(!shown.contains("VERIFIED"), "{what}: {shown}");
+    }
+    std::fs::write(&report, &original).unwrap();
+    // --report names another file; a report of another record fails too.
+    let other = dir.join("other");
+    let (other_record, code) = seal(
+        "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+        "testdata/baselines/v1.17.0_mc_flight_1.params",
+        &key,
+        &other,
+    );
+    assert_eq!(code, 0);
+    let o = sfr(&[
+        "verify",
+        &record,
+        "--pubkey",
+        &public,
+        "--report",
+        &format!("{other_record}.md"),
+    ]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o));
+    assert!(
+        text(&o).contains("line 3 differs from the record"),
+        "{}",
+        text(&o)
+    );
+    let o = sfr(&[
+        "verify",
+        &record,
+        "--pubkey",
+        &public,
+        "--report",
+        "/nonexistent.sfr.md",
+    ]);
+    assert_eq!(o.status.code(), Some(4), "{}", text(&o));
+    // Without a report beside it the report is not checked, and verify says so.
+    std::fs::remove_file(&report).unwrap();
+    let o = sfr(&["verify", &record, "--pubkey", &public]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    assert!(
+        String::from_utf8_lossy(&o.stdout)
+            .contains("report    not checked (no report given or found beside the record)\n"),
+        "{}",
+        text(&o)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

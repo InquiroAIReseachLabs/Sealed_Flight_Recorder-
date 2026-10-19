@@ -219,6 +219,9 @@ pub struct VerifyRequest<'a> {
     pub public_key: Input<'a>,
     /// The log, for the deep check.
     pub log: Option<Stream<'a>>,
+    /// The report (`.sfr.md`), checked against the one the record renders (`sfr verify
+    /// --report`).
+    pub report: Option<Input<'a>>,
 }
 
 /// What `sfr verify` prints.
@@ -650,9 +653,23 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
     }
     let deep = capped.is_some();
     let log: Option<&mut dyn Read> = capped.as_mut().map(|c| c as &mut dyn Read);
-    match sfr_core::verify::verify(req.record.bytes, log, &crypto, &public, false) {
+    let outcome = sfr_core::verify::verify(req.record.bytes, log, &crypto, &public, false);
+    // A record that verified must also match its report, when one is given (as the CLI does).
+    let outcome = match (outcome, &req.report) {
+        (Ok(v), Some(report)) => match sfr_core::report::check(req.record.bytes, report.bytes) {
+            Ok(()) => Ok((v, Some(report.name))),
+            Err(e) => Err(VerifyError::Mismatch(sfr_core::verify::Mismatch {
+                first: format!("report {}: {e}", report.name),
+                also: Vec::new(),
+                custody: Some(v.custody),
+            })),
+        },
+        (Ok(v), None) => Ok((v, None)),
+        (Err(e), _) => Err(e),
+    };
+    match outcome {
         Err(VerifyError::Io(e)) => Err(fail(exit_code::USAGE, format!("log: {e}"))),
-        Ok(v) => {
+        Ok((v, report)) => {
             let headline = sfr_core::verify::integrity_line(&v);
             let mut t = String::new();
             if v.custody == Custody::FileEvaluation {
@@ -664,6 +681,7 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
                 &v,
                 TRUST_PUBKEY,
                 "declared",
+                &sfr_core::verify::report_line(report),
             ));
             Ok(VerifyOutput {
                 exit_code: exit_code::OK,

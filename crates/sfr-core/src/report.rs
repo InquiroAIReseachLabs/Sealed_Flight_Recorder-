@@ -179,6 +179,59 @@ fn item(out: &mut String, label: &str, value: &str) {
     out.push_str(&format!("- {label}: {value}\n"));
 }
 
+/// Checks a report against its record: the report must be, byte for byte, the one [`render`]
+/// gives from the record's bytes. On a difference, names the first line that differs and both
+/// versions of it. Call it only for a record whose signature has been verified.
+pub fn check(record_bytes: &[u8], report: &[u8]) -> Result<(), String> {
+    let value = crate::json::parse(record_bytes).map_err(|e| format!("record: {e}"))?;
+    let expected = render(&value).map_err(|e| format!("cannot render the record's report: {e}"))?;
+    if expected.as_bytes() == report {
+        return Ok(());
+    }
+    let found = String::from_utf8_lossy(report);
+    let short = |line: &str| {
+        let line = line.trim_end_matches('\r');
+        if line.chars().count() > 120 {
+            format!("{}...", line.chars().take(120).collect::<String>())
+        } else {
+            line.to_string()
+        }
+    };
+    let mut want = expected.split('\n');
+    let mut have = found.split('\n');
+    let mut n = 0usize;
+    loop {
+        n += 1;
+        match (want.next(), have.next()) {
+            (Some(w), Some(h)) if w == h => {}
+            (Some(w), Some(h)) => {
+                return Err(format!(
+                    "line {n} differs from the record: the record gives `{}`, the report has `{}`",
+                    short(w),
+                    short(h)
+                ));
+            }
+            (Some(w), None) => {
+                return Err(format!(
+                    "the report ends before line {n}; the record gives `{}` there",
+                    short(w)
+                ));
+            }
+            (None, Some(h)) => {
+                return Err(format!(
+                    "the report has a line {n} that the record does not give: `{}`",
+                    short(h)
+                ));
+            }
+            (None, None) => {
+                return Err(
+                    "the report differs from the record in its bytes, not its lines".into(),
+                );
+            }
+        }
+    }
+}
+
 /// The report of a sealed record (SPEC B1.8), from the record's parsed JSON alone.
 pub fn render(record: &Value) -> Result<String, ReportError> {
     let r = obj(record, "record")?;

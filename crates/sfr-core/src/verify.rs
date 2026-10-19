@@ -109,6 +109,15 @@ pub fn flight_rules_line(v: &Verified) -> String {
 pub const TRUST_PUBKEY: &str =
     "the public key given with --pubkey (trusted as far as its source is)";
 
+/// The `report` line of `sfr verify` for a record that verified: the report checked against it,
+/// or that none was given.
+pub fn report_line(checked: Option<&str>) -> String {
+    match checked {
+        Some(name) => format!("{name} matches the record"),
+        None => "not checked (no report given or found beside the record)".to_string(),
+    }
+}
+
 /// The `Integrity:` line of `sfr verify` given neither `--pubkey` nor `--trust-anchor`.
 pub const INTEGRITY_NOT_CHECKED: &str = "Integrity: NOT CHECKED (no trusted key given)";
 
@@ -120,9 +129,17 @@ pub const FLIGHT_RULES_UNKNOWN: &str = "Flight rules: UNKNOWN (the record failed
 /// `trust` says what the signature was checked against (the `trust` line), and `custody_note`
 /// qualifies the custody, which the sealer declares: `declared`, or what a certificate chain
 /// added to it.
-pub fn verified_text(record_path: &str, v: &Verified, trust: &str, custody_note: &str) -> String {
+///
+/// `report` is the `report` line: [`report_line`].
+pub fn verified_text(
+    record_path: &str,
+    v: &Verified,
+    trust: &str,
+    custody_note: &str,
+    report: &str,
+) -> String {
     format!(
-        "{}\n{}\nrecord    {record_path}\ntrust     {trust}\ncustody   {} ({custody_note})\nkey       {}\ncrypto    {} (crate versions)\nsealed    {} (stated by the sealer, not checked)\nevents    {}\n",
+        "{}\n{}\nrecord    {record_path}\nreport    {report}\ntrust     {trust}\ncustody   {} ({custody_note})\nkey       {}\ncrypto    {} (crate versions)\nsealed    {} (stated by the sealer, not checked)\nevents    {}\n",
         integrity_line(v),
         flight_rules_line(v),
         v.custody.as_str(),

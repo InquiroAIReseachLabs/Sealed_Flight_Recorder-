@@ -4,7 +4,7 @@ The signature binds the sealed record to the holder of the signing key at the mo
 
 ## What is signed
 
-Only the record, `<name>.sfr`, is signed: the Ed25519 signature covers its Merkle root, and the root covers every field of the record (the format is in [RECORD_FORMAT.md](RECORD_FORMAT.md)). The report `<name>.sfr.md` is a readable view that `seal` renders from the record; it has no signature and no digest of its own, and `sfr verify` never reads it. A report proves nothing by itself: verify its record.
+Only the record, `<name>.sfr`, is signed: the Ed25519 signature covers its Merkle root, and the root covers every field of the record (the format is in [RECORD_FORMAT.md](RECORD_FORMAT.md)). The report `<name>.sfr.md` is a readable view that `seal` renders from the record; it has no signature and no digest of its own. `sfr verify` binds it to the record: once the record verifies, it renders the report again from the record and requires the `.sfr.md` beside the record, or the one `--report` names, to be identical, byte for byte (rendering is deterministic and the same on every target). A report read without verifying its record proves nothing.
 
 ## What a seal proves
 
@@ -32,7 +32,7 @@ A record that `sfr verify` reports `Integrity: VERIFIED` proves that this record
 | A record with an unknown `schema_version` | refused, never guessed at | `unknown_schema_version_wrong_key_and_evaluation_custody_are_refused` |
 | A malleable signature or a weak public key | `ed25519-dalek` `verify_strict` | code only, `crates/sfr-core/src/crypto.rs`; no test in this repository covers either |
 | An evaluation key passed off as an operational one | a record sealed with a key file holds custody `file-evaluation`, and its report, `seal` and `verify` start with EVALUATION KEY; `verify --require-hardware-key` refuses declared `file-evaluation` custody | `the_in_browser_key_seals_an_evaluation_record_the_cli_verifies`, `every_golden_log_seals_byte_identically_twice_and_replays`, `unknown_schema_version_wrong_key_and_evaluation_custody_are_refused` |
-| Edit a report (`.sfr.md`) | nothing in the report: it is not signed. Verifying its record shows what was sealed | not tested: the report is outside the signature by design |
+| Edit a report (`.sfr.md`) | verify re-renders the report from the verified record and names the first line that differs; a report verify did not find (`report    not checked`) is not checked | `an_edited_report_fails_verification_and_names_the_line` (`crates/sfr/tests/seal_verify.rs`) |
 | Log text or a file name built to forge report content or a shell command | the report escapes every punctuation character of every value and quotes each file name in its `sfr verify` command | `hostile_log_text_and_file_names_give_a_literal_report_and_a_working_verify_command` |
 | A log built to exhaust memory or time | input limits, refused with exit 3, and fuzzing | [LIMITS.md](LIMITS.md) |
 | Edit the log between disarm and sealing | **not detected** | narrowed by sealing at once, below |

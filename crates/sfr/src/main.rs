@@ -23,7 +23,8 @@ use sfr_core::seal::{
 };
 use sfr_core::verify::{
     ClaimedSeal, INTEGRITY_NOT_CHECKED, MAX_RECORD_BYTES, Mismatch, TRUST_PUBKEY, VerifyError,
-    check_record_size, claimed_lines, claimed_seal, failed_text, verified_text, verify,
+    check_record_size, claimed_lines, claimed_seal, failed_text, report_line, verified_text,
+    verify,
 };
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -40,7 +41,8 @@ const USAGE: &str = "usage:
   sfr seal <flight.ulg> --rules <rules.toml> --baseline <baseline.params>
            (--key-uri pkcs11:... | --key-uri tpm-sealed:<dir> | --key <sfr.key> --evaluation-only | --dry-run)
            [--out <dir>] [--seal-time <RFC3339>] [--json]
-  sfr verify <record.sfr> --pubkey <sfr.pub> [--ulog <flight.ulg>] [--require-hardware-key] [--json]
+  sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> [--crl <crl>]...)
+             [--ulog <flight.ulg>] [--report <name.sfr.md>] [--require-hardware-key] [--json]
   sfr pubkey --key-uri (pkcs11:... | tpm-sealed:<dir>) [--json]
   sfr --version [--json]";
 
@@ -846,11 +848,25 @@ fn verify_cmd(
 ) -> Result<i32, Failure> {
     let a = Args::parse(
         args,
-        &["--pubkey", "--ulog", "--trust-anchor", "--crl"],
+        &["--pubkey", "--ulog", "--trust-anchor", "--crl", "--report"],
         &["--require-hardware-key", "--json"],
     )?;
     let record_path = a.one_positional("record")?.to_string();
     let json_out = a.flag("--json");
+    // The report to check: --report, or <name>.sfr.md beside <name>.sfr when it exists.
+    let report_path = match a.value("--report") {
+        Some(p) => {
+            if !Path::new(p).is_file() {
+                return Err(fail(
+                    exit_code::USAGE,
+                    format!("cannot read report {p}: not a file"),
+                ));
+            }
+            Some(p.to_string())
+        }
+        None => Some(format!("{record_path}.md"))
+            .filter(|p| record_path.ends_with(".sfr") && Path::new(p).is_file()),
+    };
     let crl_paths = a.values("--crl");
     let trust = match (a.value("--pubkey"), a.value("--trust-anchor")) {
         (Some(_), Some(_)) => {
@@ -962,9 +978,25 @@ fn verify_cmd(
         (Ok(v), Trust::PublicKey(_)) => Ok((v, None)),
         (Err(e), _) => Err(e),
     };
+    // The report must be, byte for byte, the one the verified record renders (SPEC B1.8).
+    let outcome = match (outcome, &report_path) {
+        (Ok((v, chain)), Some(path)) => {
+            let report = read_capped(path, "report", MAX_RECORD_BYTES as u64)?;
+            match sfr_core::report::check(&record, &report) {
+                Ok(()) => Ok((v, chain, Some(path.as_str()))),
+                Err(e) => Err(VerifyError::Mismatch(Mismatch {
+                    first: format!("report {path}: {e}"),
+                    also: Vec::new(),
+                    custody: Some(v.custody),
+                })),
+            }
+        }
+        (Ok((v, chain)), None) => Ok((v, chain, None)),
+        (Err(e), _) => Err(e),
+    };
     match outcome {
         Err(VerifyError::Io(e)) => Err(fail(exit_code::USAGE, format!("log: {e}"))),
-        Ok((v, chain)) => {
+        Ok((v, chain, report)) => {
             let (trust_line, custody_note) = match &chain {
                 None => (TRUST_PUBKEY.to_string(), "declared".to_string()),
                 Some(ok) => (
@@ -994,6 +1026,7 @@ fn verify_cmd(
                             ),
                         )
                         .field("record", Value::str(record_path.clone()))
+                        .field("report", Value::opt_str(report.map(str::to_string)))
                         .field("deep", Value::Bool(v.deep))
                         .field(
                             "trust",
@@ -1024,7 +1057,13 @@ fn verify_cmd(
                     t.push_str(EVALUATION_LINE);
                     t.push('\n');
                 }
-                t.push_str(&verified_text(&record_path, &v, &trust_line, &custody_note));
+                t.push_str(&verified_text(
+                    &record_path,
+                    &v,
+                    &trust_line,
+                    &custody_note,
+                    &report_line(report),
+                ));
                 t
             };
             write_out(stdout, &text)?;
