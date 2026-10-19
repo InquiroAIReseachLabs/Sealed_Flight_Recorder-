@@ -8,11 +8,11 @@ This is an evaluation release, provided without warranty, and in development: th
 
 `sfr seal` runs the rules R1 to R7 on a PX4 ULog file and writes a signed record (`.sfr`) and a plain report (`.sfr.md`). `sfr verify` checks the record, and with `--ulog` checks it against the log. A record that verifies proves that this record, signed by this key, matches these log bytes and these rule results.
 
-- **Only the record is signed.** The `.sfr` file is what the signature covers and what `sfr verify` checks. The `.sfr.md` report is a readable view generated from the record; it carries no signature of its own, so anyone can edit a copy of it. Trust what `sfr verify` says about the `.sfr`, not the report.
+- **Only the record is signed.** The `.sfr` file is what the signature covers and what `sfr verify` checks. The `.sfr.md` report is a readable view generated from the record; it carries no signature of its own. `sfr verify` binds it to the record instead: it renders the report again from the verified record and requires the `.sfr.md` beside the record (or the one `--report` names) to match it byte for byte, so an edited report fails verification and the line that differs is named. A report on its own, never checked against its record, proves nothing.
 - **The seal proves no change since sealing, not accuracy before it.** A record that verifies has not changed since it was sealed, and with `--ulog` neither has the log. It does not prove that the log was accurate or honest when it was sealed, that the vehicle did what the log says, or that nothing changed the log between the flight and the seal.
 - **Who signed needs the signer's public key.** The record names its signing key only by fingerprint. `sfr verify` checks the signature against the public key you give it with `--pubkey`, or against the key in the record's signer certificate when that certificate chains to a trust anchor you give it with `--trust-anchor` (with `--crl` for revocation). It tells you who signed only if you got that key or anchor through a channel you trust. A key that arrives with the record proves nothing about who signed it. Given neither, `sfr verify` checks nothing: it prints `Integrity: NOT CHECKED (no trusted key given)` and exits 4. Every verify prints the key fingerprint and the custody the record declares; custody is never proven, even by a certificate chain, which shows whom the key belongs to, not where it is kept.
 - **The seal time is self-asserted.** `sealed` is the sealing machine's clock, or the time given with `--seal-time`. It is signed, so it cannot change after sealing, but nothing checks that it was right.
-- **PX4 versions.** `sfr` is tested on logs from PX4 v1.14.4 and v1.17.0 (`testdata/sitl/`); v1.15 and v1.16 are decoded from the PX4 source's message definitions, but no log from them is in the tests. A log from a version outside v1.14 to v1.17, or with no version, is still accepted and sealed: `seal` prints a warning on standard error, the version-dependent names in its events are left empty, and no such log is tested.
+- **PX4 versions.** `sfr` is tested on logs from PX4 v1.14.4 and v1.17.0 (`testdata/sitl/`); v1.15 and v1.16 are decoded from the PX4 source's message definitions, but no log from them is in the tests. `seal` refuses a log from a version outside v1.14 to v1.17, or one whose version it cannot read, and writes nothing, unless given `--allow-untested-version`. With it, `seal` prints a warning, leaves the version-dependent names in the events empty, and records the flag in the signed record (`seal.allow_untested_version`, schema 2), and the report says so. No such log is tested.
 
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) gives the details and the attacks that are and are not detected.
 
@@ -122,6 +122,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    Integrity: VERIFIED (record and log)
    Flight rules: PASS
    record    examples/reports/vtol_transition.sfr
+   report    examples/reports/vtol_transition.sfr.md matches the record
    trust     the public key given with --pubkey (trusted as far as its source is)
    custody   file-evaluation (declared)
    key       sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f
@@ -245,7 +246,7 @@ CI runs every command on these pages that can run there and compares its output 
 
 ## The record and its report
 
-`sfr seal` writes the signed record `<name>.sfr` and, beside it, the report `<name>.sfr.md`: Markdown that GitHub and GitLab render, generated only from the record, with the `sfr verify` command that checks it. Only the record is signed: the report is a readable view of it, not evidence, and an edited report still looks like a report. To check one, verify its record with the signer's public key. `examples/reports/` holds the records and reports of four golden SITL flights (standard VTOL, GPS loss failsafe, quad tailsitter, and a multicopter with a sealed topic and an R7 failure), sealed with an evaluation key.
+`sfr seal` writes the signed record `<name>.sfr` and, beside it, the report `<name>.sfr.md`: Markdown that GitHub and GitLab render, generated only from the record, with the `sfr verify` command that checks it. Only the record is signed: the report is a readable view of it. `sfr verify` checks the report beside the record against the one the record renders and fails on any difference; a report read without verifying its record is not evidence. To check one, verify its record with the signer's public key. `examples/reports/` holds the records and reports of four golden SITL flights (standard VTOL, GPS loss failsafe, quad tailsitter, and a multicopter with a sealed topic and an R7 failure), sealed with an evaluation key.
 
 ## Release files
 

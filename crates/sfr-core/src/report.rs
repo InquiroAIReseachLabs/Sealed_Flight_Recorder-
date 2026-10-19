@@ -21,6 +21,10 @@ pub const EVALUATION_LINE: &str = "EVALUATION KEY: not for operational use";
 /// Report file extension, appended to the record's file stem (SPEC B1.8).
 pub const REPORT_EXTENSION: &str = "sfr.md";
 
+/// The report line of a record sealed with `--allow-untested-version` (schema 2).
+pub const UNTESTED_VERSION_LINE: &str = "**Untested PX4 version.** Sealed with `--allow-untested-version`: \
+sfr is tested on PX4 v1.14 to v1.17 logs only, and this log's version is outside them or could not be read.";
+
 /// Hex digits of a sealed topic digest shown in the report.
 pub const DIGEST_PREFIX_LEN: usize = 16;
 
@@ -179,6 +183,59 @@ fn item(out: &mut String, label: &str, value: &str) {
     out.push_str(&format!("- {label}: {value}\n"));
 }
 
+/// Checks a report against its record: the report must be, byte for byte, the one [`render`]
+/// gives from the record's bytes. On a difference, names the first line that differs and both
+/// versions of it. Call it only for a record whose signature has been verified.
+pub fn check(record_bytes: &[u8], report: &[u8]) -> Result<(), String> {
+    let value = crate::json::parse(record_bytes).map_err(|e| format!("record: {e}"))?;
+    let expected = render(&value).map_err(|e| format!("cannot render the record's report: {e}"))?;
+    if expected.as_bytes() == report {
+        return Ok(());
+    }
+    let found = String::from_utf8_lossy(report);
+    let short = |line: &str| {
+        let line = line.trim_end_matches('\r');
+        if line.chars().count() > 120 {
+            format!("{}...", line.chars().take(120).collect::<String>())
+        } else {
+            line.to_string()
+        }
+    };
+    let mut want = expected.split('\n');
+    let mut have = found.split('\n');
+    let mut n = 0usize;
+    loop {
+        n += 1;
+        match (want.next(), have.next()) {
+            (Some(w), Some(h)) if w == h => {}
+            (Some(w), Some(h)) => {
+                return Err(format!(
+                    "line {n} differs from the record: the record gives `{}`, the report has `{}`",
+                    short(w),
+                    short(h)
+                ));
+            }
+            (Some(w), None) => {
+                return Err(format!(
+                    "the report ends before line {n}; the record gives `{}` there",
+                    short(w)
+                ));
+            }
+            (None, Some(h)) => {
+                return Err(format!(
+                    "the report has a line {n} that the record does not give: `{}`",
+                    short(h)
+                ));
+            }
+            (None, None) => {
+                return Err(
+                    "the report differs from the record in its bytes, not its lines".into(),
+                );
+            }
+        }
+    }
+}
+
 /// The report of a sealed record (SPEC B1.8), from the record's parsed JSON alone.
 pub fn render(record: &Value) -> Result<String, ReportError> {
     let r = obj(record, "record")?;
@@ -213,6 +270,11 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         escape(&s(tool, "version", "tool")?),
         escape(&record_file_name(&file_name)),
     ));
+    // Schema 2: a log sealed although its PX4 version is one sfr is not tested on.
+    if seal.get("allow_untested_version") == Some(&Value::Bool(true)) {
+        out.push_str(UNTESTED_VERSION_LINE);
+        out.push_str("\n\n");
+    }
 
     // Rules.
     out.push_str("## Rules\n\n");

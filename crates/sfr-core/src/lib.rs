@@ -41,9 +41,18 @@ pub const TOOL_NAME: &str = "sfr";
 /// Record file extension (SPEC B1.1).
 pub const RECORD_EXTENSION: &str = "sfr";
 
-/// Record schema version. Starts at 1 (SPEC B1.7). A verifier must reject any
-/// version it does not know and must never guess.
-pub const SCHEMA_VERSION: u32 = 1;
+/// Record schema version `seal` writes (SPEC B1.7). Schema 1 was the first; schema 2 adds
+/// `seal.allow_untested_version`. A verifier must reject any version it does not know and must
+/// never guess; this one knows [`KNOWN_SCHEMA_VERSIONS`].
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// The schema versions `verify` accepts.
+pub const KNOWN_SCHEMA_VERSIONS: [u32; 2] = [1, 2];
+
+/// The PX4 versions `sfr` is tested on, as (major, minor) series, inclusive: v1.14 to v1.17.
+/// `seal` refuses a log outside them, or one whose version it cannot read, unless given
+/// `--allow-untested-version` (SPEC B1.5).
+pub const TESTED_PX4_SERIES: ((u8, u8), (u8, u8)) = ((1, 14), (1, 17));
 
 /// Domain-separation prefix of the signed payload (SPEC B1.7).
 pub const SIGNED_PAYLOAD_PREFIX: &[u8] = b"SFR-RECORD-V1";
@@ -73,8 +82,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_version_starts_at_one() {
-        assert_eq!(SCHEMA_VERSION, 1, "SPEC B1.7: schema_version starts at 1");
+    fn schema_version_is_two_and_one_still_verifies() {
+        assert_eq!(
+            SCHEMA_VERSION, 2,
+            "SPEC B1.7: schema 2 adds seal.allow_untested_version"
+        );
+        assert_eq!(KNOWN_SCHEMA_VERSIONS, [1, 2]);
     }
 
     #[test]

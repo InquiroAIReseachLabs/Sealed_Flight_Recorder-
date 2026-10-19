@@ -119,6 +119,9 @@ pub struct SealRequest<'a> {
     pub key: Key<'a>,
     /// RFC 3339 seal time; the page gives the current time when the person sets none.
     pub seal_time: &'a str,
+    /// `--allow-untested-version`: seal a log whose PX4 version sfr is not tested on, and say so
+    /// in the record and report.
+    pub allow_untested_version: bool,
 }
 
 /// What `sfr seal` writes and prints.
@@ -137,8 +140,8 @@ pub struct SealOutput {
     pub report_name: String,
     /// What `sfr seal` prints on standard output, with the file names in place of paths.
     pub text: String,
-    /// What `sfr seal` prints on standard error besides a failure: notes, such as a firmware
-    /// outside the supported range.
+    /// What `sfr seal` prints on standard error besides a failure: warnings, such as a firmware
+    /// sfr is not tested on, sealed under `allow_untested_version`.
     pub notes: Vec<String>,
     /// PASS or FAIL.
     pub status: String,
@@ -219,6 +222,9 @@ pub struct VerifyRequest<'a> {
     pub public_key: Input<'a>,
     /// The log, for the deep check.
     pub log: Option<Stream<'a>>,
+    /// The report (`.sfr.md`), checked against the one the record renders (`sfr verify
+    /// --report`).
+    pub report: Option<Input<'a>>,
 }
 
 /// What `sfr verify` prints.
@@ -532,27 +538,21 @@ pub fn seal(req: SealRequest<'_>) -> Result<SealOutput, Failure> {
         })?;
     let eval = evaluate(&ing, &rules, &baseline);
     let mut notes = Vec::new();
-    if ing
-        .identity
-        .firmware
-        .series()
-        .is_none_or(|s| !((1, 14)..=(1, 17)).contains(&s))
-    {
-        notes.push(format!(
-            "sfr: note: log {log}: firmware {} is outside the supported range PX4 v1.14 to v1.17; \
-             version-dependent names are null",
-            ing.identity
-                .firmware
-                .version
-                .as_deref()
-                .unwrap_or("unknown")
-        ));
+    if !sfr_core::events::tested_firmware(&ing.identity.firmware) {
+        let (refusal, warning) =
+            sfr_core::seal::untested_version_messages(log, &ing.identity.firmware);
+        if !req.allow_untested_version {
+            return Err(fail(exit_code::USAGE, refusal));
+        }
+        notes.push(warning);
     }
 
     let params = SealParams {
         time_utc,
         signer_certificate: None,
         certificate_chain: Vec::new(),
+        allow_untested_version: req.allow_untested_version
+            && !sfr_core::events::tested_firmware(&ing.identity.firmware),
     };
     let sealed = sfr_core::seal::seal(&ing, &eval, &rules, &baseline, &params, &crypto, &key)
         .map_err(|e| fail(exit_code::USAGE, e.to_string()))?;
@@ -650,9 +650,23 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
     }
     let deep = capped.is_some();
     let log: Option<&mut dyn Read> = capped.as_mut().map(|c| c as &mut dyn Read);
-    match sfr_core::verify::verify(req.record.bytes, log, &crypto, &public, false) {
+    let outcome = sfr_core::verify::verify(req.record.bytes, log, &crypto, &public, false);
+    // A record that verified must also match its report, when one is given (as the CLI does).
+    let outcome = match (outcome, &req.report) {
+        (Ok(v), Some(report)) => match sfr_core::report::check(req.record.bytes, report.bytes) {
+            Ok(()) => Ok((v, Some(report.name))),
+            Err(e) => Err(VerifyError::Mismatch(sfr_core::verify::Mismatch {
+                first: format!("report {}: {e}", report.name),
+                also: Vec::new(),
+                custody: Some(v.custody),
+            })),
+        },
+        (Ok(v), None) => Ok((v, None)),
+        (Err(e), _) => Err(e),
+    };
+    match outcome {
         Err(VerifyError::Io(e)) => Err(fail(exit_code::USAGE, format!("log: {e}"))),
-        Ok(v) => {
+        Ok((v, report)) => {
             let headline = sfr_core::verify::integrity_line(&v);
             let mut t = String::new();
             if v.custody == Custody::FileEvaluation {
@@ -664,6 +678,7 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
                 &v,
                 TRUST_PUBKEY,
                 "declared",
+                &sfr_core::verify::report_line(report),
             ));
             Ok(VerifyOutput {
                 exit_code: exit_code::OK,
@@ -761,6 +776,7 @@ mod tests {
                 baseline: None,
                 key: Key::Seed(&seed),
                 seal_time: "2026-10-18T15:00:00Z",
+                allow_untested_version: false,
             })
         };
         // The size the browser reports: refused before a byte is read.

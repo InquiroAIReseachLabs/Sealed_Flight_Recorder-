@@ -37,7 +37,7 @@ case "${1:-}" in
   expected)
     logs | while read -r name log; do
       set +e
-      "$SFR" seal "$log" --rules "$(rules_for "$name")" --baseline "testdata/baselines/$name.params" --dry-run --json \
+      "$SFR" seal "$log" --rules "$(rules_for "$name")" --baseline "testdata/baselines/$name.params" --dry-run --json $(golden_flags_for "$name") \
         > "testdata/expected/$name.json"
       code=$?
       set -e

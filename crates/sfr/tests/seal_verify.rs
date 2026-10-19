@@ -73,7 +73,7 @@ fn seal(log: &str, baseline: &str, key: &str, out: &Path) -> (String, i32) {
 
 /// [`seal`] with a given rules file.
 fn seal_with(log: &str, rules: &str, baseline: &str, key: &str, out: &Path) -> (String, i32) {
-    let o = sfr(&[
+    let mut args = vec![
         "seal",
         log,
         "--rules",
@@ -87,7 +87,12 @@ fn seal_with(log: &str, rules: &str, baseline: &str, key: &str, out: &Path) -> (
         out.to_str().unwrap(),
         "--seal-time",
         SEAL_TIME,
-    ]);
+    ];
+    // The pyulog sample's PX4 version cannot be read; sfr seals it only when told to.
+    if log == "testdata/pyulog/sample.ulg" {
+        args.push("--allow-untested-version");
+    }
+    let o = sfr(&args);
     let stem = Path::new(log).file_stem().unwrap().to_str().unwrap();
     let path = out.join(format!("{stem}.sfr"));
     assert!(path.exists(), "record written: {}", text(&o));
@@ -954,13 +959,24 @@ fn unknown_schema_version_wrong_key_and_evaluation_custody_are_refused() {
         &dir,
     );
     let rec = std::fs::read_to_string(&record).unwrap();
-    let v2 = rec.replacen("\"schema_version\":1", "\"schema_version\":2", 1);
-    let bad = dir.join("v2.sfr");
-    std::fs::write(&bad, v2).unwrap();
+    let v3 = rec.replacen("\"schema_version\":2", "\"schema_version\":3", 1);
+    let bad = dir.join("v3.sfr");
+    std::fs::write(&bad, v3).unwrap();
     let o = sfr(&["verify", bad.to_str().unwrap(), "--pubkey", &public]);
     assert_eq!(o.status.code(), Some(1));
     assert!(
-        text(&o).contains("unknown schema_version 2; this verifier knows only 1"),
+        text(&o).contains("unknown schema_version 3; this verifier knows schema 1 and 2"),
+        "{}",
+        text(&o)
+    );
+    // A schema 2 record relabelled schema 1 keeps a field schema 1 does not have: refused, and
+    // its signature (over the schema version) no longer verifies either.
+    let v1 = rec.replacen("\"schema_version\":2", "\"schema_version\":1", 1);
+    std::fs::write(&bad, v1).unwrap();
+    let o = sfr(&["verify", bad.to_str().unwrap(), "--pubkey", &public]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        text(&o).contains("`seal.allow_untested_version` is not a schema 1 field"),
         "{}",
         text(&o)
     );
@@ -1122,4 +1138,243 @@ fn verify_without_a_trusted_key_says_the_signer_is_not_checked() {
         assert!(out.contains(part), "{part} in {out}");
     }
     assert!(!out.contains("VERIFIED"), "{out}");
+}
+
+/// The report is bound to its record (SPEC B1.8): verify re-renders it from the verified record
+/// and requires the `.sfr.md` beside the record, or the one `--report` names, to be identical.
+/// Any edit to the report is an integrity failure naming the line; a missing report is said to
+/// be unchecked.
+#[test]
+fn an_edited_report_fails_verification_and_names_the_line() {
+    let dir = scratch();
+    let (key, public) = keygen(&dir);
+    let out = dir.join("out");
+    let (record, code) = seal(
+        "testdata/sitl/v1.17.0/vtol_transition.ulg",
+        "testdata/baselines/v1.17.0_vtol_transition.params",
+        &key,
+        &out,
+    );
+    assert_eq!(code, 0);
+    let report = format!("{record}.md");
+    let original = std::fs::read_to_string(&report).unwrap();
+    // The sibling report matches.
+    let o = sfr(&["verify", &record, "--pubkey", &public]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    assert!(
+        String::from_utf8_lossy(&o.stdout)
+            .contains(&format!("report    {report} matches the record\n")),
+        "{}",
+        text(&o)
+    );
+    // Edits to the report, each alone: a status, a rule result, a digest, a deleted line, an
+    // added line, a trailing byte.
+    let lines: Vec<&str> = original.split('\n').collect();
+    let status_line = lines
+        .iter()
+        .position(|l| l.contains("**Status: PASS**"))
+        .unwrap();
+    let edits: Vec<(&str, String, usize)> = vec![
+        (
+            "status",
+            original.replacen("**Status: PASS**", "**Status: FAIL**", 1),
+            status_line + 1,
+        ),
+        (
+            "rule result",
+            original.replacen("| R3 | PASS |", "| R3 | FAIL |", 1),
+            0,
+        ),
+        ("digest", original.replacen("sha256", "sha265", 1), 0),
+        (
+            "deleted line",
+            lines
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != status_line)
+                .map(|(_, l)| *l)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            status_line + 1,
+        ),
+        (
+            "added line",
+            format!("{original}Approved by the operator.\n"),
+            0,
+        ),
+        ("trailing byte", format!("{original} "), 0),
+    ];
+    for (what, edited, line) in edits {
+        assert_ne!(edited, original, "{what}: the edit changed nothing");
+        std::fs::write(&report, &edited).unwrap();
+        let o = sfr(&["verify", &record, "--pubkey", &public]);
+        assert_eq!(o.status.code(), Some(1), "{what}: {}", text(&o));
+        let shown = String::from_utf8_lossy(&o.stdout).to_string();
+        assert!(
+            shown.contains(&format!("Integrity: FAILED: report {report}: ")),
+            "{what}: {shown}"
+        );
+        if line > 0 {
+            assert!(shown.contains(&format!("line {line} ")), "{what}: {shown}");
+        }
+        assert!(!shown.contains("VERIFIED"), "{what}: {shown}");
+    }
+    std::fs::write(&report, &original).unwrap();
+    // --report names another file; a report of another record fails too.
+    let other = dir.join("other");
+    let (other_record, code) = seal(
+        "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+        "testdata/baselines/v1.17.0_mc_flight_1.params",
+        &key,
+        &other,
+    );
+    assert_eq!(code, 0);
+    let o = sfr(&[
+        "verify",
+        &record,
+        "--pubkey",
+        &public,
+        "--report",
+        &format!("{other_record}.md"),
+    ]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o));
+    assert!(
+        text(&o).contains("line 3 differs from the record"),
+        "{}",
+        text(&o)
+    );
+    let o = sfr(&[
+        "verify",
+        &record,
+        "--pubkey",
+        &public,
+        "--report",
+        "/nonexistent.sfr.md",
+    ]);
+    assert_eq!(o.status.code(), Some(4), "{}", text(&o));
+    // Without a report beside it the report is not checked, and verify says so.
+    std::fs::remove_file(&report).unwrap();
+    let o = sfr(&["verify", &record, "--pubkey", &public]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    assert!(
+        String::from_utf8_lossy(&o.stdout)
+            .contains("report    not checked (no report given or found beside the record)\n"),
+        "{}",
+        text(&o)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// SPEC B1.5: `seal` refuses a log whose PX4 version is outside v1.14 to v1.17, or cannot be
+/// read, unless given `--allow-untested-version`; then the signed record (schema 2,
+/// `seal.allow_untested_version`) and its report say so. A tested version records false, flag
+/// or no flag. Schema 1 records still verify.
+#[test]
+fn an_untested_px4_version_is_refused_unless_allowed_and_then_recorded() {
+    let dir = scratch();
+    let (key, public) = keygen(&dir.join("k"));
+    let out = dir.join("out");
+    let sample = "testdata/pyulog/sample.ulg";
+    let base = [
+        "seal",
+        sample,
+        "--rules",
+        RULES,
+        "--baseline",
+        "testdata/baselines/pyulog_sample.params",
+    ];
+    for extra in [
+        &["--dry-run"][..],
+        &[
+            "--key",
+            &key,
+            "--evaluation-only",
+            "--out",
+            out.to_str().unwrap(),
+        ][..],
+    ] {
+        let o = sfr(&[&base[..], extra].concat());
+        assert_eq!(o.status.code(), Some(4), "{}", text(&o));
+        assert!(
+            text(&o).contains("sfr is tested on PX4 v1.14 to v1.17 only; nothing written")
+                && text(&o).contains("--allow-untested-version"),
+            "{}",
+            text(&o)
+        );
+        assert!(!out.exists(), "nothing written");
+    }
+    let o = sfr(&[
+        &base[..],
+        &[
+            "--key",
+            &key,
+            "--evaluation-only",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+        &["--allow-untested-version"],
+    ]
+    .concat());
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o));
+    assert!(text(&o).contains("sfr: warning: "), "{}", text(&o));
+    let record = out.join("sample.sfr");
+    let bytes = std::fs::read_to_string(&record).unwrap();
+    assert!(
+        bytes.contains("\"allow_untested_version\":true"),
+        "flag in the record"
+    );
+    assert!(bytes.contains("\"schema_version\":2"), "schema 2");
+    let report = std::fs::read_to_string(out.join("sample.sfr.md")).unwrap();
+    assert!(
+        report.contains(sfr_core::report::UNTESTED_VERSION_LINE),
+        "{report}"
+    );
+    let v = sfr(&["verify", record.to_str().unwrap(), "--pubkey", &public]);
+    assert_eq!(v.status.code(), Some(0), "{}", text(&v));
+    // The flag is signed: turning it off breaks the record.
+    let off = dir.join("off.sfr");
+    std::fs::write(
+        &off,
+        bytes.replace(
+            "\"allow_untested_version\":true",
+            "\"allow_untested_version\":false",
+        ),
+    )
+    .unwrap();
+    let v = sfr(&["verify", off.to_str().unwrap(), "--pubkey", &public]);
+    assert_eq!(v.status.code(), Some(1), "{}", text(&v));
+    // A tested version: the flag changes nothing, and the record says false.
+    let tested = dir.join("tested");
+    let o = sfr(&[
+        "seal",
+        "testdata/sitl/v1.14.4/mc_flight.ulg",
+        "--rules",
+        RULES,
+        "--baseline",
+        "testdata/baselines/v1.14.4_mc_flight.params",
+        "--key",
+        &key,
+        "--evaluation-only",
+        "--out",
+        tested.to_str().unwrap(),
+        "--allow-untested-version",
+    ]);
+    assert!(o.status.code().unwrap() <= 2, "{}", text(&o));
+    let bytes = std::fs::read_to_string(tested.join("mc_flight.sfr")).unwrap();
+    assert!(bytes.contains("\"allow_untested_version\":false"));
+    assert!(
+        !std::fs::read_to_string(tested.join("mc_flight.sfr.md"))
+            .unwrap()
+            .contains("Untested PX4 version")
+    );
+    // A schema 1 record (sealed before schema 2) still verifies.
+    let v = sfr(&[
+        "verify",
+        "fuzz/seeds/sfr_verify/sitl_v1.17.0_failsafe_gps_loss_shrunk.sfr",
+        "--pubkey",
+        "fuzz/seeds/sfr_verify_key.pub",
+    ]);
+    assert_eq!(v.status.code(), Some(0), "{}", text(&v));
+    assert!(text(&v).contains("Integrity: VERIFIED"), "{}", text(&v));
+    std::fs::remove_dir_all(dir).unwrap();
 }

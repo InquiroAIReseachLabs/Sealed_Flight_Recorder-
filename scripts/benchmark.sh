@@ -159,7 +159,7 @@ while read -r name log rules baseline; do
     mkdir -p "$out"
     rc=0 start="$(now_us)"
     /usr/bin/time -o "$out.time" -f %M "$sfr" seal "$log" --rules "$rules" --baseline "$baseline" \
-      --key "$work/key/sfr.key" --evaluation-only --seal-time 2026-10-18T15:00:00Z --out "$out" \
+      --key "$work/key/sfr.key" --evaluation-only --seal-time 2026-10-18T15:00:00Z --out "$out" $(golden_flags_for "$name") \
       > /dev/null 2> "$out.err" || rc=$?
     end="$(now_us)"
     # A failing rule exits 1 or 2 and still writes the record; 3 and 4 are errors.

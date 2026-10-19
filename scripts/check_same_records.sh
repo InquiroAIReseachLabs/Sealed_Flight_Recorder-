@@ -16,6 +16,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 a="$1" b="$2" label="${3:+, $3}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+# shellcheck source=scripts/testdata/golden_logs.sh
+. scripts/testdata/golden_logs.sh
 
 "$a" keygen --evaluation-only --out "$work/key" > /dev/null
 same=0 total=0 status=0
@@ -30,7 +32,7 @@ while read -r name log; do
     [ -f "testdata/rules/$name.toml" ] && rules="testdata/rules/$name.toml"
     "$bin" seal "$log" --rules "$rules" --baseline "testdata/baselines/$name.params" \
       --key "$work/key/sfr.key" --evaluation-only --seal-time 2026-10-18T15:00:00Z \
-      --out "$work/$side/$name" > "$work/$side/$name.out" 2>&1 || rc=$?
+      --out "$work/$side/$name" $(golden_flags_for "$name") > "$work/$side/$name.out" 2>&1 || rc=$?
     if [ "$rc" -gt 2 ]; then
       echo "  $name: $bin exited $rc"; cat "$work/$side/$name.out"; status=1
     fi

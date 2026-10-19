@@ -1,0 +1,4 @@
+# Records and reports are compared byte for byte (sfr verify checks a report against the one its
+# record renders), so git must never change their line endings.
+*.sfr -text
+*.sfr.md -text

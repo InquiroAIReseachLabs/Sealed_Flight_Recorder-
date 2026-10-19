@@ -182,6 +182,8 @@ pub fn seal(
         }),
         key,
         seal_time,
+        // The page seals only the versions sfr is tested on.
+        allow_untested_version: false,
     };
     match crate::seal(request) {
         Ok(s) => Outcome {
@@ -231,6 +233,8 @@ pub fn verify(
             size: byte_count(log_size),
             reader: r,
         }),
+        // The page does not take a report; its verify says the report was not checked.
+        report: None,
     };
     match crate::verify(request) {
         Ok(v) => verify_json(&v),

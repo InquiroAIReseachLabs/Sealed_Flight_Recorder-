@@ -238,6 +238,11 @@ pub fn check(record: &Value, md: &str) {
         esc(&format!("{stem}.sfr"))
     ));
     l.expect("");
+    // Schema 2: the untested-version line exactly when the record says the flag was given.
+    if seal.get("allow_untested_version") == Some(&Value::Bool(true)) {
+        l.expect(sfr_core::report::UNTESTED_VERSION_LINE);
+        l.expect("");
+    }
 
     // Rules: one row per result, in order; then the findings of each failed rule.
     l.expect("## Rules");

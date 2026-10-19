@@ -23,7 +23,8 @@ use sfr_core::seal::{
 };
 use sfr_core::verify::{
     ClaimedSeal, INTEGRITY_NOT_CHECKED, MAX_RECORD_BYTES, Mismatch, TRUST_PUBKEY, VerifyError,
-    check_record_size, claimed_lines, claimed_seal, failed_text, verified_text, verify,
+    check_record_size, claimed_lines, claimed_seal, failed_text, report_line, verified_text,
+    verify,
 };
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -39,8 +40,9 @@ const USAGE: &str = "usage:
   sfr keygen --tpm-sealed --out <dir> [--tpm-parent <handle>] [--tpm-pcrs <bank:list>] [--json]
   sfr seal <flight.ulg> --rules <rules.toml> --baseline <baseline.params>
            (--key-uri pkcs11:... | --key-uri tpm-sealed:<dir> | --key <sfr.key> --evaluation-only | --dry-run)
-           [--out <dir>] [--seal-time <RFC3339>] [--json]
-  sfr verify <record.sfr> --pubkey <sfr.pub> [--ulog <flight.ulg>] [--require-hardware-key] [--json]
+           [--out <dir>] [--seal-time <RFC3339>] [--allow-untested-version] [--json]
+  sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> [--crl <crl>]...)
+             [--ulog <flight.ulg>] [--report <name.sfr.md>] [--require-hardware-key] [--json]
   sfr pubkey --key-uri (pkcs11:... | tpm-sealed:<dir>) [--json]
   sfr --version [--json]";
 
@@ -536,7 +538,12 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             "--out",
             "--seal-time",
         ],
-        &["--dry-run", "--json", "--evaluation-only"],
+        &[
+            "--dry-run",
+            "--json",
+            "--evaluation-only",
+            "--allow-untested-version",
+        ],
     )?;
     let log = a.one_positional("log file")?.to_string();
     let rules_path = a
@@ -664,23 +671,18 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             }
         })?;
     let eval = evaluate(&ing, &rules, &baseline);
-    let mut stderr = io::stderr().lock();
-    if ing
-        .identity
-        .firmware
-        .series()
-        .is_none_or(|s| !((1, 14)..=(1, 17)).contains(&s))
-    {
-        let _ = writeln!(
-            stderr,
-            "sfr: note: log {log}: firmware {} is outside the supported range PX4 v1.14 to v1.17; \
-             version-dependent names are null",
-            ing.identity
-                .firmware
-                .version
-                .as_deref()
-                .unwrap_or("unknown")
-        );
+    // seal.allow_untested_version is true only for a log sealed because of the flag.
+    let untested = !sfr_core::events::tested_firmware(&ing.identity.firmware);
+    let allow_untested = a.flag("--allow-untested-version") && untested;
+    if untested {
+        let (refusal, warning) =
+            sfr_core::seal::untested_version_messages(&log, &ing.identity.firmware);
+        if !a.flag("--allow-untested-version") {
+            // SPEC B1.5: sfr is tested on PX4 v1.14 to v1.17 only; anything else needs consent,
+            // and the record says it was given.
+            return Err(fail(exit_code::USAGE, refusal));
+        }
+        let _ = writeln!(io::stderr().lock(), "{warning}");
     }
 
     let Some(key) = key else {
@@ -718,6 +720,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         time_utc,
         signer_certificate,
         certificate_chain,
+        allow_untested_version: allow_untested,
     };
     let sealed = seal(
         &ing,
@@ -846,11 +849,25 @@ fn verify_cmd(
 ) -> Result<i32, Failure> {
     let a = Args::parse(
         args,
-        &["--pubkey", "--ulog", "--trust-anchor", "--crl"],
+        &["--pubkey", "--ulog", "--trust-anchor", "--crl", "--report"],
         &["--require-hardware-key", "--json"],
     )?;
     let record_path = a.one_positional("record")?.to_string();
     let json_out = a.flag("--json");
+    // The report to check: --report, or <name>.sfr.md beside <name>.sfr when it exists.
+    let report_path = match a.value("--report") {
+        Some(p) => {
+            if !Path::new(p).is_file() {
+                return Err(fail(
+                    exit_code::USAGE,
+                    format!("cannot read report {p}: not a file"),
+                ));
+            }
+            Some(p.to_string())
+        }
+        None => Some(format!("{record_path}.md"))
+            .filter(|p| record_path.ends_with(".sfr") && Path::new(p).is_file()),
+    };
     let crl_paths = a.values("--crl");
     let trust = match (a.value("--pubkey"), a.value("--trust-anchor")) {
         (Some(_), Some(_)) => {
@@ -962,9 +979,25 @@ fn verify_cmd(
         (Ok(v), Trust::PublicKey(_)) => Ok((v, None)),
         (Err(e), _) => Err(e),
     };
+    // The report must be, byte for byte, the one the verified record renders (SPEC B1.8).
+    let outcome = match (outcome, &report_path) {
+        (Ok((v, chain)), Some(path)) => {
+            let report = read_capped(path, "report", MAX_RECORD_BYTES as u64)?;
+            match sfr_core::report::check(&record, &report) {
+                Ok(()) => Ok((v, chain, Some(path.as_str()))),
+                Err(e) => Err(VerifyError::Mismatch(Mismatch {
+                    first: format!("report {path}: {e}"),
+                    also: Vec::new(),
+                    custody: Some(v.custody),
+                })),
+            }
+        }
+        (Ok((v, chain)), None) => Ok((v, chain, None)),
+        (Err(e), _) => Err(e),
+    };
     match outcome {
         Err(VerifyError::Io(e)) => Err(fail(exit_code::USAGE, format!("log: {e}"))),
-        Ok((v, chain)) => {
+        Ok((v, chain, report)) => {
             let (trust_line, custody_note) = match &chain {
                 None => (TRUST_PUBKEY.to_string(), "declared".to_string()),
                 Some(ok) => (
@@ -994,6 +1027,7 @@ fn verify_cmd(
                             ),
                         )
                         .field("record", Value::str(record_path.clone()))
+                        .field("report", Value::opt_str(report.map(str::to_string)))
                         .field("deep", Value::Bool(v.deep))
                         .field(
                             "trust",
@@ -1024,7 +1058,13 @@ fn verify_cmd(
                     t.push_str(EVALUATION_LINE);
                     t.push('\n');
                 }
-                t.push_str(&verified_text(&record_path, &v, &trust_line, &custody_note));
+                t.push_str(&verified_text(
+                    &record_path,
+                    &v,
+                    &trust_line,
+                    &custody_note,
+                    &report_line(report),
+                ));
                 t
             };
             write_out(stdout, &text)?;
