@@ -2,7 +2,7 @@
 
 `scripts/benchmark.sh` measures a built `sfr` on the machine it runs on (SPEC B1.10 Performance and Peak memory): for every golden log and for logs of 10, 50 and 100 MB, the median seal wall time, the median wall time of a standalone `sfr verify` of the record, and the largest maximum resident set size of seal. It builds nothing, so it runs from the release tarballs on a machine with no compiler, no Rust, and no Python.
 
-It needs bash 5 or later, GNU time at `/usr/bin/time` (Debian and Ubuntu: `sudo apt-get install time`), and `awk`, `cat`, `cp`, `cut`, `find`, `getconf`, `head`, `mkdir`, `mktemp`, `od`, `sed`, `sha256sum`, `sort`, `tail`, `tr`, `uname`, `wc` (coreutils, findutils, sed, awk, libc). It checks for each at start, and a missing one stops it with exit 2, as does a binary it does not recognize as x86_64, aarch64 or armv7.
+It needs bash 5 or later, GNU time at `/usr/bin/time` (Debian and Ubuntu: `sudo apt-get install time`), and `awk`, `basename`, `cat`, `cp`, `cut`, `dirname`, `find`, `getconf`, `head`, `mkdir`, `mktemp`, `od`, `rm`, `sed`, `sha256sum`, `sort`, `tail`, `tr`, `uname`, `wc` (coreutils, findutils, sed, awk, libc). It checks for each at start, and a missing one stops it with exit 2, as does a binary it does not recognize as x86_64, aarch64 or armv7.
 
 ## Run it on another machine (for example real aarch64 hardware)
 

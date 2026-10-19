@@ -12,10 +12,10 @@
 #      with its sealed and found values
 #   f. print the one-line command that seals the evaluator's own logs
 #
-# POSIX sh with busybox tools (sh, awk, cp, date, dd, mktemp, od, sed, strings, tr), so it runs in the demo
-# image (scripts/build_demo_image.sh) as well as on a Linux machine. Exits 1 if any step does not
-# give the expected result. The files come from the directory above this script (testdata/,
-# examples/); sfr is $SFR, else bin/sfr there, else sfr on PATH.
+# POSIX sh with busybox tools (sh, awk, cp, date, dd, dirname, mktemp, od, rm, sed, strings, tr),
+# so it runs in the demo image (scripts/build_demo_image.sh) as well as on a Linux machine. Exits 1
+# if any step does not give the expected result. The files come from the directory above this
+# script (testdata/, examples/); sfr is $SFR, else bin/sfr there, else sfr on PATH.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
