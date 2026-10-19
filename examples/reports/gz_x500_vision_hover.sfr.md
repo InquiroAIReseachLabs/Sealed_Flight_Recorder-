@@ -76,7 +76,7 @@ These are reported, not a rule failure: R3 compares the parameters at log start 
 
 - Sealed at: 2026\-10\-18T15\:00\:00Z
 - Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
-- Key custody: file\-evaluation
+- Key custody (declared by the sealer; this report cannot attest it): file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
 - Merkle root: `9d34be2f6eae5d3d9c4b38041846522e5c1116b7c20edb1543b410cbc71b0835` (sha256\-rfc6962, 29 leaves)
 - Schema version: 2
@@ -86,7 +86,7 @@ These are reported, not a rule failure: R3 compares the parameters at log start 
 With the public key whose fingerprint is `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
-sfr verify gz_x500_vision_hover.sfr --pubkey sfr.pub --ulog gz_x500_vision_hover.ulg
+sfr verify gz_x500_vision_hover.sfr --pubkey sfr.pub --allow-evaluation-key --ulog gz_x500_vision_hover.ulg
 ```
 
 Without `--ulog`, `sfr verify` checks the record alone.

@@ -167,7 +167,7 @@ const verifyCases = [
   ['tampered.sfr', 'vtol_transition.ulg'],
   ['vtol_transition.sfr', 'changed.ulg'],
 ].map(([record, log]) => {
-  const r = sfr(vdir, ['verify', record, '--pubkey', 'sfr.pub', ...(log ? ['--ulog', log] : [])]);
+  const r = sfr(vdir, ['verify', record, '--pubkey', 'sfr.pub', '--allow-evaluation-key', ...(log ? ['--ulog', log] : [])]);
   return { record, log, code: r.code, stdout: r.stdout };
 });
 
@@ -187,7 +187,7 @@ const demoCli = (() => {
   const record = fs.readFileSync(path.join(dir, 'sealed', recordName));
   fs.writeFileSync(path.join(dir, recordName), record);
   fs.copyFileSync(path.join(keyDir, 'sfr.pub'), path.join(dir, 'sfr.pub'));
-  const v = (...a) => { const r = sfr(dir, ['verify', ...a, '--pubkey', 'sfr.pub']); return { code: r.code, text: r.stdout }; };
+  const v = (...a) => { const r = sfr(dir, ['verify', ...a, '--pubkey', 'sfr.pub', '--allow-evaluation-key']); return { code: r.code, text: r.stdout }; };
   steps.c = [v(recordName), v(recordName, '--ulog', sample.log)];
   fs.writeFileSync(path.join(dir, 'tampered.sfr'), changeCommand(record));
   steps.d = [v('tampered.sfr'), v('tampered.sfr', '--ulog', sample.log)];
@@ -458,7 +458,7 @@ for (const name of opt.browsers.split(',')) {
     await download(page, '#seal-downloads a:nth-child(1)', path.join(kdir, 'tailsitter.sfr'));
     await download(page, '#seal-downloads a:nth-child(3)', path.join(kdir, 'sfr.pub'));
     link(kdir, 'testdata/sitl/v1.17.0/gz_quadtailsitter_transition.ulg', 'tailsitter.ulg');
-    const v = sfr(kdir, ['verify', 'tailsitter.sfr', '--pubkey', 'sfr.pub', '--ulog', 'tailsitter.ulg']);
+    const v = sfr(kdir, ['verify', 'tailsitter.sfr', '--pubkey', 'sfr.pub', '--allow-evaluation-key', '--ulog', 'tailsitter.ulg']);
     const label = /"key_label":"([^"]*)"/.exec(fs.readFileSync(path.join(kdir, 'tailsitter.sfr'), 'utf8'));
     check(name, 'in-browser key', r.banner.includes('PASS.') && v.code === 0 && v.stdout.includes('VERIFIED (record and log)') && label && label[1].startsWith('EVALUATION KEY'),
       `sealed with the in-browser key (label "${label ? label[1] : '?'}"); sfr verify --ulog with the page's sfr.pub: exit ${v.code}, ${v.stdout.split('\n')[1] || v.stdout.split('\n')[0]}`, (Date.now() - t) / 1000);

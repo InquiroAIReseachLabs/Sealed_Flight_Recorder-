@@ -650,7 +650,7 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
     }
     let deep = capped.is_some();
     let log: Option<&mut dyn Read> = capped.as_mut().map(|c| c as &mut dyn Read);
-    let outcome = sfr_core::verify::verify(req.record.bytes, log, &crypto, &public, false);
+    let outcome = sfr_core::verify::verify(req.record.bytes, log, &crypto, &public);
     // A record that verified must also match its report, when one is given (as the CLI does).
     let outcome = match (outcome, &req.report) {
         (Ok(v), Some(report)) => match sfr_core::report::check(req.record.bytes, report.bytes) {
@@ -677,7 +677,11 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
                 record_path,
                 &v,
                 TRUST_PUBKEY,
-                "declared",
+                // The page cannot check a certificate chain, so no custody is attested here.
+                &sfr_core::verify::custody_text(
+                    v.custody.as_str(),
+                    &sfr_core::verify::Attestation::Unattested,
+                ),
                 &sfr_core::verify::report_line(report),
             ));
             Ok(VerifyOutput {

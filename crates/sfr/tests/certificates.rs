@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod forge;
+
 const LOG: &str = "testdata/synthetic/custom_detection.ulg";
 const RULES: &str = "testdata/rules/synthetic_custom_detection.toml";
 const BASELINE: &str = "testdata/baselines/synthetic_custom_detection.params";
@@ -32,6 +34,10 @@ fn sfr(args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("sfr binary runs")
+}
+
+fn stdout(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stdout).into_owned()
 }
 
 fn text(o: &Output) -> String {
@@ -106,6 +112,7 @@ fn verify_anchor(record: &Path, anchor: &str, crls: &[&str]) -> Output {
     let crls: Vec<String> = crls.iter().map(|c| pki(c)).collect();
     let mut args = vec![
         "verify",
+        "--allow-evaluation-key",
         record.to_str().unwrap(),
         "--trust-anchor",
         &anchor,
@@ -144,10 +151,10 @@ fn a_chain_to_the_trust_anchor_verifies_and_names_the_anchor() {
             )),
             "{out}"
         );
-        // Custody stays declared: a chain proves who the key belongs to, not where it lives.
+        // Custody is attested by the chain to the anchor, and still says what the sealer declared.
         assert!(
             out.contains(&format!(
-                "custody   file-evaluation (declared; the key's certificate chains to the trust anchor {anchor})"
+                "custody   attested by certificate chain to the trust anchor {anchor} (declared file-evaluation)"
             )),
             "{out}"
         );
@@ -155,6 +162,7 @@ fn a_chain_to_the_trust_anchor_verifies_and_names_the_anchor() {
     // With the log as well.
     let v = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         record.to_str().unwrap(),
         "--trust-anchor",
         &pki("root.pem"),
@@ -165,7 +173,11 @@ fn a_chain_to_the_trust_anchor_verifies_and_names_the_anchor() {
     assert_eq!(v.status.code(), Some(0), "{}", text(&v));
     let json = String::from_utf8_lossy(&v.stdout);
     assert!(json.contains("\"trust\": \"trust-anchor\""), "{json}");
-    assert!(json.contains("\"key_custody_proven\": false"), "{json}");
+    assert!(json.contains("\"custody_attested\": true"), "{json}");
+    assert!(
+        json.contains("\"key_custody\": \"file-evaluation\""),
+        "{json}"
+    );
     // The certificate travels in the signed seal leaf: changing it breaks the signature.
     let bytes = std::fs::read_to_string(&record).unwrap();
     let start = bytes.find("\"signer_certificate\":\"").unwrap() + 30;
@@ -312,6 +324,7 @@ fn seal_refuses_a_certificate_for_another_key_and_verify_refuses_two_trust_sourc
     .unwrap();
     let o = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         r,
         "--pubkey",
         pubkey.to_str().unwrap(),
@@ -322,6 +335,7 @@ fn seal_refuses_a_certificate_for_another_key_and_verify_refuses_two_trust_sourc
     assert!(text(&o).contains("give one trust source"), "{}", text(&o));
     let o = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         r,
         "--pubkey",
         pubkey.to_str().unwrap(),
@@ -335,7 +349,13 @@ fn seal_refuses_a_certificate_for_another_key_and_verify_refuses_two_trust_sourc
         text(&o)
     );
     // With --pubkey the same record verifies, and says what the signature was checked against.
-    let o = sfr(&["verify", r, "--pubkey", pubkey.to_str().unwrap()]);
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        r,
+        "--pubkey",
+        pubkey.to_str().unwrap(),
+    ]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(
@@ -343,7 +363,7 @@ fn seal_refuses_a_certificate_for_another_key_and_verify_refuses_two_trust_sourc
         "{out}"
     );
     assert!(
-        out.contains("custody   file-evaluation (declared)\n"),
+        out.contains("custody   unattested (declared file-evaluation)\n"),
         "{out}"
     );
 }
@@ -380,7 +400,7 @@ fn verify_with_no_trust_source_checks_nothing_and_exits_non_zero() {
     );
     assert!(!out.contains("VERIFIED"), "{out}");
     assert!(
-        out.contains("custody   file-evaluation (declared by the record, not proven)"),
+        out.contains("custody   unattested (declared file-evaluation)"),
         "{out}"
     );
     assert!(out.contains("key       sha256:"), "{out}");
@@ -391,4 +411,103 @@ fn verify_with_no_trust_source_checks_nothing_and_exits_non_zero() {
     let v = sfr(&["verify", record.to_str().unwrap(), "--json"]);
     assert_eq!(v.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&v.stdout).contains("\"integrity\": \"NOT CHECKED\""));
+}
+
+#[test]
+fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
+    // A record that declares pkcs11-token, signed by the key the test CA certified.
+    let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let declared = record.with_file_name("declared.sfr");
+    std::fs::write(
+        &declared,
+        forge::relabelled_as_pkcs11(
+            &std::fs::read(&record).unwrap(),
+            &forge::key_from_seed(&[SIGNER; 32]),
+        ),
+    )
+    .unwrap();
+    let anchor = format!("sha256:{}", sha256_hex(&der("root.pem")));
+
+    // With the chain, --require-hardware-key is met: the line says attested, by which anchor.
+    let v = sfr(&[
+        "verify",
+        declared.to_str().unwrap(),
+        "--trust-anchor",
+        &pki("root.pem"),
+        "--require-hardware-key",
+    ]);
+    assert_eq!(v.status.code(), Some(0), "{}", text(&v));
+    let out = stdout(&v);
+    assert!(
+        out.contains(&format!(
+            "custody   attested by certificate chain to the trust anchor {anchor} (declared pkcs11-token)\n"
+        )),
+        "{out}"
+    );
+    assert!(!out.contains("EVALUATION KEY"), "{out}");
+    let j = sfr(&[
+        "verify",
+        declared.to_str().unwrap(),
+        "--trust-anchor",
+        &pki("root.pem"),
+        "--json",
+    ]);
+    let json = stdout(&j);
+    assert!(
+        json.contains("\"custody_attested\": true")
+            && json.contains("\"key_custody\": \"pkcs11-token\""),
+        "{json}"
+    );
+
+    // The same record checked against the bare public key is unattested, and the flag refuses it.
+    let pubkey = declared.with_file_name("sfr.pub");
+    std::fs::write(
+        &pubkey,
+        sfr_core::keys::public_key_pem(&sfr_core::crypto::Signer::public_key(
+            &forge::key_from_seed(&[SIGNER; 32]),
+        )),
+    )
+    .unwrap();
+    let v = sfr(&[
+        "verify",
+        declared.to_str().unwrap(),
+        "--pubkey",
+        pubkey.to_str().unwrap(),
+    ]);
+    assert_eq!(v.status.code(), Some(0), "{}", text(&v));
+    assert!(
+        stdout(&v).contains("custody   unattested (declared pkcs11-token)\n"),
+        "{}",
+        text(&v)
+    );
+    let v = sfr(&[
+        "verify",
+        declared.to_str().unwrap(),
+        "--pubkey",
+        pubkey.to_str().unwrap(),
+        "--require-hardware-key",
+    ]);
+    assert_eq!(v.status.code(), Some(1), "{}", text(&v));
+    assert!(
+        stdout(&v).contains("Integrity: REFUSED: --require-hardware-key needs custody attested by a certificate chain"),
+        "{}",
+        text(&v)
+    );
+
+    // A chain does not turn a declared evaluation key into hardware: still refused.
+    let v = sfr(&[
+        "verify",
+        record.to_str().unwrap(),
+        "--trust-anchor",
+        &pki("root.pem"),
+        "--allow-evaluation-key",
+        "--require-hardware-key",
+    ]);
+    assert_eq!(v.status.code(), Some(1), "{}", text(&v));
+    assert!(
+        stdout(&v).contains("does not accept a record that declares custody file-evaluation"),
+        "{}",
+        text(&v)
+    );
 }

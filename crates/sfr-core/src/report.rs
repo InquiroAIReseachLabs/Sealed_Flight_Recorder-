@@ -517,7 +517,7 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     );
     item(
         &mut out,
-        "Key custody",
+        "Key custody (declared by the sealer; this report cannot attest it)",
         &escape(&s(seal, "key_custody", "seal")?),
     );
     let crates = arr(seal, "crypto_crates", "seal")?
@@ -562,8 +562,14 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
          holds the record and the log:\n\n",
         code(&s(seal, "key_fingerprint", "seal")?)
     ));
+    // A record that declares an evaluation key is accepted by `sfr verify` only when asked.
+    let allow = if s(seal, "key_custody", "seal")? == "file-evaluation" {
+        " --allow-evaluation-key"
+    } else {
+        ""
+    };
     let command = format!(
-        "sfr verify {} --pubkey sfr.pub --ulog {}",
+        "sfr verify {} --pubkey sfr.pub{allow} --ulog {}",
         shell_word(&record_file_name(&file_name)),
         shell_word(&file_name)
     );

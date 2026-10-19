@@ -2,7 +2,7 @@
 
 After a PX4 flight, `sfr` produces a signed, self-verifying record of the configuration that flew, the readiness rule results, and the operator, failsafe, and transition events, so that anyone who has the signer's public key, or a trust anchor its certificate chains to, can later check that none of it changed after it was sealed. A seal does not show that the data was genuine or accurate before it was sealed.
 
-This is an evaluation release, provided without warranty, and in development: the quickstart signs with evaluation keys, and every record sealed with one says EVALUATION KEY. Operational records are sealed with a key held in a PKCS#11 token or HSM, or with a seed sealed to a TPM ([docs/INTEGRATION_NOTES.md](docs/INTEGRATION_NOTES.md#keys)). A browser version of the same engine is available to invited evaluators and is hosted separately. Third-party material is listed in [NOTICE.md](NOTICE.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
+This is an evaluation release, provided without warranty, and in development: the quickstart signs with evaluation keys, every record sealed with one says EVALUATION KEY, and `sfr verify` refuses such a record unless you add `--allow-evaluation-key`. Operational records are sealed with a key held in a PKCS#11 token or HSM, or with a seed sealed to a TPM ([docs/INTEGRATION_NOTES.md](docs/INTEGRATION_NOTES.md#keys)). A browser version of the same engine is available to invited evaluators and is hosted separately. Third-party material is listed in [NOTICE.md](NOTICE.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## What a record proves
 
@@ -10,8 +10,9 @@ This is an evaluation release, provided without warranty, and in development: th
 
 - **Only the record is signed.** The `.sfr` file is what the signature covers and what `sfr verify` checks. The `.sfr.md` report is a readable view generated from the record; it carries no signature of its own. `sfr verify` binds it to the record instead: it renders the report again from the verified record and requires the `.sfr.md` beside the record (or the one `--report` names) to match it byte for byte, so an edited report fails verification and the line that differs is named. A report on its own, never checked against its record, proves nothing.
 - **The seal proves no change since sealing, not accuracy before it.** A record that verifies has not changed since it was sealed, and with `--ulog` neither has the log. It does not prove that the data was genuine, that the log was accurate or honest when it was sealed, that the vehicle did what the log says, or that nothing changed the log between the flight and the seal.
-- **Who signed needs the signer's public key.** The record names its signing key only by fingerprint. `sfr verify` checks the signature against the public key you give it with `--pubkey`, or against the key in the record's signer certificate when that certificate chains to a trust anchor you give it with `--trust-anchor` (with `--crl` for revocation). It tells you who signed only if you got that key or anchor through a channel you trust. A key that arrives with the record proves nothing about who signed it. Given neither, `sfr verify` checks nothing: it prints `Integrity: NOT CHECKED (no trusted key given)` and exits 4. Every verify prints the key fingerprint and the custody the record declares; custody is never proven, even by a certificate chain, which shows whom the key belongs to, not where it is kept.
+- **Who signed needs the signer's public key.** The record names its signing key only by fingerprint. `sfr verify` checks the signature against the public key you give it with `--pubkey`, or against the key in the record's signer certificate when that certificate chains to a trust anchor you give it with `--trust-anchor` (with `--crl` for revocation). It tells you who signed only if you got that key or anchor through a channel you trust. A key that arrives with the record proves nothing about who signed it. Given neither, `sfr verify` checks nothing: it prints `Integrity: NOT CHECKED (no trusted key given)` and exits 4. Every verify prints the key fingerprint and the custody the record declares, and says whether anything attests that custody. The custody is a word the sealer wrote into the record, so it prints as `custody   unattested (declared pkcs11-token)` unless the signer's certificate chains to a trust anchor you supplied, and then as `attested by certificate chain to the trust anchor ...`. An attestation is only as good as that anchor's practice: `sfr` cannot see whether the CA issued the certificate only for a key held in hardware, so supply an anchor whose issuing policy you trust for that. `--require-hardware-key` means attested by such a chain, not declared; with `--pubkey` it always refuses.
 - **The seal time is self-asserted.** `sealed` is the sealing machine's clock, or the time given with `--seal-time`. It is signed, so it cannot change after sealing, but nothing checks that it was right.
+- **An evaluation key is refused unless you allow it.** A record that declares custody `file-evaluation` (the quickstart's keys) does not verify as `Integrity: VERIFIED`: `sfr verify` prints `Integrity: REFUSED`, under the EVALUATION KEY banner, and exits 1, although its signature is good. `--allow-evaluation-key` accepts it for evaluation, and the banner stays. A key declared as hardware could still be a file: see custody above.
 - **PX4 versions.** `sfr` is tested on logs from PX4 v1.14.4 and v1.17.0 (`testdata/sitl/`); v1.15 and v1.16 are decoded from the PX4 source's message definitions, but no log from them is in the tests. `seal` refuses a log from a version outside v1.14 to v1.17, or one whose version it cannot read, and writes nothing, unless given `--allow-untested-version`. With it, `seal` prints a warning, leaves the version-dependent names in the events empty, and records the flag in the signed record (`seal.allow_untested_version`, schema 2), and the report says so. No such log is tested.
 
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) gives the details and the attacks that are and are not detected.
@@ -70,17 +71,17 @@ Once published, evaluation release 0.1.0 (tag `v0.1.0`) is a pre-release at [git
    bin/sfr keygen --evaluation-only --out keys > /dev/null
    bin/sfr seal examples/sample/sample.ulg --rules examples/rules.default.toml \
      --baseline examples/sample/sample.params --key keys/sfr.key --evaluation-only --out out | grep -E '^(status|record)'
-   bin/sfr verify out/sample.sfr --pubkey keys/sfr.pub --ulog examples/sample/sample.ulg | grep -E '^(Integrity|Flight rules)'
+   bin/sfr verify out/sample.sfr --pubkey keys/sfr.pub --allow-evaluation-key --ulog examples/sample/sample.ulg | grep -E '^(Integrity|Flight rules)'
    ```
 
 6. Tamper, then verify. Change one parameter value in a copy of the record, and one byte of a copy of the log. Each verify exits 1 and says what no longer matches. The post-release check runs these commands and requires both exits to be 1:
 
    ```sh doc-release
    sed 's/"SYS_AUTOSTART":"i32:10040"/"SYS_AUTOSTART":"i32:10041"/' out/sample.sfr > out/changed.sfr
-   rc=0; bin/sfr verify out/changed.sfr --pubkey keys/sfr.pub || rc=$?; echo "record changed: exit $rc"; test "$rc" = 1
+   rc=0; bin/sfr verify out/changed.sfr --pubkey keys/sfr.pub --allow-evaluation-key || rc=$?; echo "record changed: exit $rc"; test "$rc" = 1
    cp examples/sample/sample.ulg out/changed.ulg
    printf '\377' | dd of=out/changed.ulg bs=1 seek=600 conv=notrunc 2> /dev/null
-   rc=0; bin/sfr verify out/sample.sfr --pubkey keys/sfr.pub --ulog out/changed.ulg || rc=$?; echo "log changed: exit $rc"; test "$rc" = 1
+   rc=0; bin/sfr verify out/sample.sfr --pubkey keys/sfr.pub --allow-evaluation-key --ulog out/changed.ulg || rc=$?; echo "log changed: exit $rc"; test "$rc" = 1
    ```
 
 What the signature, the checksums and the attestation each prove, and what they do not, is in [docs/RELEASE.md](docs/RELEASE.md).
@@ -114,6 +115,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
 
    ```sh doc-test
    target/release/sfr verify examples/reports/vtol_transition.sfr --pubkey examples/reports/sfr.pub \
+     --allow-evaluation-key \
      --ulog testdata/sitl/v1.17.0/vtol_transition.ulg
    ```
 
@@ -124,7 +126,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    record    examples/reports/vtol_transition.sfr
    report    examples/reports/vtol_transition.sfr.md matches the record
    trust     the public key given with --pubkey (trusted as far as its source is)
-   custody   file-evaluation (declared)
+   custody   unattested (declared file-evaluation)
    key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51
    crypto    blake3 1.8.7, ed25519-dalek 3.0.0, sha2 0.11.1 (crate versions)
    sealed    2026-10-18T15:00:00Z (stated by the sealer, not checked)
@@ -137,7 +139,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    mkdir -p try
    sed 's/"command":211,/"command":311,/' examples/reports/vtol_transition.sfr > try/changed.sfr
    rc=0
-   target/release/sfr verify try/changed.sfr --pubkey examples/reports/sfr.pub || rc=$?
+   target/release/sfr verify try/changed.sfr --pubkey examples/reports/sfr.pub --allow-evaluation-key || rc=$?
    echo "exit $rc"
    ```
 
@@ -146,13 +148,13 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    Integrity: FAILED: Merkle root mismatch: a leaf changed after sealing (recorded aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b, computed 2b8540bbc7f6df08b064c848a32d70fdb7fa6b3348df17da3bb7acac509bc50f)
    Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
    key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51 (named by the record, not proven)
-   custody   file-evaluation (declared by the record, not proven)
+   custody   unattested (declared file-evaluation)
    exit 1
    ```
 
    ```sh doc-test
    rc=0
-   target/release/sfr verify try/changed.sfr --pubkey examples/reports/sfr.pub \
+   target/release/sfr verify try/changed.sfr --pubkey examples/reports/sfr.pub --allow-evaluation-key \
      --ulog testdata/sitl/v1.17.0/vtol_transition.ulg || rc=$?
    echo "exit $rc"
    ```
@@ -163,7 +165,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
      also: Merkle root mismatch: a leaf changed after sealing (recorded aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b, computed 2b8540bbc7f6df08b064c848a32d70fdb7fa6b3348df17da3bb7acac509bc50f)
    Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
    key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51 (named by the record, not proven)
-   custody   file-evaluation (declared by the record, not proven)
+   custody   unattested (declared file-evaluation)
    exit 1
    ```
 
@@ -198,7 +200,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
 6. Verify the record you sealed, against its log:
 
    ```sh doc-test
-   target/release/sfr verify try/out/vtol_transition.sfr --pubkey try/keys/sfr.pub \
+   target/release/sfr verify try/out/vtol_transition.sfr --pubkey try/keys/sfr.pub --allow-evaluation-key \
      --ulog testdata/sitl/v1.17.0/vtol_transition.ulg | grep -E '^(EVALUATION|Integrity|Flight rules)'
    ```
 
@@ -223,7 +225,7 @@ From `crates/sfr-core/src/lib.rs` (`exit_code`):
 | Exit | `sfr seal` | `sfr verify` |
 |---|---|---|
 | 0 | every rule PASS or N/A; record written | `Integrity: VERIFIED`, whatever the `Flight rules:` line says |
-| 1 | a rule FAIL; the record is still written | `Integrity: FAILED`: the record, or the log with `--ulog`, does not match, is over an input limit, or (with `--trust-anchor`) its certificate chain is refused |
+| 1 | a rule FAIL; the record is still written | `Integrity: FAILED`: the record, or the log with `--ulog`, does not match, is over an input limit, or (with `--trust-anchor`) its certificate chain is refused; or `Integrity: REFUSED`: the signature is good but the record is signed with an evaluation key (no `--allow-evaluation-key`), or its custody is not what `--require-hardware-key` accepts |
 | 2 | a required topic or field is missing (R1 FAIL); the record is still written | not used |
 | 3 | the log, rules file or baseline is malformed, truncated, or over an input limit; nothing written | not used |
 | 4 | a usage, key or file error; nothing written | a usage, key or file error, or no trust source given (`Integrity: NOT CHECKED`) |
