@@ -91,15 +91,15 @@ The record holds no sealed topic digests.
 ## Seal
 
 - Sealed at: 2026\-10\-18T15\:00\:00Z
-- Key fingerprint: `sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f`
+- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
 - Key custody: file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
-- Merkle root: `74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341` (sha256\-rfc6962, 34 leaves)
-- Schema version: 1
+- Merkle root: `aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b` (sha256\-rfc6962, 34 leaves)
+- Schema version: 2
 
 ## Verify
 
-With the public key whose fingerprint is `sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f` saved as `sfr.pub`, in the directory that holds the record and the log:
+With the public key whose fingerprint is `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
 sfr verify vtol_transition.sfr --pubkey sfr.pub --ulog vtol_transition.ulg

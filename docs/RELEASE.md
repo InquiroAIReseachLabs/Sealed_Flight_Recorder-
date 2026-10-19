@@ -1,6 +1,6 @@
 # Making and verifying a release
 
-This is the evaluation release 0.1.0 process. The founder makes each release. CI builds, checks and attests the files and creates a draft; it never signs, never publishes, and never holds the release private key. The key stays on the founder's offline machine.
+This is the evaluation release 0.1.0 process. The release key holder makes each release. CI builds, checks and attests the files and creates a draft; it never signs, never publishes, and never holds the release private key. The key stays on the release key holder's offline machine.
 
 ## The pieces
 
@@ -9,7 +9,7 @@ This is the evaluation release 0.1.0 process. The founder makes each release. CI
 | Release workflow | `.github/workflows/release.yml` | On a pushed `v*` tag: tests, builds the three static binaries twice from clean, seals every golden log with all three, makes one SBOM per target, scans every file for traces of the build machine, writes `SHA256SUMS`, attests the three tarballs, and creates a **draft pre-release**. On a manual run it does the same checks and uploads the files as a workflow artifact, and creates nothing. |
 | Post-release check | `.github/workflows/post-release-check.yml` | After the release is published: runs the README quickstart's download steps on clean machines (`x86_64`, `aarch64`, `armv7`) and checks the release's file list, key and attestations. |
 | aarch64 benchmark | `.github/workflows/benchmark-aarch64.yml` | By hand. Runs `scripts/benchmark.sh` on GitHub's arm64 hosted runner ([BENCHMARK.md](BENCHMARK.md)). |
-| Signing script | `scripts/release_sign.sh` | Run by the founder, offline: `keygen`, `sign`, `verify`, and a self-test. |
+| Signing script | `scripts/release_sign.sh` | Run by the release key holder, offline: `keygen`, `sign`, `verify`, and a self-test. |
 | Tests of the above | `scripts/check_release_flow.sh`, `scripts/check_release_hygiene.sh`, `scripts/check_workflows.sh` | The whole offline signing flow and eight attacks on it, the hygiene scan, and the rules every workflow must keep (actions pinned by commit, no secret, no signing in CI, only the draft job writes). |
 
 `rust-toolchain.toml` lists no cross targets, so a plain `cargo build --release --locked` installs only the host toolchain. The release workflow, the benchmark workflow, the armv7 and sandbox CI jobs, and `scripts/build_release.sh` and `scripts/build_engine.sh` each add (or ask for) the target they build with, `rustup target add <target>`.
@@ -31,10 +31,10 @@ The release builds remap the build paths, embed the commit (`SFR_BUILD_COMMIT`),
 One Ed25519 key signs `SHA256SUMS`. Its public half is committed at `release/sfr-release.pub`, shown with its fingerprint here and in the README, and attached to each release as `sfr-release.pub`. The fingerprint is the SHA-256 of the public key's DER encoding. CI fails when `README.md` or this page disagrees with the key file.
 
 <!-- BEGIN release-key: written by scripts/regen_readme_numbers.sh, do not edit by hand -->
-Release public key: not generated yet. The founder generates the release key on an offline machine with `scripts/release_sign.sh keygen <offline path>`, which writes its public half to `release/sfr-release.pub`; `scripts/regen_readme_numbers.sh` then shows it here, and both are committed before the first release.
+Release public key: not generated yet. The release key holder generates the release key on an offline machine with `scripts/release_sign.sh keygen <offline path>`, which writes its public half to `release/sfr-release.pub`; `scripts/regen_readme_numbers.sh` then shows it here, and both are committed before the first release.
 <!-- END release-key -->
 
-## Steps for the founder
+## Steps for the release key holder
 
 1. **Release key, once.** On an offline machine with OpenSSL 3, in a checkout of the repository: `scripts/release_sign.sh keygen /path/off/the/repository/sfr-release.key`. It writes the private key (mode 0600, refuses to overwrite one) and `release/sfr-release.pub`. Keep the private key on the offline machine and make an offline copy; the repository never holds it (`.gitignore` ignores `*.key`, and `scripts/check_no_private_keys.sh` fails CI on any private key block). Then run `scripts/regen_readme_numbers.sh`, which writes the fingerprint into the README and this page, and commit `release/sfr-release.pub`, `README.md` and `docs/RELEASE.md` in one pull request to `main`. In the same pull request, take out the README's "after the first release" notes (the Quickstart's first paragraph, the note under the Path 1 heading, and the first sentence of Release files): the README at the tag is the one people read and the post-release check runs.
 2. **Dry run.** In GitHub: Actions, `release`, Run workflow, branch `main`. It builds and checks everything and uploads `sfr-release-files-<version>-dry-run`; it creates no tag, release or attestation.
@@ -82,15 +82,15 @@ Inside each tarball, `BUILDINFO` names the commit, the toolchain, and the SHA-25
 | `gh attestation verify` passes | GitHub recorded that the file with this digest was produced by a run of this repository's release workflow, on a stated commit. | That the source at that commit is free of defects or that the workflow is. It is evidence of where a file came from, signed by GitHub, independent of the project's own key. |
 | The BUILDINFO commit and a rebuild | With the pinned toolchain, building that commit gives the same bytes (the reproducibility report). | That every machine reproduces them; the report names what was compared. |
 
-The signature and the attestation are separate witnesses: the signature depends on a key that stays offline, the attestation on GitHub and on the workflow file at the tagged commit. They are independent only while the repository's protections hold (the next section). Someone with write access to the repository and no protections can change the workflow, tag a commit of their own and make a draft whose attestation verifies; the founder's signature is then the check that matters, and it is made only after the founder has checked the run's commit. The SBOMs are covered by the signature and by `SHA256SUMS`, not by an attestation.
+The signature and the attestation are separate witnesses: the signature depends on a key that stays offline, the attestation on GitHub and on the workflow file at the tagged commit. They are independent only while the repository's protections hold (the next section). Someone with write access to the repository and no protections can change the workflow, tag a commit of their own and make a draft whose attestation verifies; the release key holder's signature is then the check that matters, and it is made only after the release key holder has checked the run's commit. The SBOMs are covered by the signature and by `SHA256SUMS`, not by an attestation.
 
 ## Repository settings the release depends on
 
-These are settings in GitHub, made by the founder once; no file in the repository can enforce them, because a workflow run at a tag reads the workflow from the tagged commit.
+These are settings in GitHub, made by the release key holder once; no file in the repository can enforce them, because a workflow run at a tag reads the workflow from the tagged commit.
 
-1. **Tags.** Settings, Rules, Rulesets, New ruleset, New tag ruleset, target `v*`: restrict creations, updates and deletions to the founder, and block force pushes. A release tag then cannot be moved or recreated on another commit.
+1. **Tags.** Settings, Rules, Rulesets, New ruleset, New tag ruleset, target `v*`: restrict creations, updates and deletions to the release key holder, and block force pushes. A release tag then cannot be moved or recreated on another commit.
 2. **Main.** Settings, Rules, Rulesets (or Branches, branch protection rule) for `main`: require a pull request, require the CI checks, block force pushes and deletions. The release workflow refuses a commit that is not on `main`.
-3. **The `release` environment.** Settings, Environments, New environment, name `release`: add the founder as a required reviewer. The `draft-release` job waits there. Approve it only after you have opened the run and checked that its commit is the commit you reviewed on `main`.
+3. **The `release` environment.** Settings, Environments, New environment, name `release`: add the release key holder as a required reviewer. The `draft-release` job waits there. Approve it only after you have opened the run and checked that its commit is the commit you reviewed on `main`.
 4. **Immutable releases.** Settings, General, Releases: turn on immutable releases, so published files and the tag cannot be changed afterwards. If it is not available to you, the fingerprint comparison is the only defence after publishing.
 5. **Actions permissions.** Settings, Actions, General: workflow permissions "Read repository contents" by default (the workflows ask for what they need), and allow only the actions the workflows use.
 

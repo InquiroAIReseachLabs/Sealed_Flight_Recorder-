@@ -5,7 +5,7 @@
 # run: it builds and checks the same files and uploads them as a workflow artifact, and creates
 # nothing (no attestation, no release, no tag).
 #
-# The release signing key is not in this workflow, in a secret, or anywhere in CI: the founder
+# The release signing key is not in this workflow, in a secret, or anywhere in CI: the release key holder
 # downloads SHA256SUMS from the draft, signs it offline with scripts/release_sign.sh, and uploads
 # SHA256SUMS.sig and sfr-release.pub to the draft before publishing. This file uses no secret;
 # the one token is the run's own GITHUB_TOKEN, and only the draft-release job gets write access.
@@ -277,7 +277,7 @@ jobs:
           pattern: release-*
           path: files
           merge-multiple: true
-      - name: SHA256SUMS (unsigned; the founder signs it offline)
+      - name: SHA256SUMS (unsigned; the release key holder signs it offline)
         run: |
           set -euo pipefail
           scripts/release_assemble.sh --set github files | tee sha256sums.log
@@ -295,7 +295,7 @@ jobs:
     if: ${{ needs.meta.outputs.dry_run == 'false' }}
     needs: [meta, assemble]
     runs-on: ubuntu-24.04
-    # The founder adds a required reviewer to this environment (docs/RELEASE.md): the job then
+    # The release key holder adds a required reviewer to this environment (docs/RELEASE.md): the job then
     # waits until a person approves it, after checking the run's commit.
     environment: release
     permissions:

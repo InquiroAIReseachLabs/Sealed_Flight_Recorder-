@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # release_sign.sh: the Ed25519 signature over a release's SHA256SUMS (SPEC B1.10 Releases), made
-# and checked with OpenSSL 3 alone. The founder runs it on an offline machine; CI never holds the
+# and checked with OpenSSL 3 alone. The release key holder runs it on an offline machine; CI never holds the
 # release private key, and no private key enters the repository (.gitignore: *.key).
 #
 #   scripts/release_sign.sh keygen <private-key-file>

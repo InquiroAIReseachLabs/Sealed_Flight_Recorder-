@@ -82,15 +82,15 @@ The record holds no sealed topic digests.
 ## Seal
 
 - Sealed at: 2026\-10\-18T15\:00\:00Z
-- Key fingerprint: `sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f`
+- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
 - Key custody: file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
-- Merkle root: `883411dc4d6e6a65b49802d18ed3722118706ff08b79ed2b258ca2627b209115` (sha256\-rfc6962, 39 leaves)
-- Schema version: 1
+- Merkle root: `c05aa62a80822c2c78406652a99a79c5f0e2b5509a9f7b5725a81e0bc32dc707` (sha256\-rfc6962, 39 leaves)
+- Schema version: 2
 
 ## Verify
 
-With the public key whose fingerprint is `sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f` saved as `sfr.pub`, in the directory that holds the record and the log:
+With the public key whose fingerprint is `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
 sfr verify failsafe_gps_loss.sfr --pubkey sfr.pub --ulog failsafe_gps_loss.ulg

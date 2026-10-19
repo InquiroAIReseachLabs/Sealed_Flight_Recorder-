@@ -12,7 +12,8 @@ topics = ["vehicle_status", "failsafe_flags"]
 compare = "all"
 
 # R3 skips parameters matching these patterns. "*" matches any run of characters.
-# Default list from docs/DIAGNOSTIC.md item 5 (two-flight experiment plus PX4 source).
+# Default list from two flights with no change between them (testdata/sitl/v1.17.0/mc_flight_1
+# and mc_flight_2) plus the PX4 parameter definitions (docs/RULES.md, R3).
 ignore = [
   "COM_FLIGHT_UUID",   # per-flight identifier
   "LND_FLIGHT_T_HI",   # flight-time accumulator
@@ -26,7 +27,7 @@ ignore = [
 # Watched parameters (SPEC B1.6): R3 compares them like every other parameter; the
 # results table and the report show them in their own "Transition tuning" section, and the
 # record lists them in config.watched_parameters. VTOL transition tuning; every name is defined
-# in PX4 v1.14 and v1.17 (docs/DIAGNOSTIC.md item 12).
+# in PX4 v1.14 and v1.17 (docs/RULES.md, R3).
 [watched_parameters]
 names = [
   "VT_F_TRANS_DUR",    # front transition duration
@@ -42,8 +43,8 @@ names = [
 ]
 
 # COMMAND events with these ids are category PAYLOAD; every other command is GENERAL.
-# Ids and names from PX4's VehicleCommand.msg, the same in v1.14 and v1.17 (docs/DIAGNOSTIC.md
-# item 12). Flight termination (185) and parachute (208) are safety commands and stay GENERAL.
+# Ids and names from PX4's VehicleCommand.msg, the same in v1.14 and v1.17 (docs/RULES.md,
+# R7). Flight termination (185) and parachute (208) are safety commands and stay GENERAL.
 [payload_commands]
 ids = [
   184,    # VEHICLE_CMD_DO_REPEAT_SERVO

@@ -125,7 +125,7 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    report    examples/reports/vtol_transition.sfr.md matches the record
    trust     the public key given with --pubkey (trusted as far as its source is)
    custody   file-evaluation (declared)
-   key       sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f
+   key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51
    crypto    blake3 1.8.7, ed25519-dalek 3.0.0, sha2 0.11.1 (crate versions)
    sealed    2026-10-18T15:00:00Z (stated by the sealer, not checked)
    events    22
@@ -143,9 +143,9 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
 
    ```text doc-output
    EVALUATION KEY: not for operational use
-   Integrity: FAILED: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
+   Integrity: FAILED: Merkle root mismatch: a leaf changed after sealing (recorded aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b, computed 2b8540bbc7f6df08b064c848a32d70fdb7fa6b3348df17da3bb7acac509bc50f)
    Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
-   key       sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f (named by the record, not proven)
+   key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51 (named by the record, not proven)
    custody   file-evaluation (declared by the record, not proven)
    exit 1
    ```
@@ -160,9 +160,9 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    ```text doc-output
    EVALUATION KEY: not for operational use
    Integrity: FAILED: event seq 1 (COMMAND) field `command`: sealed 311, found 211
-     also: Merkle root mismatch: a leaf changed after sealing (recorded 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341, computed bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663)
+     also: Merkle root mismatch: a leaf changed after sealing (recorded aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b, computed 2b8540bbc7f6df08b064c848a32d70fdb7fa6b3348df17da3bb7acac509bc50f)
    Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
-   key       sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f (named by the record, not proven)
+   key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51 (named by the record, not proven)
    custody   file-evaluation (declared by the record, not proven)
    exit 1
    ```
@@ -263,7 +263,7 @@ After the first release, evaluation release 0.1.0 holds these files, for the ver
 Each tarball also has a GitHub build provenance attestation. No container image is published. The commands that check these files are steps 2 to 4 of the quickstart, and [docs/RELEASE.md](docs/RELEASE.md) says what each check proves.
 
 <!-- BEGIN release-key: written by scripts/regen_readme_numbers.sh, do not edit by hand -->
-Release public key: not generated yet. The founder generates the release key on an offline machine with `scripts/release_sign.sh keygen <offline path>`, which writes its public half to `release/sfr-release.pub`; `scripts/regen_readme_numbers.sh` then shows it here, and both are committed before the first release.
+Release public key: not generated yet. The release key holder generates the release key on an offline machine with `scripts/release_sign.sh keygen <offline path>`, which writes its public half to `release/sfr-release.pub`; `scripts/regen_readme_numbers.sh` then shows it here, and both are committed before the first release.
 <!-- END release-key -->
 
 ## Verify timing

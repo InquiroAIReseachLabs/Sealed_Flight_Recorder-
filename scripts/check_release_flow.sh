@@ -4,7 +4,7 @@
 #
 #   1. CI side:      six fake release files, then scripts/release_assemble.sh --set github writes
 #                    SHA256SUMS over exactly them.
-#   2. Founder side: in another directory that holds only SHA256SUMS, scripts/release_sign.sh sign
+#   2. Key holder side: in another directory that holds only SHA256SUMS, scripts/release_sign.sh sign
 #                    writes SHA256SUMS.sig; the public key file is the key's public half.
 #   3. Engineer side: in a third directory holding the download, the commands of docs/RELEASE.md
 #                    (openssl pkeyutl -verify, sha256sum --check) pass, and the key's fingerprint
@@ -52,19 +52,19 @@ done
 scripts/release_assemble.sh --set github "$ci" > /dev/null
 [ "$(wc -l < "$ci/SHA256SUMS")" -eq 6 ] || die "SHA256SUMS does not list the six files"
 
-# 2. Founder side: only SHA256SUMS comes to the offline machine
-founder="$t/founder"; mkdir -p "$founder"
-cp "$ci/SHA256SUMS" "$founder/"
+# 2. Key holder side: only SHA256SUMS comes to the offline machine
+holder="$t/holder"; mkdir -p "$holder"
+cp "$ci/SHA256SUMS" "$holder/"
 (umask 077 && openssl genpkey -algorithm ed25519 -out "$t/release.key")
 openssl pkey -in "$t/release.key" -pubout -out "$t/sfr-release.pub"
-scripts/release_sign.sh sign "$founder/SHA256SUMS" "$t/release.key" --pubkey "$t/sfr-release.pub" > /dev/null
+scripts/release_sign.sh sign "$holder/SHA256SUMS" "$t/release.key" --pubkey "$t/sfr-release.pub" > /dev/null
 published_fp="$(fingerprint "$t/sfr-release.pub")"
 cp "$t/sfr-release.pub" "$t/repo-key"
 
 # 3. Engineer side
 download() { # download <dir>: what the published release holds
   rm -rf "$1"; mkdir -p "$1"
-  cp "$ci"/sfr-* "$1/"; cp "$ci/SHA256SUMS" "$1/"; cp "$founder/SHA256SUMS.sig" "$1/"; cp "$t/sfr-release.pub" "$1/"
+  cp "$ci"/sfr-* "$1/"; cp "$ci/SHA256SUMS" "$1/"; cp "$holder/SHA256SUMS.sig" "$1/"; cp "$t/sfr-release.pub" "$1/"
 }
 e="$t/engineer"; download "$e"
 engineer "$e" "$published_fp" all || die "the honest release does not verify"

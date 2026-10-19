@@ -284,7 +284,7 @@ if [ "$fp" = "$recorded" ]; then echo "key fingerprint matches: sha256:$fp"; els
 ```
 
 ```text doc-output
-key fingerprint matches: sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f
+key fingerprint matches: sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51
 ```
 
 ### 3. The signature over the recorded Merkle root
@@ -426,7 +426,7 @@ python3 -I try/sfr_check.py examples/reports/vtol_transition.sfr
 
 ```text doc-output
 structure, order, rules digest and status: ok
-merkle root 74556bbb765fb87ba325c6bf6fb9d84ad29b45ddd9eea32cd7f130919c48d341 over 34 leaves: matches the record
+merkle root aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b over 34 leaves: matches the record
 ```
 
 With steps 2 and 3, the record is unchanged since it was signed by the holder of that key. With step 1, the log is the one it was sealed from.
@@ -444,6 +444,6 @@ echo "exit $rc"
 ```
 
 ```text doc-output
-FAILED: merkle differs: computed root bd2d34da68265a370fede127b44c94c28f50469e81b1d0864a21517417e74663 over 34 leaves
+FAILED: merkle differs: computed root 2b8540bbc7f6df08b064c848a32d70fdb7fa6b3348df17da3bb7acac509bc50f over 34 leaves
 exit 1
 ```

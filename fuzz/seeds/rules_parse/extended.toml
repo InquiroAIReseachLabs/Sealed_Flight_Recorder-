@@ -23,7 +23,7 @@ ignore = [
 # Watched parameters (SPEC B1.6): R3 compares them like every other parameter; the
 # results table and the report show them in their own "Transition tuning" section, and the
 # record lists them in config.watched_parameters. VTOL transition tuning; every name is defined
-# in PX4 v1.14 and v1.17 (docs/DIAGNOSTIC.md item 12).
+# in PX4 v1.14 and v1.17 (docs/RULES.md, R3).
 [watched_parameters]
 names = [
   "VT_F_TRANS_DUR",    # front transition duration
@@ -39,8 +39,8 @@ names = [
 ]
 
 # COMMAND events with these ids are category PAYLOAD; every other command is GENERAL.
-# Ids and names from PX4's VehicleCommand.msg, the same in v1.14 and v1.17 (docs/DIAGNOSTIC.md
-# item 12). Flight termination (185) and parachute (208) are safety commands and stay GENERAL.
+# Ids and names from PX4's VehicleCommand.msg, the same in v1.14 and v1.17 (docs/RULES.md,
+# R7). Flight termination (185) and parachute (208) are safety commands and stay GENERAL.
 [payload_commands]
 ids = [
   184,    # VEHICLE_CMD_DO_REPEAT_SERVO
@@ -62,7 +62,7 @@ ids = [
 # only the operator knows their own ids. Source ids are what the log recorded; MAVLink source
 # ids are self-reported unless MAVLink message signing is enabled on the link. PX4 v1.17 builds
 # that include payload_deliverer (SITL among them) start each log with a DO_GRIPPER (211,
-# PAYLOAD) that PX4 itself publishes with arbitrary source ids (docs/DIAGNOSTIC.md item 12.3),
+# PAYLOAD) that PX4 itself publishes with arbitrary source ids (docs/RULES.md, R7),
 # so with category "PAYLOAD" or no category R7 reports it on those flights; with category
 # "GENERAL" it is not checked.
 # [authorized_sources]
