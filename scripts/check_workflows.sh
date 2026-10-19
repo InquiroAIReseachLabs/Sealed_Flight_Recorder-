@@ -15,7 +15,9 @@
 #     6. triggers are a v* tag push and workflow_dispatch only;
 #     7. a write permission (`contents: write`, `id-token: write`, `attestations: write`) appears
 #        only in the draft-release job;
-#     8. the release is created only as a draft pre-release (`gh release create ... --draft
+#     8. the draft-release job names an `environment:` (a required reviewer is set on it in the
+#        repository settings, docs/RELEASE.md);
+#     9. the release is created only as a draft pre-release (`gh release create ... --draft
 #        --prerelease`), and nothing publishes (`gh release edit`, `--draft=false`).
 #
 # Usage: scripts/check_workflows.sh [--self-test]
@@ -61,6 +63,8 @@ check_dir() {
       /^[a-z]/ { job = "" }
       /(contents|id-token|attestations|packages|issues|pull-requests|actions):[[:space:]]*write/ && job != "draft-release" { print FILENAME ": " $0 }
     ' "$r" | grep -q . && say "release.yml: a write permission outside the draft-release job"
+    awk '/^  draft-release:/ { j = 1; next } /^  [a-z][a-z0-9-]*:[[:space:]]*$/ { j = 0 } j && /^    environment:/ { found = 1 } END { exit !found }' "$r" \
+      || say "release.yml: the draft-release job has no environment"
     grep -q -E 'gh release create .*--draft' "$r" && grep -q -E -- '--prerelease' "$r" || say "release.yml: the release is not created as a draft pre-release"
     grep -n -E 'gh release (edit|upload)|--draft=false|--latest|gh release create' "$r" | grep -v -E -- '--draft' | grep -v -E '^[0-9]+:[[:space:]]*#' | grep -q . && say "release.yml: a command that could publish or change a release"
   else
@@ -88,6 +92,7 @@ no-comment|actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # 
 secret|GH_TOKEN: ${{ github.token }}|GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 push-trigger|    tags: \["v\*"\]|    tags: ["v*"]\n    branches: [main]
 publish|--draft --prerelease|--prerelease
+no-environment|    environment: release|    # no environment
 EOT
   mkdir -p "$t/yaml"
   sed 's|^      - name: cargo test --locked|      - name: cargo test: locked|' .github/workflows/release.yml > "$t/yaml/release.yml"

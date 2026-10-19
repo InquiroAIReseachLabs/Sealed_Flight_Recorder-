@@ -30,21 +30,22 @@ Evaluation release 0.1.0 (tag `v0.1.0`) is a pre-release at [github.com/InquiroA
    curl -fsSLO "$BASE/sfr-release.pub"
    ```
 
-2. Compare the key's fingerprint with the one in the Release files section below (and in [docs/RELEASE.md](docs/RELEASE.md), and anywhere else you trust). The signature proves only that the holder of this key signed `SHA256SUMS`, so stop here if the fingerprints differ. The post-release check runs this step and compares its output with the committed key:
+2. Check the release key. The first command fails unless the key you downloaded is byte for byte the key committed in this repository at the release tag, a second channel that someone who can only edit release files cannot change. Then compare every hex digit of the printed fingerprint with the one in the Release files section below and in [docs/RELEASE.md](docs/RELEASE.md), and anywhere else you trust. The signature proves only that the holder of this key signed `SHA256SUMS`, so stop here if anything differs. The post-release check runs this step and compares its output with the committed key:
 
    ```sh doc-release
+   curl -fsSL "https://raw.githubusercontent.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-/v$VERSION/release/sfr-release.pub" | cmp - sfr-release.pub
    FINGERPRINT="$(openssl pkey -pubin -in sfr-release.pub -outform DER | sha256sum | cut -d' ' -f1)"
    echo "release key fingerprint sha256:$FINGERPRINT"
    ```
 
-3. Verify the signature on `SHA256SUMS`, then the tarball against it. The first command prints `Signature Verified Successfully`; the second prints the tarball's name and `OK`, and fails if the tarball is not listed or does not match. The post-release check runs both:
+3. Verify the signature on `SHA256SUMS`, then your tarball against its line in it. The first command prints `Signature Verified Successfully`; the second prints the tarball's name and `OK`, and fails if `SHA256SUMS` has no line for your tarball or the line does not match. The `&&` stops the second command when the signature fails. The post-release check runs both:
 
    ```sh doc-release
-   openssl pkeyutl -verify -pubin -inkey sfr-release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
-   sha256sum --check --strict --ignore-missing SHA256SUMS
+   openssl pkeyutl -verify -pubin -inkey sfr-release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig &&
+     awk -v f="sfr-$VERSION-$TARGET.tar.gz" '$2 == f' SHA256SUMS | sha256sum --check --strict -
    ```
 
-4. Optionally check the build provenance attestation, which says which workflow (the release workflow of this repository) built this exact file from which tag. It needs the GitHub CLI (`gh`) logged in to GitHub. The post-release check runs it:
+4. Recommended: check the build provenance attestation, which says which workflow (the release workflow of this repository) built this exact file from which tag. It is a second witness, independent of the key above. It needs the GitHub CLI (`gh`) logged in to GitHub. The post-release check runs it:
 
    ```sh doc-release
    gh attestation verify "sfr-$VERSION-$TARGET.tar.gz" --repo InquiroAIReseachLabs/Sealed_Flight_Recorder- \

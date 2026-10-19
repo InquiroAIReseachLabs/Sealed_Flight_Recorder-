@@ -16,12 +16,24 @@
 # the three tarballs and the three SBOMs, without the benchmark kit and the demo image.
 #
 # Usage: scripts/release_assemble.sh [--set github] <dir>     Writes <dir>/SHA256SUMS and prints it.
+#        scripts/release_assemble.sh --names github [<version>]   Prints the file names the GitHub
+#            release's SHA256SUMS lists, one per line, for the version in Cargo.toml (or <version>);
+#            scripts/release_sign.sh sign signs a SHA256SUMS that lists exactly these.
 set -euo pipefail
 caller="$PWD"
 # A relative path argument is relative to the directory the script was started in.
 abs() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller/$1" ;; esac; }
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 die() { echo "release_assemble.sh: $*" >&2; exit 1; }
+if [ "${1:-}" = --names ]; then
+  [ "${2:-}" = github ] || die "--names takes github"
+  names_version="${3:-$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)}"
+  [[ "$names_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "no x.y.z version"
+  for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf; do
+    printf 'sfr-%s-%s.tar.gz\nsfr-%s-%s.cdx.json\n' "$names_version" "$target" "$names_version" "$target"
+  done | sort
+  exit 0
+fi
 set_name=all
 if [ "${1:-}" = --set ]; then
   [ "${2:-}" = github ] || die "--set takes github"

@@ -10,7 +10,9 @@
 #       (scripts/regen_readme_numbers.sh writes it there with its fingerprint).
 #   scripts/release_sign.sh sign <SHA256SUMS> <private-key-file> [--pubkey <public-key>]
 #       Writes <SHA256SUMS>.sig (a raw 64-byte Ed25519 signature), refusing a private key whose
-#       public half is not the release key (default release/sfr-release.pub), then checks the
+#       public half is not the release key (default release/sfr-release.pub), and a SHA256SUMS
+#       that does not list exactly the release's six files (scripts/release_assemble.sh --names
+#       github; set SFR_RELEASE_VERSION to re-sign an earlier release), then checks the
 #       signature with the verify command below.
 #   scripts/release_sign.sh verify <SHA256SUMS> [--pubkey <public-key>]
 #       Runs the documented check:
@@ -50,16 +52,22 @@ verify() { # verify <SHA256SUMS> <public-key-file>
 }
 
 sign() { # sign <SHA256SUMS> <private-key-file> <public-key-file>
+  local want
   [ -f "$1" ] || die "no $1"
   [ -f "$2" ] || die "no private key $2"
   [ -f "$3" ] || die "no release public key $3; run: scripts/release_sign.sh keygen <offline path>"
   [ "$(public_of "$2")" = "$(cat "$3")" ] || die "the private key $2 is not the release key $3"
-  # Only a list of bare file names with their SHA-256 is worth signing: no path, no repeat.
+  # Only the SHA256SUMS of this release is worth signing: sha256sum lines, each ending in a
+  # newline, listing exactly the release's six file names for the version in Cargo.toml (or in
+  # SFR_RELEASE_VERSION, to re-sign an earlier release): no path, no repeat, nothing else.
   [ -s "$1" ] || die "$1 is empty"
+  [ "$(tail -c1 "$1" | od -An -c | tr -d ' ')" = '\n' ] || die "$1 does not end in a newline"
   if grep -q -v -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "$1"; then
     die "$1 holds a line that is not '<sha256>  <bare file name>'; sign only the SHA256SUMS that scripts/release_assemble.sh wrote"
   fi
-  [ -z "$(awk '{ print $2 }' "$1" | sort | uniq -d)" ] || die "$1 lists a file name twice"
+  want="$(scripts/release_assemble.sh --names github ${SFR_RELEASE_VERSION:+"$SFR_RELEASE_VERSION"})" || die "cannot work out the release file names"
+  [ "$(awk '{ print $2 }' "$1" | sort)" = "$want" ] \
+    || die "$1 does not list exactly the release files: $(printf '%s' "$want" | tr '\n' ' ')"
   openssl pkeyutl -sign -inkey "$2" -rawin -in "$1" -out "$1.sig"
   [ "$(wc -c < "$1.sig")" -eq 64 ] || die "$1.sig is not a 64-byte Ed25519 signature"
   verify "$1" "$3"
@@ -70,7 +78,11 @@ self_test() {
   local t out
   t="$(mktemp -d)"
   trap 'rm -rf "$t"' RETURN
-  printf '%s  a.tar.gz\n' "$(printf a | sha256sum | cut -d' ' -f1)" > "$t/SHA256SUMS"
+  # a SHA256SUMS of the six release files (the names scripts/release_assemble.sh --names lists)
+  scripts/release_assemble.sh --names github | while IFS= read -r n; do
+    printf '%s  %s\n' "$(printf '%s' "$n" | sha256sum | cut -d' ' -f1)" "$n"
+  done > "$t/SHA256SUMS"
+  [ "$(wc -l < "$t/SHA256SUMS")" -eq 6 ] || die "self-test: the fixture does not list six files"
   keygen "$t/test.key" "$t/test.pub" > /dev/null
   [ "$(stat -c %a "$t/test.key")" = 600 ] || die "self-test: the private key is not mode 0600"
   if (keygen "$t/test.key" "$t/other.pub" > /dev/null 2>&1); then die "self-test: keygen overwrote a key"; fi
@@ -95,6 +107,15 @@ self_test() {
   if (sign "$t/BAD2" "$t/test.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted a repeated name"; fi
   : > "$t/BAD3"
   if (sign "$t/BAD3" "$t/test.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted an empty SHA256SUMS"; fi
+  head -5 "$t/SHA256SUMS.orig" > "$t/BAD5"
+  if (sign "$t/BAD5" "$t/test.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted a list with a release file missing"; fi
+  { cat "$t/SHA256SUMS.orig"; printf '%s  extra.tar.gz\n' "$(printf a | sha256sum | cut -d' ' -f1)"; } > "$t/BAD6"
+  if (sign "$t/BAD6" "$t/test.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted a list with an extra file"; fi
+  cur="$(scripts/release_assemble.sh --names github | head -1 | sed -E 's/^sfr-([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/')"
+  sed "s/sfr-$cur-/sfr-9.9.9-/" "$t/SHA256SUMS.orig" > "$t/BAD7"
+  if (sign "$t/BAD7" "$t/test.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted another version's list"; fi
+  head -c -1 "$t/SHA256SUMS.orig" > "$t/BAD8"
+  if (sign "$t/BAD8" "$t/test.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted a list without a final newline"; fi
   printf 'not a checksum line\n' > "$t/BAD4"
   if (sign "$t/BAD4" "$t/test.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted a line that is not a checksum"; fi
   [ ! -e "$t/BAD1.sig" ] && [ ! -e "$t/BAD4.sig" ] || die "self-test: a refused file was still signed"

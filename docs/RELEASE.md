@@ -37,7 +37,7 @@ Release public key: not generated yet. The founder generates the release key on 
 1. **Release key, once.** On an offline machine with OpenSSL 3, in a checkout of the repository: `scripts/release_sign.sh keygen /path/off/the/repository/sfr-release.key`. It writes the private key (mode 0600, refuses to overwrite one) and `release/sfr-release.pub`. Keep the private key on the offline machine and make an offline copy; the repository never holds it (`.gitignore` ignores `*.key`, and `scripts/check_no_private_keys.sh` fails CI on any private key block). Then run `scripts/regen_readme_numbers.sh`, which writes the fingerprint into the README and this page, and commit `release/sfr-release.pub`, `README.md` and `docs/RELEASE.md` in one pull request to `main`.
 2. **Dry run.** In GitHub: Actions, `release`, Run workflow, branch `main`. It builds and checks everything and uploads `sfr-release-files-<version>-dry-run`; it creates no tag, release or attestation.
 3. **Tag.** Tag the commit on `main` that you want, with the name `v` plus the version in `Cargo.toml`, and push the tag. The workflow refuses a tag that does not match `Cargo.toml` or a commit that is not on `main`. When it is green, the draft pre-release "Evaluation release 0.1.0" holds the three tarballs, the three SBOMs and `SHA256SUMS`.
-4. **Check, then sign offline.** On an online machine, download every file of the draft and run `sha256sum --check --strict SHA256SUMS` and the `gh attestation verify` command below on each tarball; compare `SHA256SUMS` with the one printed in the workflow run's summary (job `assemble`). Only then carry `SHA256SUMS` to the offline machine and run `scripts/release_sign.sh sign SHA256SUMS /path/off/the/repository/sfr-release.key`. Signing is the step that makes the draft's contents the project's word, so a changed draft must not be signed. It refuses a key that is not `release/sfr-release.pub`, a file that is not a list of bare file names with their SHA-256, writes `SHA256SUMS.sig` (a raw Ed25519 signature of 64 bytes), and verifies it with the command below.
+4. **Check, then sign offline.** When the run waits at the `release` environment, open it and check that its commit is the commit on `main` that you reviewed, then approve it (the repository settings section above). On an online machine, download every file of the draft and run `sha256sum --check --strict SHA256SUMS` and the `gh attestation verify` command below on each tarball; compare `SHA256SUMS` with the one printed in the workflow run's summary (job `assemble`). If a tag run fails after it made the draft, delete the draft before running again. Only then carry `SHA256SUMS` to the offline machine and run `scripts/release_sign.sh sign SHA256SUMS /path/off/the/repository/sfr-release.key`. Signing is the step that makes the draft's contents the project's word, so a changed draft must not be signed. It refuses a key that is not `release/sfr-release.pub`, a file that is not a list of bare file names with their SHA-256, writes `SHA256SUMS.sig` (a raw Ed25519 signature of 64 bytes), and verifies it with the command below.
 5. **Upload.** Edit the draft and attach `SHA256SUMS.sig` and the public key file `sfr-release.pub` (the same file as `release/sfr-release.pub`). Nothing else is added.
 6. **Check the draft.** It must list exactly nine files, be marked pre-release, and still be a draft. Download the files to a clean directory and run the verification commands below once yourself.
 7. **Publish.** Publish the draft. The post-release check starts by itself; read its result under Actions.
@@ -46,15 +46,22 @@ Release public key: not generated yet. The founder generates the release key on 
 
 You need OpenSSL 3 and `sha256sum` (coreutils; on macOS `shasum -a 256`). The checksums in `SHA256SUMS` are SHA-256. The `b3sum` tool is for verifying records ([RECORD_FORMAT.md](RECORD_FORMAT.md)), not release files. In a directory that holds the files you downloaded:
 
-First compare the key's fingerprint with the one on this page and in the README. Not run in CI by the docs test: the post-release check runs the same commands from the README quickstart, and `scripts/check_release_flow.sh` runs them against a throwaway key and eight attacks.
+First compare the key. Not run in CI by the docs test: the post-release check runs the same commands from the README quickstart, and `scripts/check_release_flow.sh` runs them against a throwaway key and ten attacks.
 
 ```sh doc-syntax
+curl -fsSL https://raw.githubusercontent.com/InquiroAIReseachLabs/Sealed_Flight_Recorder-/v0.1.0/release/sfr-release.pub | cmp - sfr-release.pub
 openssl pkey -pubin -in sfr-release.pub -outform DER | sha256sum
 openssl pkeyutl -verify -pubin -inkey sfr-release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
 sha256sum --check --strict SHA256SUMS
 ```
 
-The second command prints `Signature Verified Successfully` only for a good signature by that key. The third checks every file listed; with only one tarball downloaded, add `--ignore-missing` (it still fails if no listed file is present). Then the attestation, which needs the GitHub CLI logged in to GitHub. The two extra flags matter: without them any workflow of this repository could have produced the attestation; with them it must be the release workflow, run for the tag. Not run in CI by the docs test: the post-release check runs it.
+The first command fails unless your key file is byte for byte the copy in the repository at the tag. Compare every hex digit of the second command's output with the fingerprint on this page and in the README. The third prints `Signature Verified Successfully` only for a good signature by that key. The fourth checks every file listed and needs all six files in the directory. With only one tarball downloaded, check its own line instead (it fails when `SHA256SUMS` has no line for it, which `--ignore-missing` would not). Not run in CI by the docs test, which has no release; `scripts/check_release_flow.sh` runs it:
+
+```sh doc-syntax
+awk -v f="sfr-0.1.0-x86_64-unknown-linux-musl.tar.gz" '$2 == f' SHA256SUMS | sha256sum --check --strict -
+```
+
+These flags are GNU coreutils 9 behaviour; other `sha256sum` builds (busybox, `shasum -a 256`) may differ, and the one-line form works with any of them. Then the attestation, which needs the GitHub CLI logged in to GitHub. The two extra flags matter: without them any workflow of this repository could have produced the attestation; with them it must be the release workflow, run for the tag. Not run in CI by the docs test: the post-release check runs it.
 
 ```sh doc-syntax
 gh attestation verify sfr-0.1.0-x86_64-unknown-linux-musl.tar.gz --repo InquiroAIReseachLabs/Sealed_Flight_Recorder- \
@@ -68,12 +75,22 @@ Inside each tarball, `BUILDINFO` names the commit, the toolchain, and the SHA-25
 | Check | Proves | Does not prove |
 |---|---|---|
 | The fingerprint matches the one you trust | The `sfr-release.pub` you hold is the key the project published. | That the key's holder is who they claim, or that the key was not stolen. A fingerprint shown only on the page that hosts the files adds no independent trust: compare it somewhere else too. |
-| `SHA256SUMS.sig` verifies | The holder of the release private key signed exactly these checksums. | That the files are safe or correct, or that the signer reviewed them. A signature from a stolen key verifies. |
+| `SHA256SUMS.sig` verifies | The holder of the release private key signed exactly these checksums. `release_sign.sh sign` signs only a list of exactly the six release files for the version. | That the files are safe or correct, or that the signer reviewed them. A signature from a stolen key verifies. |
 | `sha256sum --check` passes | The files you downloaded are the files the signed `SHA256SUMS` lists, byte for byte. | Anything about files it does not list. |
 | `gh attestation verify` passes | GitHub recorded that the file with this digest was produced by a run of this repository's release workflow, on a stated commit. | That the source at that commit is free of defects or that the workflow is. It is evidence of where a file came from, signed by GitHub, independent of the project's own key. |
 | The BUILDINFO commit and a rebuild | With the pinned toolchain, building that commit gives the same bytes (the reproducibility report). | That every machine reproduces them; the report names what was compared. |
 
-The signature and the attestation are separate witnesses. A release that passes both was signed by the project's offline key and built by the project's workflow. A forger needs both to be fooled.
+The signature and the attestation are separate witnesses: the signature depends on a key that stays offline, the attestation on GitHub and on the workflow file at the tagged commit. They are independent only while the repository's protections hold (the next section). Someone with write access to the repository and no protections can change the workflow, tag a commit of their own and make a draft whose attestation verifies; the founder's signature is then the check that matters, and it is made only after the founder has checked the run's commit. The SBOMs are covered by the signature and by `SHA256SUMS`, not by an attestation.
+
+## Repository settings the release depends on
+
+These are settings in GitHub, made by the founder once; no file in the repository can enforce them, because a workflow run at a tag reads the workflow from the tagged commit.
+
+1. **Tags.** Settings, Rules, Rulesets, New ruleset, New tag ruleset, target `v*`: restrict creations, updates and deletions to the founder, and block force pushes. A release tag then cannot be moved or recreated on another commit.
+2. **Main.** Settings, Rules, Rulesets (or Branches, branch protection rule) for `main`: require a pull request, require the CI checks, block force pushes and deletions. The release workflow refuses a commit that is not on `main`.
+3. **The `release` environment.** Settings, Environments, New environment, name `release`: add the founder as a required reviewer. The `draft-release` job waits there. Approve it only after you have opened the run and checked that its commit is the commit you reviewed on `main`.
+4. **Immutable releases.** Settings, General, Releases: turn on immutable releases, so published files and the tag cannot be changed afterwards. If it is not available to you, the fingerprint comparison is the only defence after publishing.
+5. **Actions permissions.** Settings, Actions, General: workflow permissions "Read repository contents" by default (the workflows ask for what they need), and allow only the actions the workflows use.
 
 ## Hygiene
 
