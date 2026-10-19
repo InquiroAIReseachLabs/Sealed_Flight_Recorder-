@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # validate.sh: CLAUDEME pre-commit gate. RUN THIS BEFORE EVERY COMMIT.
-# Runs the checks of every CI job except three that need their own build: the fuzz job
-# (pinned nightly and cargo-fuzz), the release-build verify timing gate, and the armv7 job
-# (QEMU). Exits non-zero on any FAIL.
+# Runs the checks of every CI job except those that need their own build or tools: the fuzz job
+# (pinned nightly and cargo-fuzz), the release-build verify timing gate, the armv7 job (QEMU),
+# and the release jobs (static builds twice from clean, SBOMs, demo image under docker, aarch64
+# records under QEMU, benchmark, SHA256SUMS); scripts/build_release.sh, scripts/run_demo.sh and
+# docs/RELEASE.md run those by hand. Exits non-zero on any FAIL.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,6 +42,23 @@ run "deny-list check" scripts/check_deny_list.sh
 run "language self-test" scripts/check_language.sh --self-test
 run "language check" scripts/check_language.sh
 run "README numbers script self-test" scripts/regen_readme_numbers.sh --self-test
+run "README numbers match docs/receipts/ci-run.txt" scripts/regen_readme_numbers.sh --check
+
+# 4c. Release scripts (Chunk 5): no private key in the repository, the signing script's own
+# test, the benchmark segment manifest, and every script parses.
+run "no private key self-test" scripts/check_no_private_keys.sh --self-test
+run "no private key in the repository" scripts/check_no_private_keys.sh
+run "release signing self-test" scripts/release_sign.sh --self-test
+run "benchmark segment manifest matches the golden VTOL flight" python3 -I scripts/benchmark/make_segments.py \
+  --check scripts/benchmark/vtol_transition.segments testdata/sitl/v1.17.0/vtol_transition.ulg \
+  testdata/sitl/v1.17.0/vtol_transition.ulg
+check_script_syntax() {
+  local f ok=0
+  for f in scripts/*.sh scripts/testdata/*.sh; do bash -n "$f" || { echo "  bash -n: $f"; ok=1; }; done
+  sh -n scripts/run_demo.sh || { echo "  sh -n: scripts/run_demo.sh"; ok=1; }
+  return $ok
+}
+run "every script parses" check_script_syntax
 
 # 4b. One crypto stack on every target: sha2, ed25519-dalek, blake3 (SPEC B1.10, "Crypto").
 run "one crypto stack on every target" scripts/check_crypto_graph.sh

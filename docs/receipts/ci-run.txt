@@ -1,0 +1,7 @@
+# README numbers come only from this file: scripts/regen_readme_numbers.sh writes them into
+# README.md. Every line after run and commit is copied from a job log of that CI run, after the
+# name of the job, by scripts/regen_readme_numbers.sh --receipt. Do not edit by hand.
+run 39182458471
+commit 817a6c44c5d2283a79fa7051eb4b2ed59bfedf1f
+code-quality perf: in-process verify (gated, under 10 ms): 10,000 events, 1704147 byte record, median 6.61 ms, min 6.56 ms, max 7.19 ms, 101 runs
+code-quality perf: end-to-end sfr verify (not gated): same record, median 9.53 ms, min 9.43 ms, max 17.62 ms, 101 runs
