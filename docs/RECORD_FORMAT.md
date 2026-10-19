@@ -61,7 +61,7 @@ A schema 1 record holds exactly these thirteen fields, no more and no fewer (`RE
 | `key_fingerprint` | `sha256:` and the lowercase hex SHA-256 of the signing key's SubjectPublicKeyInfo DER |
 | `key_label` | the key file name, token object label, or sealed-key directory |
 | `signer_certificate` | `null` in this build |
-| `time_utc` | `YYYY-MM-DDTHH:MM:SSZ`: the time given with `--seal-time`, converted to UTC, or the sealing machine's clock when none is given |
+| `time_utc` | `YYYY-MM-DDTHH:MM:SSZ`: the time given with `--seal-time`, converted to UTC, or the sealing machine's clock when none is given. Self-asserted: signed, so it cannot change after sealing, but nothing checks it |
 | `token_cmvp_certificate` | `null` in this build (it would hold the certificate number of a PKCS#11 token) |
 
 **Key custody** is declared by the sealer and signed with the record: `pkcs11-token` (the private key never leaves a PKCS#11 token or HSM), `tpm-sealed` (the seed is sealed to one TPM 2.0 and is in `sfr`'s memory for one signature), `file-evaluation` (a key file, for evaluation only). This build signs only with `file-evaluation` keys. A verifier must treat custody as a claim: only a signer certificate chain could prove it ([THREAT_MODEL.md](THREAT_MODEL.md)).
