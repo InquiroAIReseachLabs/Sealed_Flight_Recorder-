@@ -230,7 +230,7 @@ pub fn check(record: &Value, md: &str) {
     l.expect(&format!("# Sealed flight record: {}", esc(&file)));
     l.expect("");
     l.expect(&format!(
-        "**Status: {}**. Sealed {} by {} {}, v1.0 evaluation release. This report is generated from the record {} alone.",
+        "**Status: {}**. Sealed (time claimed by the sealer) {} by {} {}, v1.0 evaluation release. This report is generated from the record {} alone.",
         ev(f(r, "status")),
         ev(f(seal, "time_utc")),
         ev(f(tool, "name")),
@@ -461,7 +461,10 @@ pub fn check(record: &Value, md: &str) {
     // Seal.
     l.expect("## Seal");
     l.expect("");
-    assert_eq!(l.item("Sealed at"), ev(f(seal, "time_utc")));
+    assert_eq!(
+        l.item("Seal time (claimed by the sealer, not proven)"),
+        ev(f(seal, "time_utc"))
+    );
     let fp = hex_span(f(seal, "key_fingerprint"));
     assert_eq!(l.item("Key fingerprint"), fp);
     assert_eq!(

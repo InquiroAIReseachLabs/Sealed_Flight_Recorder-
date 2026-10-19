@@ -16,6 +16,9 @@
 #   inter.pem         intermediate CA, issued by root
 #   signer.pem        signer, issued by inter, code signing, valid 2026-01-01 to 2036-01-01
 #   signer_expired.pem   another signer, valid 2020-01-01 to 2021-01-01
+#   signer_lapsed.pem    another signer, valid 2025-02-01 to 2025-12-31: expired now, but inside
+#                        the validity of inter and root, so a seal time backdated into 2025 would
+#                        revive it if a verifier trusted the seal time
 #   signer_server.pem    another signer whose only extended key usage is server authentication
 #   signer_revoked.pem   another signer, revoked in inter.crl
 #   inter.crl         CRL issued by inter, listing signer_revoked.pem
@@ -23,7 +26,7 @@ set -euo pipefail
 export LC_ALL=C TZ=UTC
 
 # name|seed byte (the 32-byte seed repeats it)
-SEEDS="root|10 other_root|40 inter|20 signer|30 signer_expired|31 signer_server|32 signer_revoked|33"
+SEEDS="root|10 other_root|40 inter|20 signer|30 signer_expired|31 signer_server|32 signer_revoked|33 signer_lapsed|34"
 
 die() { echo "make_test_pki.sh: $*" >&2; exit 1; }
 command -v openssl > /dev/null || die "openssl 3 is required"
@@ -116,6 +119,7 @@ EOF
   issue signer_expired inter v3_signer 20200101000000Z 20210101000000Z
   issue signer_server inter v3_server 20260101000000Z 20360101000000Z
   issue signer_revoked inter v3_signer 20260101000000Z 20360101000000Z
+  issue signer_lapsed inter v3_signer 20250201000000Z 20251231000000Z
   # Revoke signer_revoked as of 2026-06-01, then a CRL by inter with fixed dates. Only
   # inter's entries go into inter's CRL.
   openssl ca -batch -config "$work/ca.cnf" -cert "$out/inter.pem" -keyfile "$work/inter.key" \

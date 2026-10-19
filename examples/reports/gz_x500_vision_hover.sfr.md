@@ -2,7 +2,7 @@ EVALUATION KEY: not for operational use
 
 # Sealed flight record: gz\_x500\_vision\_hover\.ulg
 
-**Status: FAIL**. Sealed 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0, v1.0 evaluation release. This report is generated from the record gz\_x500\_vision\_hover\.sfr alone.
+**Status: FAIL**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0, v1.0 evaluation release. This report is generated from the record gz\_x500\_vision\_hover\.sfr alone.
 
 ## Rules
 
@@ -74,7 +74,7 @@ These are reported, not a rule failure: R3 compares the parameters at log start 
 
 ## Seal
 
-- Sealed at: 2026\-10\-18T15\:00\:00Z
+- Seal time (claimed by the sealer, not proven): 2026\-10\-18T15\:00\:00Z
 - Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
 - Key custody (declared by the sealer; this report cannot attest it): file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1

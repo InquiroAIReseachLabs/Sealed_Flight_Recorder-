@@ -56,8 +56,8 @@ A **file** argument is a `File`, a `Blob` with a `name`, or `{ name, data }` wit
 | `load()` | Starts the engine, fetches the example rules, makes the session's in-browser key. Resolves to `{ version, limits: { fileBytes, textBytes }, sessionKey: { keyId, fingerprint, publicKeyPem } }`. Later calls return the same. Every other function calls it first. |
 | `newEvaluationKey()` | A new in-browser key: `{ keyId, fingerprint, publicKeyPem }`. |
 | `seal({ log, rules, baseline, key, sealTime })` | `sfr seal`. `rules`: `'default'` (the default), `'extended'`, or a file. `baseline`: a file, or none (R2 and R3 then fail). `key`: `{ keyId }` from `newEvaluationKey()` or `load()`, or an evaluation key file; default the session key. `sealTime`: RFC 3339; default now. Resolves to a seal result. |
-| `verify({ record, publicKey })` | `sfr verify --pubkey`. Resolves to a verify result. |
-| `verifyWithLog({ record, publicKey, log })` | `sfr verify --pubkey --ulog`. Resolves to a verify result. |
+| `verify({ record, publicKey })` | `sfr verify --pubkey`, with the browser's clock as the verification time (the engine reads no clock): a record whose claimed seal time is more than 300 seconds later is refused. Resolves to a verify result. |
+| `verifyWithLog({ record, publicKey, log })` | `sfr verify --pubkey --ulog`, with the same clock. Resolves to a verify result. |
 | `loadSample()` | Fetches the sample on first use (later calls make no request): `{ name, path, size, sha256, log: File, baseline: File, baselinePath, parameter, notices: { provenance, license }, transfer: { gzBytes, compressedBytes, transferBytes, unpackedHere } }`. `transferBytes` is the size on the wire as the browser reports it (Resource Timing), or `null` where it does not. |
 | `changeCommand(recordBytes)` | A copy of a record with one digit of the first COMMAND event's command id changed: `{ bytes, offset, from, to, description }`. |
 | `changeParameter(logBlob, name, value)` | A copy of a log with float parameter `name` at log start set to `value`: `{ blob, offset, before, after, description }`. |
@@ -77,7 +77,7 @@ A **file** argument is a `File`, a `Blob` with a `name`, or `{ name, data }` wit
 | `text` | what `sfr seal` prints, with file names in place of paths |
 | `notes` | what `sfr seal` prints on standard error besides a failure, one per entry |
 | `results` | each rule: `{ id, name, status, expected, found, detail: [lines] }` |
-| `merkleRoot`, `leafCount`, `keyFingerprint`, `keyCustody`, `keyLabel`, `sealedUtc`, `eventCount` | as the record holds them |
+| `merkleRoot`, `leafCount`, `keyFingerprint`, `keyCustody`, `keyLabel`, `sealTimeClaimedUtc`, `eventCount` | as the record holds them; the seal time is the sealer's claim |
 | `log` | `{ fileName, size, sha256, blake3, firmware }` |
 
 When nothing was written: `{ sealed: false, exitCode: 3 or 4, message, text }`, with `text` what `sfr` prints on standard error (`sfr: <message>`).
@@ -93,7 +93,7 @@ When nothing was written: `{ sealed: false, exitCode: 3 or 4, message, text }`, 
 | `text` | exactly what `sfr verify` prints, with the record's file name in place of its path; for exit 4, what it prints on standard error. The page takes no report, so its `report` line says the report was not checked |
 | `message` | for exit 4, the reason; otherwise `null` |
 | `keyCustody` | the record's custody, or what a record that failed claims (`null` if unreadable) |
-| `keyFingerprint`, `cryptoCrates`, `sealedUtc`, `status`, `eventCount` | what a verified record says; `null` otherwise |
+| `keyFingerprint`, `cryptoCrates`, `sealTimeClaimedUtc`, `status`, `eventCount` | what a verified record says; `null` otherwise |
 | `failedRules` | for a verified record, the ids of the rules whose sealed result is FAIL (empty when `status` is `PASS`); `null` otherwise |
 | `mismatch` | the first mismatch, or `null` |
 | `mismatches` | every mismatch, the first first (the text lists at most 21) |

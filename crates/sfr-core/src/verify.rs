@@ -37,8 +37,9 @@ pub struct Verified {
     pub custody: Custody,
     /// Key fingerprint.
     pub fingerprint: String,
-    /// Seal time, UTC.
-    pub time_utc: String,
+    /// The seal time the sealer claimed (`seal.time_utc`), UTC. Signed, so it cannot change
+    /// after sealing, but it is the sealer's statement: nothing here proves it.
+    pub claimed_time_utc: String,
     /// `seal.crypto_crates` as one line: each crate name and its crate version.
     pub crypto_crates: String,
     /// Sealed overall status.
@@ -136,22 +137,43 @@ pub const FLIGHT_RULES_UNKNOWN: &str = "Flight rules: UNKNOWN (the record failed
 /// text of the `custody` line ([`custody_text`]): the custody the sealer declares, and whether
 /// anything beyond the sealer's word attests it.
 ///
-/// `report` is the `report` line: [`report_line`].
+/// `report` is the `report` line: [`report_line`]. `time` is the `time` line ([`time_line`]),
+/// given when the verification time decided something or was set with `--at`.
 pub fn verified_text(
     record_path: &str,
     v: &Verified,
     trust: &str,
     custody: &str,
     report: &str,
+    time: Option<&str>,
 ) -> String {
+    let time = time.map_or_else(String::new, |t| format!("time      {t}\n"));
     format!(
-        "{}\n{}\nrecord    {record_path}\nreport    {report}\ntrust     {trust}\ncustody   {custody}\nkey       {}\ncrypto    {} (crate versions)\nsealed    {} (stated by the sealer, not checked)\nevents    {}\n",
+        "{}\n{}\nrecord    {record_path}\nreport    {report}\ntrust     {trust}\n{time}custody   {custody}\nkey       {}\ncrypto    {} (crate versions)\nseal time {} ({SEAL_TIME_CLAIM})\nevents    {}\n",
         integrity_line(v),
         flight_rules_line(v),
         v.fingerprint,
         v.crypto_crates,
-        v.time_utc,
+        v.claimed_time_utc,
         v.events
+    )
+}
+
+/// What the `seal time` line of `sfr verify` says about the time it shows: the sealer's own
+/// statement, signed with the record but not proven by anything the verifier has.
+pub const SEAL_TIME_CLAIM: &str = "claimed by the sealer, not proven";
+
+/// The `time` line of `sfr verify`: the time the verification used and where it came from
+/// (`verifier clock` or `--at`), and what it was used for.
+pub fn time_line(verification_time: i64, source: &str, used_for_chain: bool) -> String {
+    let what = if used_for_chain {
+        "certificate validity was checked at this time, not at the claimed seal time"
+    } else {
+        "the claimed seal time was checked not to be later than this"
+    };
+    format!(
+        "{} ({source}); {what}",
+        crate::seal::format_utc(verification_time)
     )
 }
 
@@ -709,7 +731,7 @@ fn standalone(
     let verified = Verified {
         custody,
         fingerprint: recorded_fp.to_string(),
-        time_utc: string(seal, "time_utc")?.to_string(),
+        claimed_time_utc: string(seal, "time_utc")?.to_string(),
         crypto_crates: crates.join(", "),
         status: status.to_string(),
         failed_rules,
