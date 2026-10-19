@@ -231,6 +231,8 @@ pub fn verify(
             size: byte_count(log_size),
             reader: r,
         }),
+        // The page does not take a report; its verify says the report was not checked.
+        report: None,
     };
     match crate::verify(request) {
         Ok(v) => verify_json(&v),
