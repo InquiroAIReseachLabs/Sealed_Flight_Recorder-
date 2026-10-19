@@ -173,7 +173,35 @@ In a pipeline script run with `set -e`, the `return 1` stops the job; the `|| ec
 ## Keys
 
 - **Keep the signing key off the vehicle where you can.** A key on a vehicle goes wherever the vehicle goes. If logs reach a ground station soon after landing, sealing there keeps the key off the vehicle at the cost of a longer disarm-to-seal window; sealing on the companion computer shortens the window but puts a key on board. Choose per operation, and use one key per vehicle, so that a lost vehicle costs the records of one key.
-- **This build has file keys only** (`sfr keygen --evaluation-only`); every record they seal holds custody `file-evaluation`, and its report says EVALUATION KEY. A key file is protected only by file permissions (`keygen` writes `sfr.key` with mode 0600). The hardware key sources, a PKCS#11 token and a TPM-sealed seed, exit 4 with "not available in this build", so this page has no commands for them yet.
+- **Seal operational records with a hardware key.** A key file (`sfr keygen --evaluation-only`) is for evaluation: every record it seals holds custody `file-evaluation` and says EVALUATION KEY, and the file is protected only by its permissions (mode 0600). The two hardware key sources are below. Custody is what the sealer declares; [THREAT_MODEL.md](THREAT_MODEL.md#keys) says what each protects against.
 - **`sfr` does not manage keys beyond `keygen`.** It does not rotate, revoke, back up, escrow or distribute them. Keep a list of which fingerprint belongs to which vehicle and when it was in service; when a key is lost or stolen, stop trusting records with its fingerprint from that time ([THREAT_MODEL.md](THREAT_MODEL.md)).
 - **Give verifiers the public key out of band.** `verify` checks a record against the `sfr.pub` it is given; a record re-signed by someone else verifies against their key. Publish each vehicle's public key and fingerprint where your verifiers can check it.
 - **Use `--seal-time` only for reproducible examples.** Without it, the seal time is the sealing machine's clock, which is still the sealer's statement, not proof ([THREAT_MODEL.md](THREAT_MODEL.md)).
+
+### A key in a PKCS#11 token or HSM (`pkcs11-token`)
+
+The token makes the key and signs; the private key never leaves it. `sfr` reaches the token through `sfr-pkcs11-helper`, a separate program that loads the token's PKCS#11 module (the static `sfr` cannot load one). The token must sign with Ed25519 (`CKM_EDDSA`). Build the helper and put it beside `sfr`, or name it with the variable `SFR_PKCS11_HELPER`. Make the key inside the token with the token's own tools; with OpenSC's `pkcs11-tool`, for a token labelled `flight-keys` and a key labelled `sfr-seal`. Not run in CI by the docs test: it needs a token. The CI job `hardware-keys` runs the same steps against a SoftHSM v2 token (`scripts/hardware_keys.sh`):
+
+```sh doc-syntax
+cargo build --release --locked -p sfr-pkcs11-helper
+cp target/release/sfr-pkcs11-helper "$(dirname "$(command -v sfr)")/"
+pkcs11-tool --module "$MODULE" --token-label flight-keys --login \
+  --keypairgen --key-type EC:edwards25519 --label sfr-seal --id 01
+```
+
+The key URI (RFC 7512) names the module, where the PIN is, the token and the key. The PIN comes from a file (`pin-source=file:<path>`, its first line) or a variable (`pin-source=env:<name>`); a PIN written into the URI (`pin-value`) is refused, because process lists and shell histories show it. `sfr pubkey` prints the key's public half for verifiers, and `seal` signs in the token. Not run in CI by the docs test: it needs a token:
+
+```sh doc-syntax
+KEY="pkcs11:token=flight-keys;object=sfr-seal?module-path=$MODULE&pin-source=file:/etc/sfr/pin"
+sfr pubkey --key-uri "$KEY" > sfr.pub
+sfr seal "$LOG" --rules rules.toml --baseline vehicle.params --key-uri "$KEY" --out records
+```
+
+### A seed sealed to a TPM (`tpm-sealed`)
+
+`sfr keygen --tpm-sealed` takes a 32-byte seed from the operating system's random number generator and seals it to this machine's TPM through tpm2-tools: the seed goes to the TPM through a pipe and never reaches disk. It writes `sfr.tpm.pub` and `sfr.tpm.priv` (sealed blobs that no other TPM can load), `sfr.tpm.conf` (the parent handle and PCR selection) and `sfr.pub`. It needs tpm2-tools and a persistent storage key in the TPM, by default at handle `0x81000001` (`--tpm-parent` names another). tpm2-tools reach the TPM through `/dev/tpmrm0` unless `TPM2TOOLS_TCTI` says otherwise. With `--tpm-pcrs sha256:0,7` the TPM unseals only while those PCRs hold the values they held at `keygen`, so a firmware or boot change makes the key unusable and a new key is needed. `seal` unseals the seed for one signature and checks it against `sfr.pub`. Not run in CI by the docs test: it needs a TPM. The CI job `hardware-keys` runs it against swtpm:
+
+```sh doc-syntax
+sfr keygen --tpm-sealed --tpm-pcrs sha256:0,7 --out /etc/sfr/key
+sfr seal "$LOG" --rules rules.toml --baseline vehicle.params --key-uri tpm-sealed:/etc/sfr/key --out records
+```

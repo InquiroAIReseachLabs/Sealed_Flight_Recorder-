@@ -1,4 +1,4 @@
-Evaluation release @VERSION@ of `sfr`, a pre-release. It is provided without warranty, and it signs only with evaluation keys.
+Evaluation release @VERSION@ of `sfr`, a pre-release. It is provided without warranty. Its quickstart signs with evaluation keys; a TPM-sealed key (`sfr keygen --tpm-sealed`) needs tpm2-tools on the machine, and a PKCS#11 key needs `sfr-pkcs11-helper` built from source.
 
 Files: a static `sfr` for Linux `x86_64`, `aarch64` and `armv7` (tarballs), one CycloneDX SBOM per target, `SHA256SUMS`, `SHA256SUMS.sig` (signed offline with the release key), and `sfr-release.pub` (the release public key).
 

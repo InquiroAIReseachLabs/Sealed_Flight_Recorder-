@@ -72,6 +72,31 @@ jobs:
             grep -E '^perf: ' verify-perf.log | sed -e 's/^perf: /- /'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Hardware key custody (SPEC B1.10 Key custody): pkcs11-token through sfr-pkcs11-helper
+  # against a SoftHSM v2 token (CKM_EDDSA), and tpm-sealed against swtpm behind tpm2-abrmd.
+  # scripts/hardware_keys.sh makes the token, its Ed25519 key and the TPM's storage key, and
+  # runs crates/sfr/tests/hardware.rs with its ignored tests included.
+  hardware-keys:
+    name: pkcs11-token on SoftHSM v2 and tpm-sealed on swtpm (SPEC B1.10 Key custody)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          rustup show active-toolchain
+      - name: Install SoftHSM v2, OpenSC, swtpm, tpm2-tools and tpm2-abrmd
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q softhsm2 opensc swtpm swtpm-tools tpm2-tools tpm2-abrmd \
+            libtss2-tcti-tabrmd0 dbus
+          softhsm2-util --version
+          tpm2_create --version
+      - name: Hardware key custody tests
+        run: scripts/hardware_keys.sh
+
   # The static armv7 build and the comparison of its records with x86_64 run in release-build
   # and records, from the release tarballs, beside this job.
   armv7:

@@ -5,7 +5,8 @@
 # the release jobs (static builds twice from clean, SBOMs, demo image under docker, aarch64 and
 # armv7 records under QEMU, benchmark, SHA256SUMS), the release and post-release workflows
 # themselves (they run on a tag, after a release, and by hand), and the sandbox browser gate (wasm-bindgen-cli
-# and three browsers); scripts/build_release.sh, scripts/run_demo.sh, scripts/build_site.sh with
+# and three browsers), and the hardware key custody job (SoftHSM v2 and swtpm: scripts/hardware_keys.sh);
+# scripts/build_release.sh, scripts/run_demo.sh, scripts/build_site.sh with
 # tests/browser/sandbox.test.mjs, and docs/RELEASE.md run those by hand. Exits non-zero on any FAIL.
 set -uo pipefail
 
