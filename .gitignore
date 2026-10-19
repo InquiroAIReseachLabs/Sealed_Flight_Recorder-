@@ -21,3 +21,8 @@
 
 # Python bytecode from scripts/
 __pycache__/
+
+# Release artifacts and their staging (scripts/build_release.sh and the CI release jobs).
+/dist/
+# cargo-cyclonedx writes SBOMs next to each crate; scripts/release_sbom.sh moves them out.
+*.cdx.json
