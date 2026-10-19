@@ -2,9 +2,11 @@
 //!
 //! [`check`] reads a report back line by line and compares every fact in it with the record
 //! field it shows: each table row and list item, the status line, the findings of failed
-//! rules, and the verify command. It shares no code with `sfr_core::report`: it unescapes
-//! what the report shows and compares it with the record's values. Every line of the report
-//! must be accounted for, so a line with content from anywhere else fails the check.
+//! rules, and the verify command. It shares no code with `sfr_core::report`. It compares the
+//! Markdown as written, not unescaped: a value from the record must appear with a backslash
+//! before every ASCII punctuation character (CommonMark shows such a character literally), so
+//! a value that would render as anything but its own text fails the check. Every line of the
+//! report must be accounted for, so a line with content from anywhere else fails too.
 
 use sfr_core::json::Value;
 use std::collections::BTreeMap;
@@ -29,37 +31,48 @@ fn a<'a>(m: &'a Obj, k: &str) -> &'a [Value] {
     }
 }
 
-/// A record scalar as the report shows it once unescaped: control characters as spaces.
+/// A record scalar as text: `null` as "none".
 fn plain(v: &Value) -> String {
-    let t = match v {
+    match v {
         Value::Null => "none".to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Int(i) => i.to_string(),
         Value::Str(s) => s.clone(),
         other => sfr_core::json::canonical(other),
-    };
-    t.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
+    }
 }
 
-/// Removes Markdown backslash escapes.
-fn unescape(t: &str) -> String {
+/// Text as the report must write it: control characters as spaces, and a backslash before
+/// every ASCII punctuation character.
+fn esc(t: &str) -> String {
     let mut out = String::new();
-    let mut chars = t.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            if let Some(n) = chars.next() {
-                out.push(n);
-            }
-        } else {
-            out.push(c);
+    for c in t.chars() {
+        let c = if c.is_control() { ' ' } else { c };
+        if c.is_ascii_punctuation() {
+            out.push('\\');
         }
+        out.push(c);
     }
     out
 }
 
-/// The cells of a table row, split on unescaped `|` and unescaped.
+/// A record scalar as the report must write it.
+fn ev(v: &Value) -> String {
+    esc(&plain(v))
+}
+
+/// A hexadecimal record value (a digest, or `sha256:` and a fingerprint) in a code span.
+fn hex_span(v: &Value) -> String {
+    let t = plain(v);
+    let hex = t.strip_prefix("sha256:").unwrap_or(&t);
+    assert!(
+        !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+        "not hexadecimal: {t}"
+    );
+    format!("`{t}`")
+}
+
+/// The cells of a table row, split on unescaped `|`, as written.
 fn cells(line: &str) -> Vec<String> {
     assert!(
         line.starts_with("| ") && line.ends_with(" |"),
@@ -68,7 +81,7 @@ fn cells(line: &str) -> Vec<String> {
     let inner = &line[2..line.len() - 2];
     let mut out = Vec::new();
     let mut cur = String::new();
-    let mut chars = inner.chars().peekable();
+    let mut chars = inner.chars();
     while let Some(c) = chars.next() {
         if c == '\\' {
             cur.push(c);
@@ -76,13 +89,13 @@ fn cells(line: &str) -> Vec<String> {
                 cur.push(n);
             }
         } else if c == '|' {
-            out.push(unescape(cur.trim()));
+            out.push(cur.trim().to_string());
             cur.clear();
         } else {
             cur.push(c);
         }
     }
-    out.push(unescape(cur.trim()));
+    out.push(cur.trim().to_string());
     out
 }
 
@@ -131,13 +144,12 @@ impl<'a> Lines<'a> {
         self.expect("");
         rows
     }
-    /// A list item "- Label: value", unescaped value.
+    /// The value of a list item "- Label: value", as written.
     fn item(&mut self, label: &str) -> String {
         let l = self.next();
-        let v = l
-            .strip_prefix(&format!("- {label}: "))
-            .unwrap_or_else(|| panic!("expected item {label:?}, got {l:?}"));
-        unescape(v)
+        l.strip_prefix(&format!("- {label}: "))
+            .unwrap_or_else(|| panic!("expected item {label:?}, got {l:?}"))
+            .to_string()
     }
 }
 
@@ -146,6 +158,41 @@ fn r3_parts(line: &str) -> (String, String, String) {
     let (n, rest) = line.split_once(": baseline ").expect("R3 line");
     let (b, fl) = rest.split_once(", flown ").expect("R3 line");
     (n.to_string(), b.to_string(), fl.to_string())
+}
+
+/// A file name as a shell argument `sfr` reads as that file, built here independently of the
+/// renderer: `./` before a leading `-`; `$'...'` with three-digit octal byte escapes when the
+/// name holds a control character; single quotes when it holds anything outside
+/// `[A-Za-z0-9._/-]`.
+pub fn shell_arg(name: &str) -> String {
+    let mut n = name.to_string();
+    if n.starts_with('-') {
+        n.insert_str(0, "./");
+    }
+    if n.chars().any(char::is_control) {
+        let body: String = n
+            .chars()
+            .map(|c| match c {
+                '\'' => "\\'".to_string(),
+                '\\' => "\\\\".to_string(),
+                c if c.is_control() => c
+                    .to_string()
+                    .bytes()
+                    .map(|b| format!("\\{b:03o}"))
+                    .collect(),
+                c => c.to_string(),
+            })
+            .collect();
+        return format!("$'{body}'");
+    }
+    let bare = n
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b));
+    if bare && !n.is_empty() {
+        n
+    } else {
+        format!("'{}'", n.split('\'').collect::<Vec<_>>().join("'\\''"))
+    }
 }
 
 /// Checks every fact of `md` against `record`. Panics with the first mismatch.
@@ -180,27 +227,16 @@ pub fn check(record: &Value, md: &str) {
         l.expect("EVALUATION KEY: not for operational use");
         l.expect("");
     }
-    let title = l.next();
-    assert_eq!(
-        unescape(
-            title
-                .strip_prefix("# Sealed flight record: ")
-                .expect("title")
-        ),
-        file
-    );
+    l.expect(&format!("# Sealed flight record: {}", esc(&file)));
     l.expect("");
-    let status = unescape(l.next());
-    assert_eq!(
-        status,
-        format!(
-            "**Status: {}**. Sealed {} by {} {}, v1.0 evaluation release. This report is generated from the record {stem}.sfr alone.",
-            plain(f(r, "status")),
-            plain(f(seal, "time_utc")),
-            plain(f(tool, "name")),
-            plain(f(tool, "version"))
-        )
-    );
+    l.expect(&format!(
+        "**Status: {}**. Sealed {} by {} {}, v1.0 evaluation release. This report is generated from the record {} alone.",
+        ev(f(r, "status")),
+        ev(f(seal, "time_utc")),
+        ev(f(tool, "name")),
+        ev(f(tool, "version")),
+        esc(&format!("{stem}.sfr"))
+    ));
     l.expect("");
 
     // Rules: one row per result, in order; then the findings of each failed rule.
@@ -214,7 +250,7 @@ pub fn check(record: &Value, md: &str) {
         let res = o(res, "result");
         let want: Vec<String> = ["id", "status", "name", "found"]
             .iter()
-            .map(|k| plain(f(res, k)))
+            .map(|k| ev(f(res, k)))
             .collect();
         assert_eq!(row, &want, "rules row");
         if plain(f(res, "id")) == "R3" {
@@ -226,15 +262,11 @@ pub fn check(record: &Value, md: &str) {
         if plain(f(res, "status")) != "FAIL" {
             continue;
         }
-        l.expect(&format!("### {} FAIL", plain(f(res, "id"))));
+        l.expect(&format!("### {} FAIL", ev(f(res, "id"))));
         l.expect("");
-        assert_eq!(l.item("Expected"), plain(f(res, "expected")));
+        assert_eq!(l.item("Expected"), ev(f(res, "expected")));
         for d in a(res, "detail") {
-            let line = l.next();
-            assert_eq!(
-                unescape(line.strip_prefix("- ").expect("detail item")),
-                plain(d)
-            );
+            l.expect(&format!("- {}", ev(d)));
         }
         l.expect("");
     }
@@ -251,7 +283,7 @@ pub fn check(record: &Value, md: &str) {
             .iter()
             .map(|d| {
                 let (n, b, fl) = r3_parts(d);
-                vec![n, b, fl]
+                vec![esc(&n), esc(&b), esc(&fl)]
             })
             .collect();
         assert_eq!(rows, want, "parameter differences are R3's detail lines");
@@ -263,11 +295,7 @@ pub fn check(record: &Value, md: &str) {
         l.expect("");
         assert_eq!(
             l.item("VTOL type"),
-            format!(
-                "{} (VT_TYPE {})",
-                plain(f(vt, "name")),
-                plain(f(vt, "value"))
-            )
+            format!("{} (VT_TYPE {})", ev(f(vt, "name")), ev(f(vt, "value")))
         );
         l.expect("");
         let watched = a(config, "watched_parameters");
@@ -290,7 +318,7 @@ pub fn check(record: &Value, md: &str) {
                     assert_eq!(b, fl, "{name}: R3 lists no difference");
                     "MATCH"
                 };
-                assert_eq!(row, &vec![name.clone(), b, fl, mark.to_string()]);
+                assert_eq!(row, &vec![esc(&name), esc(&b), esc(&fl), mark.to_string()]);
             }
         }
     } else {
@@ -305,7 +333,7 @@ pub fn check(record: &Value, md: &str) {
     l.expect("");
     let sealed = a(r, "sealed_topics");
     if sealed.is_empty() {
-        l.expect("The rules file seals no topics.");
+        l.expect("The record holds no sealed topic digests.");
         l.expect("");
     } else {
         let rows = l.table(&[
@@ -322,9 +350,9 @@ pub fn check(record: &Value, md: &str) {
         );
         for (row, t) in rows.iter().zip(sealed) {
             let t = o(t, "sealed topic");
-            assert_eq!(row[0], plain(f(t, "topic")));
-            assert_eq!(row[1], plain(f(t, "multi_id")));
-            assert_eq!(row[2], plain(f(t, "message_count")));
+            assert_eq!(row[0], ev(f(t, "topic")));
+            assert_eq!(row[1], ev(f(t, "multi_id")));
+            assert_eq!(row[2], ev(f(t, "message_count")));
             match f(t, "first_timestamp_us") {
                 Value::Null => assert_eq!(row[3], "none"),
                 first => {
@@ -333,9 +361,14 @@ pub fn check(record: &Value, md: &str) {
                     assert_eq!(micros(y).to_string(), plain(f(t, "last_timestamp_us")));
                 }
             }
-            let digest = row[4].trim_matches('`');
+            let digest = row[4]
+                .strip_prefix('`')
+                .and_then(|d| d.strip_suffix('`'))
+                .expect("digest in a code span");
             assert!(
-                digest.len() >= 8 && plain(f(t, "data_sha256")).starts_with(digest),
+                digest.len() >= 8
+                    && digest.bytes().all(|b| b.is_ascii_hexdigit())
+                    && plain(f(t, "data_sha256")).starts_with(digest),
                 "digest prefix {digest}"
             );
         }
@@ -353,17 +386,17 @@ pub fn check(record: &Value, md: &str) {
         assert_eq!(rows.len(), events.len(), "one row per event");
         for (row, e) in rows.iter().zip(events) {
             let e = o(e, "event");
-            assert_eq!(row[0], plain(f(e, "seq")));
+            assert_eq!(row[0], ev(f(e, "seq")));
             assert_eq!(micros(&row[1]).to_string(), plain(f(e, "boot_us")));
-            assert_eq!(row[2], plain(f(e, "kind")));
-            assert_eq!(row[3], e.get("category").map(plain).unwrap_or_default());
+            assert_eq!(row[2], ev(f(e, "kind")));
+            assert_eq!(row[3], e.get("category").map(ev).unwrap_or_default());
             let own = [
                 "seq", "kind", "boot_us", "category", "utc_us", "topic", "instance", "index",
             ];
             let want = e
                 .iter()
                 .filter(|(k, _)| !own.contains(&k.as_str()))
-                .map(|(k, v)| format!("{k} {}", plain(v)))
+                .map(|(k, v)| format!("{} {}", esc(k), ev(v)))
                 .collect::<Vec<_>>()
                 .join("; ");
             assert_eq!(row[4], want.trim(), "event {} detail", row[0]);
@@ -373,53 +406,50 @@ pub fn check(record: &Value, md: &str) {
     // Log identity and digests.
     l.expect("## Log");
     l.expect("");
-    assert_eq!(l.item("File"), file);
-    assert_eq!(l.item("Size (bytes)"), plain(f(log, "size")));
+    assert_eq!(l.item("File"), esc(&file));
+    assert_eq!(l.item("Size (bytes)"), ev(f(log, "size")));
     assert_eq!(
         l.item("Firmware"),
-        format!("{} (git {})", plain(f(fw, "version")), plain(f(fw, "git")))
+        format!("{} (git {})", ev(f(fw, "version")), ev(f(fw, "git")))
     );
-    assert_eq!(l.item("SHA-256"), format!("`{}`", plain(f(log, "sha256"))));
-    assert_eq!(
-        l.item("BLAKE3 (supplementary)"),
-        format!("`{}`", plain(f(log, "blake3")))
-    );
-    assert_eq!(l.item("VTOL"), plain(f(vehicle, "is_vtol")));
-    assert_eq!(l.item("MAV_TYPE"), plain(f(vehicle, "system_type")));
+    assert_eq!(l.item("SHA-256"), hex_span(f(log, "sha256")));
+    assert_eq!(l.item("BLAKE3 (supplementary)"), hex_span(f(log, "blake3")));
+    assert_eq!(l.item("VTOL"), ev(f(vehicle, "is_vtol")));
+    assert_eq!(l.item("MAV_TYPE"), ev(f(vehicle, "system_type")));
     l.expect("");
 
     // Seal.
     l.expect("## Seal");
     l.expect("");
-    assert_eq!(l.item("Sealed at"), plain(f(seal, "time_utc")));
-    let fp = plain(f(seal, "key_fingerprint"));
-    assert_eq!(l.item("Key fingerprint"), format!("`{fp}`"));
-    assert_eq!(l.item("Key custody"), plain(f(seal, "key_custody")));
+    assert_eq!(l.item("Sealed at"), ev(f(seal, "time_utc")));
+    let fp = hex_span(f(seal, "key_fingerprint"));
+    assert_eq!(l.item("Key fingerprint"), fp);
+    assert_eq!(l.item("Key custody"), ev(f(seal, "key_custody")));
     let crates: Vec<String> = a(seal, "crypto_crates")
         .iter()
         .map(|c| {
             let c = o(c, "crate");
-            format!("{} {}", plain(f(c, "name")), plain(f(c, "version")))
+            format!("{} {}", ev(f(c, "name")), ev(f(c, "version")))
         })
         .collect();
     assert_eq!(l.item("Crypto crates (crate versions)"), crates.join(", "));
     assert_eq!(
         l.item("Merkle root"),
         format!(
-            "`{}` ({}, {} leaves)",
-            plain(f(merkle, "root")),
-            plain(f(merkle, "algorithm")),
-            plain(f(merkle, "leaf_count"))
+            "{} ({}, {} leaves)",
+            hex_span(f(merkle, "root")),
+            ev(f(merkle, "algorithm")),
+            ev(f(merkle, "leaf_count"))
         )
     );
-    assert_eq!(l.item("Schema version"), plain(f(r, "schema_version")));
+    assert_eq!(l.item("Schema version"), ev(f(r, "schema_version")));
     l.expect("");
 
     // The verify command: the record and log file names, and the record's key fingerprint.
     l.expect("## Verify");
     l.expect("");
     l.expect(&format!(
-        "With the public key whose fingerprint is `{fp}` saved as `sfr.pub`, in the directory that holds the record and the log:"
+        "With the public key whose fingerprint is {fp} saved as `sfr.pub`, in the directory that holds the record and the log:"
     ));
     l.expect("");
     let fence = l.next();
@@ -428,22 +458,17 @@ pub fn check(record: &Value, md: &str) {
         "code fence"
     );
     let command = l.next();
-    let quote = |n: &str| {
-        if n.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
-        {
-            n.to_string()
-        } else {
-            format!("'{}'", n.replace('\'', "'\\''"))
-        }
-    };
     assert_eq!(
         command,
         format!(
             "sfr verify {} --pubkey sfr.pub --ulog {}",
-            quote(&format!("{stem}.sfr")),
-            quote(&file)
+            shell_arg(&format!("{stem}.sfr")),
+            shell_arg(&file)
         )
+    );
+    assert!(
+        !command.contains(fence),
+        "the fence is longer than any backtick run in the command"
     );
     l.expect(fence);
     l.expect("");

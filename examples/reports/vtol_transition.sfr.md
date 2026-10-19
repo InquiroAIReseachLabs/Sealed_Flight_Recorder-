@@ -1,20 +1,20 @@
 EVALUATION KEY: not for operational use
 
-# Sealed flight record: vtol\_transition.ulg
+# Sealed flight record: vtol\_transition\.ulg
 
-**Status: PASS**. Sealed 2026-10-18T15:00:00Z by sfr 0.1.0, v1.0 evaluation release. This report is generated from the record vtol\_transition.sfr alone.
+**Status: PASS**. Sealed 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0, v1.0 evaluation release. This report is generated from the record vtol\_transition\.sfr alone.
 
 ## Rules
 
 | Rule | Status | Name | Found |
 |---|---|---|---|
 | R1 | PASS | required topics present | all present |
-| R2 | PASS | firmware matches baseline | 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4 |
+| R2 | PASS | firmware matches baseline | 1\.17\.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4 |
 | R3 | PASS | parameters match baseline | no differences |
 | R4 | PASS | no failsafe in flight | never true in flight |
-| R5 | PASS | arm and disarm consistent | 1 ARM, 1 DISARM |
-| R6 | PASS | VTOL transitions completed | 2 START, 2 END, 0 problem(s) |
-| R7 | N/A | authorized command sources | no \[authorized\_sources\] in the rules file |
+| R5 | PASS | arm and disarm consistent | 1 ARM\, 1 DISARM |
+| R6 | PASS | VTOL transitions completed | 2 START\, 2 END\, 0 problem\(s\) |
+| R7 | N\/A | authorized command sources | no \[authorized\_sources\] in the rules file |
 
 ## Parameter differences
 
@@ -26,20 +26,20 @@ R3 found no difference between the baseline and the flown parameters.
 
 | Parameter | Baseline | Flown | R3 |
 |---|---|---|---|
-| VT\_ARSP\_TRANS | f32:10 | f32:10 | MATCH |
-| VT\_B\_TRANS\_DUR | f32:10 | f32:10 | MATCH |
-| VT\_FW\_DIFTHR\_EN | i32:0 | i32:0 | MATCH |
-| VT\_FW\_DIFTHR\_S\_P | f32:1 | f32:1 | MATCH |
-| VT\_FW\_DIFTHR\_S\_R | f32:1 | f32:1 | MATCH |
-| VT\_FW\_DIFTHR\_S\_Y | f32:0.1 | f32:0.1 | MATCH |
-| VT\_F\_TRANS\_DUR | f32:5 | f32:5 | MATCH |
-| VT\_PITCH\_MIN | f32:-5 | f32:-5 | MATCH |
-| VT\_TRANS\_MIN\_TM | f32:2 | f32:2 | MATCH |
-| VT\_TRANS\_TIMEOUT | f32:15 | f32:15 | MATCH |
+| VT\_ARSP\_TRANS | f32\:10 | f32\:10 | MATCH |
+| VT\_B\_TRANS\_DUR | f32\:10 | f32\:10 | MATCH |
+| VT\_FW\_DIFTHR\_EN | i32\:0 | i32\:0 | MATCH |
+| VT\_FW\_DIFTHR\_S\_P | f32\:1 | f32\:1 | MATCH |
+| VT\_FW\_DIFTHR\_S\_R | f32\:1 | f32\:1 | MATCH |
+| VT\_FW\_DIFTHR\_S\_Y | f32\:0\.1 | f32\:0\.1 | MATCH |
+| VT\_F\_TRANS\_DUR | f32\:5 | f32\:5 | MATCH |
+| VT\_PITCH\_MIN | f32\:\-5 | f32\:\-5 | MATCH |
+| VT\_TRANS\_MIN\_TM | f32\:2 | f32\:2 | MATCH |
+| VT\_TRANS\_TIMEOUT | f32\:15 | f32\:15 | MATCH |
 
 ## Sealed topics
 
-The rules file seals no topics.
+The record holds no sealed topic digests.
 
 ## Events
 
@@ -49,7 +49,7 @@ The rules file seals no topics.
 | 1 | 0.160000 | COMMAND | PAYLOAD | command 211; result NO\_ACK; source\_component 37952; source\_system 51 |
 | 2 | 4.672000 | COMMAND | GENERAL | command 400; result ACCEPTED; source\_component 1; source\_system 1 |
 | 3 | 4.676000 | ARM |  | initial false; reason 3; reason\_name command\_internal |
-| 4 | 5.308000 | PARAM\_CHANGED\_IN\_FLIGHT |  | name CAL\_BARO0\_OFF; new f32:2.4414062; old f32:0 |
+| 4 | 5.308000 | PARAM\_CHANGED\_IN\_FLIGHT |  | name CAL\_BARO0\_OFF; new f32\:2\.4414062; old f32\:0 |
 | 5 | 7.652000 | COMMAND | GENERAL | command 22; result ACCEPTED; source\_component 1; source\_system 1 |
 | 6 | 7.664000 | COMMAND | GENERAL | command 400; result ACCEPTED; source\_component 1; source\_system 1 |
 | 7 | 7.676000 | NAV\_STATE\_CHANGE |  | new 17; new\_name AUTO\_TAKEOFF; old 4; old\_name AUTO\_LOITER |
@@ -70,9 +70,9 @@ The rules file seals no topics.
 
 ## Log
 
-- File: vtol\_transition.ulg
+- File: vtol\_transition\.ulg
 - Size (bytes): 24295307
-- Firmware: 1.17.0 (git d6f12ad1c4f70ad3230afd7d86e971421e02fef4)
+- Firmware: 1\.17\.0 (git d6f12ad1c4f70ad3230afd7d86e971421e02fef4)
 - SHA-256: `86d64e54d1261991f4035355550f64e017f8a486c5c665848d6e68ae67fc9bf3`
 - BLAKE3 (supplementary): `0af5378155f2d8dc440697a01096d4af50217c6eb33f93b3bef3d976a54adbfd`
 - VTOL: true
@@ -80,16 +80,16 @@ The rules file seals no topics.
 
 ## Seal
 
-- Sealed at: 2026-10-18T15:00:00Z
-- Key fingerprint: `sha256:5f344f5ec7bd5e1c192f8e7397723ca2d4754ab3aa10ea9e4cea7b792be60ecb`
-- Key custody: file-evaluation
-- Crypto crates (crate versions): blake3 1.8.7, ed25519-dalek 3.0.0, sha2 0.11.1
-- Merkle root: `1c5985719d0117e11c28a5c707d8661228b39bf332cd8a9b146587a975fe16e8` (sha256-rfc6962, 34 leaves)
+- Sealed at: 2026\-10\-18T15\:00\:00Z
+- Key fingerprint: `sha256:79f8ff973d02c252cb7740a48e532f6f3794b2c2299398e379e35bb36f7d8d39`
+- Key custody: file\-evaluation
+- Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
+- Merkle root: `eaedd9b8c926fac3a6cbaf137e26c98cce810013b446deac65ed3bc9adbc12a7` (sha256\-rfc6962, 34 leaves)
 - Schema version: 1
 
 ## Verify
 
-With the public key whose fingerprint is `sha256:5f344f5ec7bd5e1c192f8e7397723ca2d4754ab3aa10ea9e4cea7b792be60ecb` saved as `sfr.pub`, in the directory that holds the record and the log:
+With the public key whose fingerprint is `sha256:79f8ff973d02c252cb7740a48e532f6f3794b2c2299398e379e35bb36f7d8d39` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
 sfr verify vtol_transition.sfr --pubkey sfr.pub --ulog vtol_transition.ulg

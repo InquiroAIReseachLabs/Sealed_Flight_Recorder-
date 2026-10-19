@@ -2,8 +2,15 @@
 //!
 //! Generated only from a sealed record: [`render`] reads the record's JSON and nothing else, so
 //! the report cannot say anything the record does not. It is a pure function of the record
-//! bytes, so the same record always gives the same report. Tables keep to a few short columns
-//! so they render on GitHub and GitLab; every value from the record is escaped for Markdown.
+//! bytes, so the same record always gives the same report. Tables keep to at most five
+//! columns so they render on GitHub and GitLab.
+//!
+//! Every value from the record goes through [`escape`]: each ASCII punctuation character gets a
+//! backslash, which CommonMark defines as that character shown literally, so no value can form
+//! a Markdown or HTML construct (emphasis, a link, an entity, a table cell, a list). Digests
+//! and the key fingerprint are hexadecimal and shown in code spans. A host that adds to
+//! rendered text after Markdown (GitHub and GitLab turn `:name:` into an emoji, `@name` or
+//! `#123` into a link) still does so; Markdown cannot escape that.
 
 use crate::json::Value;
 use std::collections::BTreeMap;
@@ -70,21 +77,30 @@ fn s(o: &Obj, key: &str, path: &str) -> Result<String, ReportError> {
     get(o, key, path).map(text)
 }
 
-/// Escapes text for Markdown, in a table cell or in running text: control characters become
-/// spaces, and the characters Markdown or HTML would interpret get a backslash.
+/// Escapes text for Markdown, in a table cell, a list item, or running text: control
+/// characters become spaces, and every ASCII punctuation character gets a backslash.
 pub fn escape(t: &str) -> String {
     let mut out = String::with_capacity(t.len());
     for c in t.chars() {
-        match c {
-            c if c.is_control() => out.push(' '),
-            '\\' | '|' | '`' | '*' | '_' | '<' | '>' | '[' | ']' | '#' => {
+        if c.is_control() {
+            out.push(' ');
+        } else {
+            if c.is_ascii_punctuation() {
                 out.push('\\');
-                out.push(c);
             }
-            c => out.push(c),
+            out.push(c);
         }
     }
     out
+}
+
+/// A hexadecimal value (a digest, a fingerprint) in a code span; anything else escaped.
+fn code(t: &str) -> String {
+    if !t.is_empty() && t.chars().all(|c| c.is_ascii_alphanumeric() || c == ':') {
+        format!("`{t}`")
+    } else {
+        escape(t)
+    }
 }
 
 /// Boot time in seconds from a microsecond count in the record, exact to the microsecond.
@@ -92,22 +108,23 @@ pub fn seconds(us: &Value) -> String {
     let t = text(us);
     match t.parse::<u64>() {
         Ok(us) => format!("{}.{:06}", us / 1_000_000, us % 1_000_000),
-        Err(_) => t,
+        Err(_) => escape(&t),
     }
 }
 
-/// The fields of an event the timeline's detail column shows: every field except the ones in
-/// their own columns or the event's position in the log.
+/// The fields of an event the timeline's detail column leaves out: the ones in their own
+/// columns, `utc_us` (the boot time column shows the time), and the event's position in the
+/// log (`topic`, `instance`, `index`).
 pub const EVENT_OWN_COLUMNS: [&str; 8] = [
     "seq", "kind", "boot_us", "category", "utc_us", "topic", "instance", "index",
 ];
 
-/// The timeline's detail text of one event: its other fields as `name value` pairs in key
-/// order, separated by "; ".
+/// The timeline's detail cell of one event: its other fields as `name value` pairs in key
+/// order, each escaped, separated by "; ".
 pub fn event_detail(e: &Obj) -> String {
     e.iter()
         .filter(|(k, _)| !EVENT_OWN_COLUMNS.contains(&k.as_str()))
-        .map(|(k, v)| format!("{k} {}", text(v)))
+        .map(|(k, v)| format!("{} {}", escape(k), escape(&text(v))))
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -280,7 +297,7 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     // Sealed topics.
     out.push_str("## Sealed topics\n\n");
     if sealed_topics.is_empty() {
-        out.push_str("The rules file seals no topics.\n\n");
+        out.push_str("The record holds no sealed topic digests.\n\n");
     } else {
         header(
             &mut out,
@@ -312,7 +329,7 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
                     escape(&s(t, "multi_id", &path)?),
                     escape(&s(t, "message_count", &path)?),
                     span,
-                    format!("`{}`", digest.get(..DIGEST_PREFIX_LEN).unwrap_or(&digest)),
+                    code(digest.get(..DIGEST_PREFIX_LEN).unwrap_or(&digest)),
                 ],
             );
         }
@@ -339,7 +356,7 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
                     seconds(get(e, "boot_us", &path)?),
                     escape(&s(e, "kind", &path)?),
                     escape(&category),
-                    escape(&event_detail(e)),
+                    event_detail(e),
                 ],
             );
         }
@@ -359,15 +376,11 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
             escape(&s(fw, "git", "log.firmware")?)
         ),
     );
-    item(
-        &mut out,
-        "SHA-256",
-        &format!("`{}`", s(log, "sha256", "log")?),
-    );
+    item(&mut out, "SHA-256", &code(&s(log, "sha256", "log")?));
     item(
         &mut out,
         "BLAKE3 (supplementary)",
-        &format!("`{}`", s(log, "blake3", "log")?),
+        &code(&s(log, "blake3", "log")?),
     );
     item(
         &mut out,
@@ -391,7 +404,7 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     item(
         &mut out,
         "Key fingerprint",
-        &format!("`{}`", s(seal, "key_fingerprint", "seal")?),
+        &code(&s(seal, "key_fingerprint", "seal")?),
     );
     item(
         &mut out,
@@ -420,8 +433,8 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         &mut out,
         "Merkle root",
         &format!(
-            "`{}` ({}, {} leaves)",
-            s(merkle, "root", "merkle")?,
+            "{} ({}, {} leaves)",
+            code(&s(merkle, "root", "merkle")?),
             escape(&s(merkle, "algorithm", "merkle")?),
             escape(&s(merkle, "leaf_count", "merkle")?)
         ),
@@ -436,9 +449,9 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     // How to verify.
     out.push_str("## Verify\n\n");
     out.push_str(&format!(
-        "With the public key whose fingerprint is `{}` saved as `sfr.pub`, in the directory that \
+        "With the public key whose fingerprint is {} saved as `sfr.pub`, in the directory that \
          holds the record and the log:\n\n",
-        s(seal, "key_fingerprint", "seal")?
+        code(&s(seal, "key_fingerprint", "seal")?)
     ));
     let command = format!(
         "sfr verify {} --pubkey sfr.pub --ulog {}",
@@ -451,15 +464,37 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     Ok(out)
 }
 
-/// A file name as one shell word: unchanged when it holds only letters, digits, `.`, `_`, `-`,
-/// and `/`, else in single quotes. Control characters become spaces so the command stays on
-/// one line.
+/// A file name as one shell word that `sfr` reads as that file: `./` in front of a name that
+/// starts with `-` (else it would be read as an option); then unchanged when it holds only
+/// letters, digits, `.`, `_`, `-`, and `/`; in `$'...'` with each byte of a control character
+/// as a three-digit octal escape when it holds one (POSIX dollar-single-quotes, as in bash,
+/// zsh, and ksh), so the command stays on one line; else in single quotes.
 pub fn shell_word(name: &str) -> String {
-    let name: String = name
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    if !name.is_empty()
+    let name = if name.starts_with('-') {
+        format!("./{name}")
+    } else {
+        name.to_string()
+    };
+    if name.chars().any(char::is_control) {
+        let mut w = String::from("$'");
+        for c in name.chars() {
+            match c {
+                '\\' | '\'' => {
+                    w.push('\\');
+                    w.push(c);
+                }
+                c if c.is_control() => {
+                    let mut buf = [0u8; 4];
+                    for b in c.encode_utf8(&mut buf).bytes() {
+                        w.push_str(&format!("\\{b:03o}"));
+                    }
+                }
+                c => w.push(c),
+            }
+        }
+        w.push('\'');
+        w
+    } else if !name.is_empty()
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
@@ -487,5 +522,51 @@ pub fn watched_mark(name: &str, in_baseline: bool, r3_lines: &[String]) -> &'sta
         "not compared"
     } else {
         "MATCH"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_backslashes_every_ascii_punctuation_character_and_blanks_control_characters() {
+        let punct: String = (0x21u8..0x7f)
+            .map(char::from)
+            .filter(char::is_ascii_punctuation)
+            .collect();
+        assert_eq!(punct.len(), 32);
+        let escaped = escape(&punct);
+        assert_eq!(escaped.len(), 64);
+        assert!(
+            escaped
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(2)
+                .all(|p| p[0] == '\\' && p[1].is_ascii_punctuation())
+        );
+        assert_eq!(escape("a\tb\nc\u{85}d e"), "a b c d e");
+        assert_eq!(escape("VT_TYPE 1.5"), "VT\\_TYPE 1\\.5");
+        assert_eq!(escape("\u{e9}t\u{e9} 2"), "\u{e9}t\u{e9} 2");
+    }
+
+    #[test]
+    fn shell_word_guards_options_quotes_and_control_characters() {
+        assert_eq!(shell_word("flight_1.ulg"), "flight_1.ulg");
+        assert_eq!(shell_word("-x.ulg"), "./-x.ulg");
+        assert_eq!(shell_word("--ulog.sfr"), "./--ulog.sfr");
+        assert_eq!(shell_word("a b's.ulg"), "'a b'\\''s.ulg'");
+        assert_eq!(shell_word("$(id).ulg"), "'$(id).ulg'");
+        assert_eq!(shell_word("a\tb'\\.ulg"), "$'a\\011b\\'\\\\.ulg'");
+        assert_eq!(shell_word("-\n"), "$'./-\\012'");
+        assert_eq!(shell_word("c\u{85}.ulg"), "$'c\\302\\205.ulg'");
+    }
+
+    #[test]
+    fn code_spans_only_hexadecimal_values() {
+        assert_eq!(code("ab12"), "`ab12`");
+        assert_eq!(code("sha256:ab12"), "`sha256:ab12`");
+        assert_eq!(code("a`b"), "a\\`b");
+        assert_eq!(code(""), "");
     }
 }

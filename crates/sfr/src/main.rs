@@ -456,7 +456,8 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
     let out_path = out_dir.join(format!("{stem}.sfr"));
     let report_path = out_dir.join(format!("{stem}.{}", sfr_core::report::REPORT_EXTENSION));
     for path in [&out_path, &report_path] {
-        if !dry_run && path.exists() {
+        // symlink_metadata: a symbolic link there, even a dangling one, counts as existing.
+        if !dry_run && path.symlink_metadata().is_ok() {
             return Err(fail(
                 exit_code::USAGE,
                 format!(
@@ -556,21 +557,42 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         .map_err(|e| e.to_string())
         .and_then(|v| sfr_core::report::render(&v).map_err(|e| e.to_string()))
         .map_err(|e| fail(exit_code::USAGE, format!("cannot write the report: {e}")))?;
-    for (path, bytes) in [
-        (&out_path, &sealed.bytes[..]),
-        (&report_path, report.as_bytes()),
-    ] {
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
-            .map_err(|e| {
-                fail(
-                    exit_code::USAGE,
-                    format!("cannot write {}: {e}", path.display()),
-                )
-            })?;
+    // A record and its report are written together or not at all: both files are created
+    // (never overwriting) before either is written, and a failure removes what this run created.
+    let mut created: Vec<&PathBuf> = Vec::new();
+    let written = (|| {
+        let mut files = Vec::new();
+        for (path, bytes) in [
+            (&out_path, &sealed.bytes[..]),
+            (&report_path, report.as_bytes()),
+        ] {
+            let f = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .map_err(|e| (path, e))?;
+            created.push(path);
+            files.push((path, f, bytes));
+        }
+        for (path, f, bytes) in &mut files {
+            f.write_all(bytes)
+                .and_then(|()| f.sync_all())
+                .map_err(|e| (*path, e))?;
+        }
+        Ok(())
+    })();
+    if let Err((path, e)) = written {
+        for p in created {
+            // Best effort: the error below is the one to report.
+            let _ = std::fs::remove_file(p);
+        }
+        return Err(fail(
+            exit_code::USAGE,
+            format!(
+                "cannot write {}: {e}; seal wrote neither the record nor the report",
+                path.display()
+            ),
+        ));
     }
     let custody = key.custody();
     let text = if a.flag("--json") {
