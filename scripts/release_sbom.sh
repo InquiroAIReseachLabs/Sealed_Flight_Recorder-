@@ -9,7 +9,9 @@
 # SHA-256 that Cargo.lock holds; build-time crates are listed with scope "excluded", and the
 # workspace crate sfr-core has neither a license nor a hash (no license is set). Then checks each file
 # names its target and lists sha2, ed25519-dalek and blake3. SOURCE_DATE_EPOCH (the commit time)
-# fixes the timestamp.
+# fixes the timestamp. The SBOM names no person's address and no local path: the crate authors'
+# email addresses are removed (the names stay), and the checkout path is replaced by /build/sfr,
+# as in the binary (scripts/build_release.sh); scripts/check_release_hygiene.sh checks the result.
 #
 # Usage: scripts/release_sbom.sh <out-dir>     Prints the SBOM paths.
 set -euo pipefail
@@ -33,6 +35,10 @@ for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown
   [ -f "$made" ] || die "cargo-cyclonedx did not write $made"
   sbom="$out/sfr-$version-$target.cdx.json"
   mv "$made" "$sbom"
+  jq --arg root "$(pwd -P)" '
+    def clean: if type == "string" then (split($root) | join("/build/sfr")) | gsub("\\s*<[^<>\\s]*@[^<>\\s]*>"; "") else . end;
+    walk(clean)' "$sbom" > "$sbom.tmp"
+  mv "$sbom.tmp" "$sbom"
   # cargo-cyclonedx describes every workspace binary; only sfr ships in a release tarball.
   find crates -name "*_$target.cdx.json" -delete
   jq -e --arg t "$target" '

@@ -23,7 +23,7 @@ ignore = [
   "COM_MODE*_HASH",    # external mode registration hashes (v1.15 and later)
 ]
 
-# Watched parameters (Change Order 01): R3 compares them like every other parameter; the
+# Watched parameters (SPEC B1.6): R3 compares them like every other parameter; the
 # results table and the report show them in their own "Transition tuning" section, and the
 # record lists them in config.watched_parameters. VTOL transition tuning; every name is defined
 # in PX4 v1.14 and v1.17 (docs/DIAGNOSTIC.md item 12).

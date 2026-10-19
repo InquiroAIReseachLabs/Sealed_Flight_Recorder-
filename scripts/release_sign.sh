@@ -54,6 +54,12 @@ sign() { # sign <SHA256SUMS> <private-key-file> <public-key-file>
   [ -f "$2" ] || die "no private key $2"
   [ -f "$3" ] || die "no release public key $3; run: scripts/release_sign.sh keygen <offline path>"
   [ "$(public_of "$2")" = "$(cat "$3")" ] || die "the private key $2 is not the release key $3"
+  # Only a list of bare file names with their SHA-256 is worth signing: no path, no repeat.
+  [ -s "$1" ] || die "$1 is empty"
+  if grep -q -v -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "$1"; then
+    die "$1 holds a line that is not '<sha256>  <bare file name>'; sign only the SHA256SUMS that scripts/release_assemble.sh wrote"
+  fi
+  [ -z "$(awk '{ print $2 }' "$1" | sort | uniq -d)" ] || die "$1 lists a file name twice"
   openssl pkeyutl -sign -inkey "$2" -rawin -in "$1" -out "$1.sig"
   [ "$(wc -c < "$1.sig")" -eq 64 ] || die "$1.sig is not a 64-byte Ed25519 signature"
   verify "$1" "$3"
@@ -82,6 +88,16 @@ self_test() {
   sign "$t/SHA256SUMS" "$t/test.key" "$t/test.pub" > /dev/null
   if verify "$t/SHA256SUMS" "$t/other.pub" > /dev/null 2>&1; then die "self-test: another key verifies"; fi
   if (sign "$t/SHA256SUMS" "$t/other.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted a key that is not the release key"; fi
+  # What may be signed: bare names only, no repeats, not empty.
+  printf '%s  ../escape.tar.gz\n' "$(printf a | sha256sum | cut -d' ' -f1)" > "$t/BAD1"
+  if (sign "$t/BAD1" "$t/test.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted a path in SHA256SUMS"; fi
+  { cat "$t/SHA256SUMS.orig"; cat "$t/SHA256SUMS.orig"; } > "$t/BAD2"
+  if (sign "$t/BAD2" "$t/test.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted a repeated name"; fi
+  : > "$t/BAD3"
+  if (sign "$t/BAD3" "$t/test.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted an empty SHA256SUMS"; fi
+  printf 'not a checksum line\n' > "$t/BAD4"
+  if (sign "$t/BAD4" "$t/test.key" "$t/test.pub" > /dev/null 2>&1); then die "self-test: sign accepted a line that is not a checksum"; fi
+  [ ! -e "$t/BAD1.sig" ] && [ ! -e "$t/BAD4.sig" ] || die "self-test: a refused file was still signed"
   echo "release_sign.sh self-test: ok"
 }
 

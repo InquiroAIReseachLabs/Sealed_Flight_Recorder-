@@ -6,7 +6,7 @@ It needs bash 5 or later, GNU time at `/usr/bin/time` (Debian and Ubuntu: `sudo 
 
 ## Run it on another machine (for example real aarch64 hardware)
 
-1. Take three files from the CI run or the release: the tarball for the machine's target (`sfr-<version>-aarch64-unknown-linux-musl.tar.gz` on an aarch64 machine), the benchmark kit `sfr-<version>-benchmark.tar.gz`, and `SHA256SUMS`.
+1. Take three files from the `sfr-release-unsigned` artifact of a CI run: the tarball for the machine's target (`sfr-<version>-aarch64-unknown-linux-musl.tar.gz` on an aarch64 machine), the benchmark kit `sfr-<version>-benchmark.tar.gz`, and `SHA256SUMS`. The benchmark kit is not part of the GitHub release.
 2. Check them: `sha256sum -c --ignore-missing SHA256SUMS`
 3. Unpack both tarballs in one directory (not run in CI by the docs test: it needs the release files):
 
@@ -24,6 +24,14 @@ It needs bash 5 or later, GNU time at `/usr/bin/time` (Debian and Ubuntu: `sudo 
 5. Report `benchmark.txt` whole. Its `hardware:` line names the architecture, CPU model, cores, memory, kernel, OS, and the board model when the kernel exposes one; add the machine's product name if that line does not show it.
 
 Run nothing else on the machine meanwhile. `--runs N` changes the number of runs per log (default 5).
+
+## aarch64, Arm cloud VM
+
+The `benchmark-aarch64` workflow (`.github/workflows/benchmark-aarch64.yml`; GitHub: Actions, benchmark-aarch64, Run workflow) builds the aarch64 tarball and the benchmark kit on GitHub's arm64 hosted runner, runs `scripts/benchmark.sh` there, and keeps the output and a receipt as a workflow artifact. A person puts the receipt at `docs/receipts/aarch64-benchmark.txt` and runs `scripts/regen_readme_numbers.sh`, which writes the block below; the script refuses a run whose binary or machine is not aarch64. The runner is a cloud virtual machine on Arm processors. The result is labelled for what it is, and no measurement on embedded or companion-computer hardware has been made.
+
+<!-- BEGIN benchmark-arm-vm: written by scripts/regen_readme_numbers.sh, do not edit by hand -->
+Not measured yet. Run the `benchmark-aarch64` workflow (Actions, benchmark-aarch64, Run workflow), put the receipt it uploads at `docs/receipts/aarch64-benchmark.txt`, and run `scripts/regen_readme_numbers.sh`. The result will be labelled "aarch64, Arm cloud VM".
+<!-- END benchmark-arm-vm -->
 
 ## Gates
 

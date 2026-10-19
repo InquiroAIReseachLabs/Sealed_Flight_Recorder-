@@ -3,7 +3,8 @@
 # Runs the checks of every CI job except those that need their own build or tools: the fuzz job
 # (pinned nightly and cargo-fuzz), the release-build verify timing gate, the armv7 job (QEMU),
 # the release jobs (static builds twice from clean, SBOMs, demo image under docker, aarch64 and
-# armv7 records under QEMU, benchmark, SHA256SUMS), and the sandbox browser gate (wasm-bindgen-cli
+# armv7 records under QEMU, benchmark, SHA256SUMS), the release and post-release workflows
+# themselves (they run on a tag, after a release, and by hand), and the sandbox browser gate (wasm-bindgen-cli
 # and three browsers); scripts/build_release.sh, scripts/run_demo.sh, scripts/build_site.sh with
 # tests/browser/sandbox.test.mjs, and docs/RELEASE.md run those by hand. Exits non-zero on any FAIL.
 set -uo pipefail
@@ -59,6 +60,13 @@ run "no email address self-test" scripts/check_no_emails.sh --self-test
 run "no email address in the repository" scripts/check_no_emails.sh
 run "engine bundle check self-test" scripts/check_engine_bundle.sh --self-test
 run "release signing self-test" scripts/release_sign.sh --self-test
+# The release workflows (Chunk 5 and the evaluation release): their rules, the hygiene scan of
+# every release file, and the whole offline signing flow with eight attacks on it. The hygiene
+# scan needs exiftool (apt-get install libimage-exiftool-perl); a missing tool is a failure.
+run "workflow rules self-test" scripts/check_workflows.sh --self-test
+run "workflow rules (pinned actions, no secret, no signing, only the draft job writes)" scripts/check_workflows.sh
+run "release hygiene self-test" scripts/check_release_hygiene.sh --self-test
+run "offline signing flow and its attacks" scripts/check_release_flow.sh
 run "benchmark segment manifest matches the golden VTOL flight" python3 -I scripts/benchmark/make_segments.py \
   --check scripts/benchmark/vtol_transition.segments testdata/sitl/v1.17.0/vtol_transition.ulg \
   testdata/sitl/v1.17.0/vtol_transition.ulg

@@ -1,0 +1,334 @@
+# Release pipeline for the evaluation release (docs/RELEASE.md).
+#
+# Runs on a pushed v* tag and by hand. A tag run builds, checks and attests the release files
+# and creates a DRAFT, pre-release GitHub release; it never publishes. A manual run is a dry
+# run: it builds and checks the same files and uploads them as a workflow artifact, and creates
+# nothing (no attestation, no release, no tag).
+#
+# The release signing key is not in this workflow, in a secret, or anywhere in CI: the founder
+# downloads SHA256SUMS from the draft, signs it offline with scripts/release_sign.sh, and uploads
+# SHA256SUMS.sig and sfr-release.pub to the draft before publishing. This file uses no secret;
+# the one token is the run's own GITHUB_TOKEN, and only the draft-release job gets write access.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  meta:
+    name: version, tag and release key
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      dry_run: ${{ steps.v.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - name: The version in Cargo.toml; on a tag run, the tag names it and the commit is on main
+        id: v
+        run: |
+          set -euo pipefail
+          version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "no x.y.z version in Cargo.toml"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+            [ "$GITHUB_REF_TYPE" = tag ] || { echo "not a tag: $GITHUB_REF"; exit 1; }
+            [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "the tag $GITHUB_REF_NAME is not v$version (Cargo.toml)"; exit 1; }
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+              || { echo "the tagged commit is not on main; a release is cut from main only"; exit 1; }
+            echo "tag run: v$version at $GITHUB_SHA"
+          else
+            echo "dry_run=true" >> "$GITHUB_OUTPUT"
+            echo "dry run: nothing will be attested, tagged or released" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: The release public key is committed and the README and docs/RELEASE.md show it (tag run)
+        run: |
+          set -euo pipefail
+          scripts/regen_readme_numbers.sh --check
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            test -s release/sfr-release.pub || { echo "release/sfr-release.pub is not committed: generate the release key first (docs/RELEASE.md)"; exit 1; }
+          fi
+          if [ -s release/sfr-release.pub ]; then
+            echo "release key fingerprint: sha256:$(openssl pkey -pubin -in release/sfr-release.pub -outform DER | sha256sum | cut -d' ' -f1)" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no release key committed yet (allowed in a dry run only)" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  tests:
+    name: tests and the release scripts' own tests
+    needs: meta
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain (rust-toolchain.toml) and exiftool
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          sudo apt-get update -q
+          sudo apt-get install -y -q libimage-exiftool-perl
+      - name: cargo test --locked
+        run: cargo test --workspace --locked
+      - name: Release scripts (workflow rules, signing, hygiene scan, offline signing flow)
+        run: |
+          set -euo pipefail
+          scripts/check_workflows.sh --self-test
+          scripts/check_workflows.sh
+          scripts/release_sign.sh --self-test
+          scripts/check_release_hygiene.sh --self-test
+          scripts/check_release_flow.sh
+
+  build:
+    name: static ${{ matrix.target }}, built twice from clean
+    needs: meta
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, armv7-unknown-linux-musleabihf]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      # --locked in scripts/build_release.sh; rust-lld; the build paths are remapped; two builds
+      # from clean must give identical bytes (scripts/check_reproducible.sh).
+      - name: Build twice from clean, check static, compare binaries and tarballs
+        run: |
+          set -euo pipefail
+          scripts/check_reproducible.sh "${{ matrix.target }}" dist | tee reproducible.log
+          { echo "### ${{ matrix.target }}"; echo; sed 's/^/- /' reproducible.log; } >> "$GITHUB_STEP_SUMMARY"
+      # The user name and host name of the machine that built it, kept apart from the release
+      # files, so the hygiene job can look for them in every file. (Git author names are not
+      # searched: the organization's own name is in the README's links, by design.)
+      - name: Record the build machine's names for the hygiene scan
+        run: |
+          set -euo pipefail
+          mkdir identity
+          { id -un; hostname; } > "identity/${{ matrix.target }}.txt"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: identity-${{ matrix.target }}
+          path: identity/
+          if-no-files-found: error
+          retention-days: 1
+
+  # The same commit built on a second, older runner image: does it give the same bytes?
+  # Reported, not gated: docs/RELEASE.md says what a difference would mean.
+  reproduce:
+    name: x86_64 built on a second runner image, compared with the first
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-x86_64-unknown-linux-musl
+          path: first
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Build here and compare with the first runner's tarball
+        run: |
+          set -euo pipefail
+          scripts/build_release.sh x86_64-unknown-linux-musl second > /dev/null
+          a="$(ls first/sfr-*-x86_64-unknown-linux-musl.tar.gz)" b="$(ls second/sfr-*-x86_64-unknown-linux-musl.tar.gz)"
+          mkdir ta tb
+          tar -C ta -xzf "$a"
+          tar -C tb -xzf "$b"
+          sa="$(sha256sum ta/*/bin/sfr | cut -d' ' -f1)" sb="$(sha256sum tb/*/bin/sfr | cut -d' ' -f1)"
+          ta_sum="$(sha256sum "$a" | cut -d' ' -f1)" tb_sum="$(sha256sum "$b" | cut -d' ' -f1)"
+          {
+            echo "### Reproducibility across runner images (ubuntu-24.04 and ubuntu-22.04)"
+            echo
+            if [ "$sa" = "$sb" ]; then echo "- bin/sfr: identical $sa"; else echo "- bin/sfr: DIFFERENT $sa $sb"; fi
+            if [ "$ta_sum" = "$tb_sum" ]; then echo "- tarball: identical $ta_sum"; else echo "- tarball: DIFFERENT $ta_sum $tb_sum"; fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$sa" != "$sb" ] || [ "$ta_sum" != "$tb_sum" ]; then
+            {
+              echo "differences:"
+              diff -r ta tb | head -40 || true
+              { cmp -l ta/*/bin/sfr tb/*/bin/sfr || true; } | wc -l | sed 's/^/differing bytes in bin\/sfr: /'
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  records:
+    name: every golden log seals to the same bytes on x86_64, aarch64 and armv7 (QEMU)
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: release-*-unknown-linux-*
+          path: dist
+          merge-multiple: true
+      - name: Install QEMU user-mode emulation
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-user-static
+      - name: Seal every golden log with the three release binaries; compare
+        run: |
+          set -euo pipefail
+          mkdir bin
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf; do
+            tar -C bin -xzf dist/sfr-*-$t.tar.gz
+          done
+          x86="$(ls -d "$PWD"/bin/sfr-*-x86_64-unknown-linux-musl)/bin/sfr"
+          for arch in aarch64:aarch64-unknown-linux-musl armv7:armv7-unknown-linux-musleabihf; do
+            name="${arch%%:*}" target="${arch#*:}"
+            qemu="qemu-${name/armv7/arm}-static"
+            printf '#!/bin/sh\nexec %s %s "$@"\n' "$qemu" "$(ls -d "$PWD"/bin/sfr-*-"$target")/bin/sfr" > "sfr-$name"
+            chmod +x "sfr-$name"
+            scripts/check_same_records.sh "$x86" "$PWD/sfr-$name" "x86_64 and $name" | tee "same-records-$name.log"
+          done
+          { echo "### Records sealed on x86_64, aarch64 and armv7"; echo; tail -qn1 same-records-*.log | sed 's/^/- /'; } >> "$GITHUB_STEP_SUMMARY"
+
+  sbom:
+    name: one CycloneDX SBOM per target
+    needs: meta
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain (rust-toolchain.toml) and cargo-cyclonedx
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+      - name: SBOMs for x86_64, aarch64 and armv7
+        run: |
+          set -euo pipefail
+          scripts/release_sbom.sh sbom | tee sboms.log
+          for f in $(cat sboms.log); do
+            jq -r --arg f "$(basename "$f")" '"- \($f): \(.metadata.properties[] | select(.name == "cdx:rustc:sbom:target:triple") | .value), \(.components | length) components"' "$f"
+          done >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: release-sbom
+          path: sbom/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Looks in every release file and every file inside every tarball for the traces of the
+  # build machine and its people (scripts/check_release_hygiene.sh). A hit fails the release.
+  hygiene:
+    name: no home path, name, host name, email address or session path in any release file
+    needs: [build, sbom]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: release-*
+          path: files
+          merge-multiple: true
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: identity-*
+          path: identity
+          merge-multiple: true
+      - name: Install exiftool
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q libimage-exiftool-perl
+      - name: Scan the release files
+        run: |
+          set -euo pipefail
+          args=(--forbid "$(id -un)" --forbid "$(hostname)")
+          while IFS= read -r name; do
+            [ -z "$name" ] || args+=(--forbid "$name")
+          done < <(cat identity/*.txt)
+          scripts/check_release_hygiene.sh "${args[@]}" files | tee -a "$GITHUB_STEP_SUMMARY"
+
+  assemble:
+    name: SHA256SUMS over exactly the release files
+    needs: [meta, tests, build, reproduce, records, sbom, hygiene]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: release-*
+          path: files
+          merge-multiple: true
+      - name: SHA256SUMS (unsigned; the founder signs it offline)
+        run: |
+          set -euo pipefail
+          scripts/release_assemble.sh --set github files | tee sha256sums.log
+          { echo "### SHA256SUMS (unsigned)"; echo; echo '```'; cat files/SHA256SUMS; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: sfr-release-files-${{ needs.meta.outputs.version }}${{ needs.meta.outputs.dry_run == 'true' && '-dry-run' || '' }}
+          path: files/
+          if-no-files-found: error
+          retention-days: 30
+
+  # The only job that writes. It attests each tarball, then creates a draft pre-release. Tag runs only.
+  draft-release:
+    name: attest the binaries; create the draft pre-release
+    if: ${{ needs.meta.outputs.dry_run == 'false' }}
+    needs: [meta, assemble]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: sfr-release-files-${{ needs.meta.outputs.version }}
+          path: files
+      - name: The files are the ones SHA256SUMS lists, and nothing else
+        run: |
+          set -euo pipefail
+          (cd files && sha256sum --check --strict SHA256SUMS)
+          test "$(ls files | wc -l)" -eq "$(($(wc -l < files/SHA256SUMS) + 1))"
+      - name: Build provenance attestations for the three binaries
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: files/sfr-*.tar.gz
+      - name: Each attestation is there and names the file
+        run: |
+          set -euo pipefail
+          for f in files/sfr-*.tar.gz; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" --source-ref "refs/tags/${TAG:-$GITHUB_REF_NAME}" > /dev/null
+            echo "attested: $(basename "$f")"
+          done
+      - name: Create the draft pre-release
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          fp="$(openssl pkey -pubin -in release/sfr-release.pub -outform DER | sha256sum | cut -d' ' -f1)"
+          sed -e "s/@VERSION@/$VERSION/g" -e "s/@FINGERPRINT@/$fp/g" -e "s#@REPOSITORY@#$GITHUB_REPOSITORY#g" \
+            -e "s/@TAG@/$GITHUB_REF_NAME/g" -e "s/@COMMIT@/$GITHUB_SHA/g" .github/release-notes.md > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --draft --prerelease --verify-tag \
+            --title "Evaluation release $VERSION" --notes-file "$RUNNER_TEMP/notes.md" files/*
+          state="$(gh release view "$GITHUB_REF_NAME" --json isDraft,isPrerelease,assets \
+            --jq '"draft=\(.isDraft) prerelease=\(.isPrerelease) assets=\(.assets | length)"')"
+          echo "$state" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$state" = "draft=true prerelease=true assets=7" ] || { echo "the draft is not as intended: $state"; exit 1; }

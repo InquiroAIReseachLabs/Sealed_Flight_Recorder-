@@ -1,6 +1,6 @@
 # examples/reports/
 
-Four sealed records and the reports `sfr seal` wrote beside them (SPEC B1.8), from the v1.0 evaluation release. Each was sealed from a golden PX4 v1.17.0 SITL log in `testdata/sitl/v1.17.0/`, with that log's golden baseline in `testdata/baselines/`.
+Four sealed records and the reports `sfr seal` wrote beside them (SPEC B1.8), from the evaluation release. Each was sealed from a golden PX4 v1.17.0 SITL log in `testdata/sitl/v1.17.0/`, with that log's golden baseline in `testdata/baselines/`.
 
 | Record and report | Rules | What the report shows |
 |---|---|---|
