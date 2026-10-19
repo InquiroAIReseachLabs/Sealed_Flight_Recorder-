@@ -4,6 +4,8 @@
 /fuzz/artifacts/
 /fuzz/corpus/
 /site/pkg/
+# The browser test's npm packages (tests/browser/package-lock.json pins them).
+/tests/browser/node_modules/
 
 # Private keys never enter the repository (SPEC B1.9).
 *.key

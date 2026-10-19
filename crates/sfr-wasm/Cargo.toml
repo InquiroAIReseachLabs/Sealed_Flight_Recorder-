@@ -12,6 +12,12 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 sfr-core = { path = "../sfr-core" }
+zeroize = { workspace = true }
+
+# The page's bindings (src/bindings.rs) exist on wasm32 only; on every other target this crate
+# is the plain Rust API that crates/sfr/tests/sandbox.rs holds to the CLI.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
 
 [lints]
 workspace = true

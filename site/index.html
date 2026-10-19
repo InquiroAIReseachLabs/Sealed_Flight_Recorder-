@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'none'; base-uri 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>Sealed Flight Record sandbox</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23245c8a'/%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' stroke='white' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <h1>Sealed Flight Record sandbox</h1>
+    <p class="lede">v1.0 evaluation release. Seal a PX4 flight log into a signed record, verify a record, and watch a changed record and a changed log fail verification.</p>
+    <p class="privacy"><strong>Your files never leave this browser.</strong> The page loads its engine and two sample logs once. After that it makes no network request: every file you choose is read in this tab and nothing is uploaded.</p>
+    <p id="engine-status" class="engine" role="status" aria-live="polite">Loading the engine and the sample logs...</p>
+  </div>
+</header>
+
+<nav class="tabs wrap" role="tablist" aria-label="Sandbox panels">
+  <button type="button" role="tab" id="tab-seal" aria-controls="panel-seal" aria-selected="true">Seal</button>
+  <button type="button" role="tab" id="tab-verify" aria-controls="panel-verify" aria-selected="false">Verify</button>
+  <button type="button" role="tab" id="tab-demo" aria-controls="panel-demo" aria-selected="false">Tamper demo</button>
+</nav>
+
+<main class="wrap">
+  <section id="panel-seal" role="tabpanel" aria-labelledby="tab-seal">
+    <h2>Seal a flight log</h2>
+    <p class="intro">The engine is the <code>sfr</code> command line built for the browser. It reads the log, runs the rules, and writes the record (<code>.sfr</code>) and its report (<code>.sfr.md</code>), exactly as <code>sfr seal</code> does.</p>
+    <form id="seal-form" class="card" novalidate>
+      <div class="drop" data-for="seal-log">
+        <label for="seal-log">Flight log (<code>.ulg</code>)</label>
+        <input type="file" id="seal-log" accept=".ulg">
+        <p class="hint">Drop a PX4 ULog file here or choose one. Up to 100 MiB in the sandbox; the command line has no limit.</p>
+      </div>
+
+      <fieldset class="rules">
+        <legend>Rules</legend>
+        <label class="choice"><input type="radio" name="rules" value="default" checked> Default rules <span class="hint">(<code>rules.default.toml</code>: core rules R1 to R6, the ten watched VTOL transition parameters, the payload command ids)</span></label>
+        <label class="choice"><input type="radio" name="rules" value="extended"> Extended rules <span class="hint">(<code>rules.extended.toml</code>: adds the optional example rules X1 to X5; their thresholds are set by your flight-test lead)</span></label>
+        <label class="choice"><input type="radio" name="rules" value="file"> Your rules file</label>
+        <div class="drop" data-for="seal-rules-file" id="seal-rules-drop" hidden>
+          <label for="seal-rules-file">Rules file (<code>.toml</code>)</label>
+          <input type="file" id="seal-rules-file" accept=".toml">
+        </div>
+      </fieldset>
+
+      <div class="drop" data-for="seal-baseline">
+        <label for="seal-baseline">Baseline (<code>.params</code>, optional)</label>
+        <input type="file" id="seal-baseline" accept=".params,.txt">
+        <p class="hint">A QGroundControl parameter export with a <code># Firmware: &lt;version&gt;</code> line. Without one, R2 and R3 fail, because there is nothing to compare the log with.</p>
+      </div>
+
+      <details class="advanced">
+        <summary>Same bytes as the command line (optional)</summary>
+        <p class="hint">With the same log, rules, baseline, key and seal time, <code>sfr seal --key sfr.key --evaluation-only --seal-time &lt;time&gt;</code> writes a record and report identical to the ones made here.</p>
+        <div class="drop" data-for="seal-key">
+          <label for="seal-key">Evaluation key file (<code>sfr.key</code> from <code>sfr keygen --evaluation-only</code>)</label>
+          <input type="file" id="seal-key" accept=".key,.pem">
+          <p class="hint">Without one, the page signs with its in-browser evaluation key (below).</p>
+        </div>
+        <div class="field">
+          <label for="seal-time">Seal time (RFC 3339, for example <code>2026-10-18T15:00:00Z</code>)</label>
+          <input type="text" id="seal-time" placeholder="the current time" autocomplete="off" spellcheck="false">
+        </div>
+      </details>
+
+      <div class="actions">
+        <button type="submit" id="seal-run" class="primary" disabled>Seal</button>
+        <span id="seal-busy" class="busy" hidden>Sealing...</span>
+      </div>
+    </form>
+
+    <div id="seal-result" class="result" hidden aria-live="polite">
+      <div id="seal-banner" class="banner"></div>
+      <p id="seal-notes" class="notes" hidden></p>
+      <div id="seal-downloads" class="downloads"></div>
+      <h3>Report</h3>
+      <div class="report-tools">
+        <label class="choice"><input type="checkbox" id="seal-report-source"> Show the Markdown source</label>
+      </div>
+      <article id="seal-report" class="report"></article>
+      <pre id="seal-report-md" class="output" hidden></pre>
+      <details class="cli">
+        <summary>What <code>sfr seal</code> prints</summary>
+        <pre id="seal-output" class="output"></pre>
+      </details>
+    </div>
+  </section>
+
+  <section id="panel-verify" role="tabpanel" aria-labelledby="tab-verify" hidden>
+    <h2>Verify a record</h2>
+    <p class="intro">Checks the record's Merkle root and Ed25519 signature against a public key, as <code>sfr verify</code> does. With the flight log as well, it re-reads the log, replays the embedded rules and baseline, and requires identical results, configuration and events.</p>
+    <form id="verify-form" class="card" novalidate>
+      <div class="drop" data-for="verify-record">
+        <label for="verify-record">Record (<code>.sfr</code>)</label>
+        <input type="file" id="verify-record" accept=".sfr">
+      </div>
+      <div class="drop" data-for="verify-pubkey">
+        <label for="verify-pubkey">Public key (<code>sfr.pub</code>)</label>
+        <input type="file" id="verify-pubkey" accept=".pub,.pem">
+        <p class="hint">For a record sealed on this page, download the in-browser key's <code>sfr.pub</code> below.</p>
+      </div>
+      <div class="drop" data-for="verify-log">
+        <label for="verify-log">Flight log (<code>.ulg</code>, optional)</label>
+        <input type="file" id="verify-log" accept=".ulg">
+        <p class="hint">With the log, the check is deep: <code>sfr verify --ulog</code>.</p>
+      </div>
+      <div class="actions">
+        <button type="submit" id="verify-run" class="primary" disabled>Verify</button>
+        <span id="verify-busy" class="busy" hidden>Verifying...</span>
+      </div>
+    </form>
+    <div id="verify-result" class="result" hidden aria-live="polite">
+      <div id="verify-banner" class="banner"></div>
+      <details class="cli" open>
+        <summary>What <code>sfr verify</code> prints</summary>
+        <pre id="verify-output" class="output"></pre>
+      </details>
+    </div>
+  </section>
+
+  <section id="panel-demo" role="tabpanel" aria-labelledby="tab-demo" hidden>
+    <h2>Tamper demo</h2>
+    <p class="intro">Runs the steps of <code>scripts/run_demo.sh</code> on two bundled golden logs from PX4 v1.17.0 simulation: a standard VTOL flight and a quad tailsitter flight. Each step shows the command it stands for, what the engine printed, and whether that is the expected result.</p>
+    <div class="actions">
+      <button type="button" id="demo-run" class="primary" disabled>Run the demo</button>
+      <span id="demo-busy" class="busy" hidden>Running...</span>
+    </div>
+    <p id="demo-summary" class="banner" hidden></p>
+    <ol id="demo-steps" class="steps"></ol>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  <section class="key card" aria-labelledby="key-title">
+    <h2 id="key-title">In-browser evaluation key</h2>
+    <p><strong>EVALUATION KEY: not for operational use.</strong> The page made this Ed25519 key in this tab from the browser's random number generator when it loaded. It lives only in this tab's memory and is gone when the tab closes. Operational records are sealed with a key held in a hardware token or a TPM, with the command line.</p>
+    <p>Fingerprint: <code id="key-fingerprint">not made yet</code></p>
+    <p id="key-download" class="downloads"></p>
+  </section>
+  <p class="small">Engine: <span id="engine-version">loading</span>. Sources and documentation: the Sealed Flight Record repository, <code>docs/SANDBOX.md</code>. Sample logs: <a href="samples/vtol_transition.provenance.md">VTOL flight provenance</a>, <a href="samples/gz_quadtailsitter_transition.provenance.md">tailsitter flight provenance</a>.</p>
+</footer>
+</body>
+</html>

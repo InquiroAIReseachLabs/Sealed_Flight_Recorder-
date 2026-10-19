@@ -15,5 +15,9 @@ sfr-core = { path = "../sfr-core" }
 zeroize = { workspace = true }
 getrandom = { workspace = true }
 
+# The sandbox engine, held to the CLI's output in tests/sandbox.rs.
+[dev-dependencies]
+sfr-wasm = { path = "../sfr-wasm" }
+
 [lints]
 workspace = true
