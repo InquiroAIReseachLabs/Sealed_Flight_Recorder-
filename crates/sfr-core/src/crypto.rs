@@ -170,10 +170,13 @@ pub mod rustcrypto {
         }
     }
 
-    /// An evaluation key file or the sandbox's in-memory key (custody `file-evaluation`).
+    /// A seed held in this process: an evaluation key file or the sandbox's in-memory key
+    /// (custody `file-evaluation`), or a seed just unsealed from a TPM (custody `tpm-sealed`,
+    /// [`FileKey::unsealed_from_tpm`]).
     pub struct FileKey {
         key: ed25519_dalek::SigningKey,
         label: String,
+        custody: Custody,
     }
 
     impl std::fmt::Debug for FileKey {
@@ -190,6 +193,17 @@ pub mod rustcrypto {
             FileKey {
                 key: ed25519_dalek::SigningKey::from_bytes(seed),
                 label: label.to_string(),
+                custody: Custody::FileEvaluation,
+            }
+        }
+
+        /// A seed that a TPM 2.0 has just unsealed (custody `tpm-sealed`): the seed rests sealed
+        /// to that TPM and is in this process's memory for one signature. `ed25519-dalek`
+        /// zeroizes it when the key is dropped.
+        pub fn unsealed_from_tpm(seed: &[u8; 32], label: &str) -> FileKey {
+            FileKey {
+                custody: Custody::TpmSealed,
+                ..FileKey::from_seed(seed, label)
             }
         }
 
@@ -213,7 +227,7 @@ pub mod rustcrypto {
             self.key.verifying_key().to_bytes()
         }
         fn custody(&self) -> Custody {
-            Custody::FileEvaluation
+            self.custody
         }
         fn label(&self) -> String {
             self.label.clone()

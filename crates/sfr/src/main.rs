@@ -29,11 +29,16 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use zeroize::Zeroizing;
 
+mod hardware;
+
 const USAGE: &str = "usage:
   sfr keygen --evaluation-only --out <dir> [--json]
+  sfr keygen --tpm-sealed --out <dir> [--tpm-parent <handle>] [--tpm-pcrs <bank:list>] [--json]
   sfr seal <flight.ulg> --rules <rules.toml> --baseline <baseline.params>
-           (--key <sfr.key> --evaluation-only | --dry-run) [--out <dir>] [--seal-time <RFC3339>] [--json]
+           (--key-uri pkcs11:... | --key-uri tpm-sealed:<dir> | --key <sfr.key> --evaluation-only | --dry-run)
+           [--out <dir>] [--seal-time <RFC3339>] [--json]
   sfr verify <record.sfr> --pubkey <sfr.pub> [--ulog <flight.ulg>] [--require-hardware-key] [--json]
+  sfr pubkey --key-uri (pkcs11:... | tpm-sealed:<dir>) [--json]
   sfr --version [--json]";
 
 /// A path as the output shows it. `Path::join` puts the platform's separator after a directory
@@ -172,6 +177,25 @@ fn write_out(stdout: &mut dyn Write, text: &str) -> Result<(), Failure> {
         .map_err(|e| fail(exit_code::USAGE, format!("cannot write output: {e}")))
 }
 
+/// The key `--key-uri` names: `pkcs11:...` (custody `pkcs11-token`) or `tpm-sealed:<dir>`
+/// (custody `tpm-sealed`). Any failure is a key error, exit 4, before any other work.
+fn hardware_key(uri: &str) -> Result<Box<dyn Signer>, Failure> {
+    let key: Result<Box<dyn Signer>, String> = if uri.starts_with("pkcs11:") {
+        hardware::Pkcs11Key::open(uri).map(|k| Box::new(k) as Box<dyn Signer>)
+    } else if let Some(dir) = uri.strip_prefix("tpm-sealed:") {
+        if dir.is_empty() {
+            Err("tpm-sealed:<dir> needs the key directory `keygen --tpm-sealed` wrote".into())
+        } else {
+            hardware::tpm_key(Path::new(dir)).map(|k| Box::new(k) as Box<dyn Signer>)
+        }
+    } else {
+        Err(format!(
+            "`{uri}` is not a key URI: pkcs11:... (RFC 7512) or tpm-sealed:<dir>"
+        ))
+    };
+    key.map_err(|e| fail(exit_code::USAGE, format!("--key-uri: {e}")))
+}
+
 fn file_name(path: &str) -> String {
     Path::new(path)
         .file_name()
@@ -194,16 +218,22 @@ fn crates_line(crypto: &dyn CryptoBackend) -> String {
 fn keygen(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Result<i32, Failure> {
     let a = Args::parse(
         args,
-        &["--out"],
+        &["--out", "--tpm-parent", "--tpm-pcrs"],
         &["--evaluation-only", "--tpm-sealed", "--json"],
     )?;
-    if a.flag("--tpm-sealed") {
-        return Err(fail(
-            exit_code::USAGE,
-            "keygen --tpm-sealed is not available in this build; use --evaluation-only for evaluation keys",
+    if a.flag("--tpm-sealed") && a.flag("--evaluation-only") {
+        return Err(usage(
+            "--tpm-sealed and --evaluation-only are two different keys; give one",
         ));
     }
-    if !a.flag("--evaluation-only") {
+    if !a.flag("--tpm-sealed")
+        && (a.value("--tpm-parent").is_some() || a.value("--tpm-pcrs").is_some())
+    {
+        return Err(usage(
+            "--tpm-parent and --tpm-pcrs apply only to --tpm-sealed",
+        ));
+    }
+    if !a.flag("--evaluation-only") && !a.flag("--tpm-sealed") {
         return Err(fail(
             exit_code::USAGE,
             "keygen makes file keys for evaluation only and needs --evaluation-only. Operational keys live in hardware: \
@@ -218,6 +248,9 @@ fn keygen(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Resul
         a.value("--out")
             .ok_or_else(|| usage("--out <dir> is required"))?,
     );
+    if a.flag("--tpm-sealed") {
+        return keygen_tpm(&a, &dir, crypto, stdout);
+    }
     let key_path = dir.join("sfr.key");
     let pub_path = dir.join("sfr.pub");
     for p in [&key_path, &pub_path] {
@@ -280,6 +313,97 @@ fn keygen(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Resul
             "{EVALUATION_LINE}\nfingerprint  {fp}\nprivate key  {} (mode 0600)\npublic key   {}\n",
             shown(&key_path),
             shown(&pub_path)
+        )
+    };
+    write_out(stdout, &text)?;
+    Ok(exit_code::OK)
+}
+
+/// `keygen --tpm-sealed`: a seed from the operating system's CSPRNG, sealed to this machine's
+/// TPM 2.0 through a pipe (SPEC B1.3). Only the sealed blobs and the public key reach disk.
+fn keygen_tpm(
+    a: &Args,
+    dir: &Path,
+    crypto: &RustCrypto,
+    stdout: &mut dyn Write,
+) -> Result<i32, Failure> {
+    let mut seed = Zeroizing::new([0u8; 32]);
+    getrandom::fill(&mut seed[..]).map_err(|e| {
+        fail(
+            exit_code::USAGE,
+            format!("the operating system's random number generator failed: {e}"),
+        )
+    })?;
+    let public = FileKey::unsealed_from_tpm(&seed, "").public_key();
+    let parent = a
+        .value("--tpm-parent")
+        .unwrap_or(hardware::DEFAULT_TPM_PARENT);
+    let pcrs = a.value("--tpm-pcrs");
+    let written = hardware::tpm_keygen(dir, &seed, parent, pcrs, &public)
+        .map_err(|e| fail(exit_code::USAGE, format!("keygen --tpm-sealed: {e}")))?;
+    let fp = fingerprint(crypto, &public);
+    let pub_path = dir.join(hardware::PUBLIC_KEY_FILE);
+    let uri = format!("tpm-sealed:{}", shown(dir));
+    let text = if a.flag("--json") {
+        json::pretty(
+            &Obj::new()
+                .field("key_custody", Value::str(Custody::TpmSealed.as_str()))
+                .field("fingerprint", Value::str(fp))
+                .field("key_uri", Value::str(uri))
+                .field("tpm_parent", Value::str(parent))
+                .field("tpm_pcrs", Value::opt_str(pcrs.map(str::to_string)))
+                .field(
+                    "files",
+                    Value::Array(written.iter().map(|p| Value::str(shown(p))).collect()),
+                )
+                .field("public_key", Value::str(shown(&pub_path)))
+                .build(),
+        )
+    } else {
+        format!(
+            "custody      tpm-sealed (parent {parent}{})\nfingerprint  {fp}\nkey uri      {uri}\npublic key   {}\n",
+            pcrs.map(|p| format!(", PCR policy {p}"))
+                .unwrap_or_default(),
+            shown(&pub_path)
+        )
+    };
+    write_out(stdout, &text)?;
+    Ok(exit_code::OK)
+}
+
+/// `pubkey --key-uri <uri>`: the public half of a hardware key, as the PEM `sfr verify --pubkey`
+/// reads, and its fingerprint. For a PKCS#11 key it is read from the token; for a `tpm-sealed`
+/// key the seed is unsealed and checked against the directory's `sfr.pub`.
+fn pubkey_cmd(
+    args: &[String],
+    crypto: &RustCrypto,
+    stdout: &mut dyn Write,
+) -> Result<i32, Failure> {
+    let a = Args::parse(args, &["--key-uri"], &["--json"])?;
+    if !a.positional.is_empty() {
+        return Err(usage("pubkey takes no positional arguments"));
+    }
+    let uri = a
+        .value("--key-uri")
+        .ok_or_else(|| usage("--key-uri <pkcs11:... or tpm-sealed:<dir>> is required"))?;
+    let key = hardware_key(uri)?;
+    let public = key.public_key();
+    let pem = public_key_pem(&public);
+    let fp = fingerprint(crypto, &public);
+    let text = if a.flag("--json") {
+        json::pretty(
+            &Obj::new()
+                .field("key_custody", Value::str(key.custody().as_str()))
+                .field("key_label", Value::str(key.label()))
+                .field("fingerprint", Value::str(fp))
+                .field("public_key_pem", Value::str(pem))
+                .build(),
+        )
+    } else {
+        format!(
+            "# custody {}, label {}, fingerprint {fp}\n{pem}",
+            key.custody().as_str(),
+            key.label()
         )
     };
     write_out(stdout, &text)?;
@@ -395,7 +519,6 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             "--baseline",
             "--key",
             "--key-uri",
-            "--token-cert",
             "--cert",
             "--chain",
             "--out",
@@ -418,14 +541,18 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         ));
     }
     // The key source is checked before any work, so a usage error costs nothing.
-    let key: Option<FileKey> = if dry_run {
+    if a.value("--key-uri").is_some() && a.value("--key").is_some() {
+        return Err(usage("give one key source: --key-uri or --key"));
+    }
+    let key: Option<Box<dyn Signer>> = if dry_run {
         None
-    } else if a.value("--key-uri").is_some() {
-        return Err(fail(
-            exit_code::USAGE,
-            "hardware key sources (--key-uri pkcs11:... and --key-uri tpm-sealed:<dir>) are not available in this build; \
-             use --key <sfr.key> --evaluation-only for evaluation records",
-        ));
+    } else if let Some(uri) = a.value("--key-uri") {
+        if a.flag("--evaluation-only") {
+            return Err(usage(
+                "--evaluation-only applies only to a key file (--key)",
+            ));
+        }
+        Some(hardware_key(uri)?)
     } else if let Some(path) = a.value("--key") {
         if !a.flag("--evaluation-only") {
             return Err(fail(
@@ -439,10 +566,10 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             pem_decode(&text, "PRIVATE KEY")
                 .map_err(|e| fail(exit_code::USAGE, format!("key file {path}: {e}")))?,
         );
-        Some(
+        Some(Box::new(
             FileKey::from_pkcs8_der(&der, &file_name(path))
                 .map_err(|e| fail(exit_code::USAGE, format!("key file {path}: {e}")))?,
-        )
+        ))
     } else {
         return Err(fail(
             exit_code::USAGE,
@@ -450,9 +577,6 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
              --evaluation-only (or --dry-run to sign nothing)",
         ));
     };
-    if a.value("--token-cert").is_some() {
-        return Err(usage("--token-cert applies only to --key-uri pkcs11:..."));
-    }
     let time_utc = match a.value("--seal-time") {
         Some(t) => parse_seal_time(t).map_err(usage)?,
         None => {
@@ -551,8 +675,16 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         time_utc,
         token_cmvp_certificate: None,
     };
-    let sealed = seal(&ing, &eval, &rules, &baseline, &params, crypto, &key)
-        .map_err(|e| fail(exit_code::USAGE, e.to_string()))?;
+    let sealed = seal(
+        &ing,
+        &eval,
+        &rules,
+        &baseline,
+        &params,
+        crypto,
+        key.as_ref(),
+    )
+    .map_err(|e| fail(exit_code::USAGE, e.to_string()))?;
     // A record verify would refuse is never written (SPEC B1.4 input limits).
     check_record_size(sealed.bytes.len()).map_err(|e| {
         fail(
@@ -840,6 +972,7 @@ fn run(args: &[String], stdout: &mut dyn Write) -> Result<i32, Failure> {
         "keygen" => keygen(rest, &crypto, stdout),
         "seal" => seal_cmd(rest, &crypto, stdout),
         "verify" => verify_cmd(rest, &crypto, stdout),
+        "pubkey" => pubkey_cmd(rest, &crypto, stdout),
         "--version" | "version" => version(rest, &crypto, stdout),
         other => Err(usage(format!("unknown command `{other}`"))),
     }

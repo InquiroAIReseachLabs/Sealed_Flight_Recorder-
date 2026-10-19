@@ -12,6 +12,7 @@ pub mod json;
 pub mod keys;
 pub mod merkle;
 pub mod params;
+pub mod pkcs11_uri;
 pub mod record;
 pub mod report;
 pub mod rules;

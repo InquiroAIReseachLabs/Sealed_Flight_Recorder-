@@ -2,7 +2,7 @@
 
 After a PX4 flight, `sfr` produces a signed, self-verifying record of the configuration that flew, the readiness rule results, and the operator, failsafe, and transition events, so anyone can later prove none of it was changed.
 
-This is an evaluation release, provided without warranty, and in development: records sealed with it are for evaluation, and it signs only with evaluation keys. A browser version of the same engine is available to invited evaluators and is hosted separately. Third-party material is listed in [NOTICE.md](NOTICE.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
+This is an evaluation release, provided without warranty, and in development: the quickstart signs with evaluation keys, and every record sealed with one says EVALUATION KEY. Operational records are sealed with a key held in a PKCS#11 token or HSM, or with a seed sealed to a TPM ([docs/INTEGRATION_NOTES.md](docs/INTEGRATION_NOTES.md#keys)). A browser version of the same engine is available to invited evaluators and is hosted separately. Third-party material is listed in [NOTICE.md](NOTICE.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## What a record proves
 
