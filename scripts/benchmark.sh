@@ -50,7 +50,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 [ "${BASH_VERSINFO[0]}" -ge 5 ] || die "bash 5 or later is required (EPOCHREALTIME), this is $BASH_VERSION"
 /usr/bin/time -f %M true > /dev/null 2>&1 || die "GNU time at /usr/bin/time is required (package \"time\")"
-for tool in awk cat cp cut find getconf head mkdir mktemp od sed sha256sum sort tail tr uname wc; do
+for tool in awk basename cat cp cut dirname find getconf head mkdir mktemp od rm sed sha256sum sort tail tr uname wc; do
   command -v "$tool" > /dev/null || die "$tool is required"
 done
 version="$("$sfr" --version 2> /dev/null | head -1)" || die "cannot run $sfr"

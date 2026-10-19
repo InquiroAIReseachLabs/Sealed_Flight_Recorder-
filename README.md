@@ -13,6 +13,10 @@ docker load -i sfr-<version>-demo-image.tar.gz
 docker run --rm --network=none sfr-demo:<version>
 ```
 
+## Try it in a browser
+
+The engine bundle (`scripts/build_engine.sh`, kept by every CI run as the artifact `sfr-engine-<commit>`) runs the same engine in a web page: seal a log, verify a record, and run the steps of the demo above on a bundled sample log. Its records are byte-identical to the command line's for the same inputs. Files a person chooses are read in the browser and never uploaded; the bundle fetches only its own files, and the sample log only when the demo runs. It signs with an evaluation key made in the browser. [docs/SANDBOX.md](docs/SANDBOX.md) documents its JavaScript API and how it is tested.
+
 ## Downloads
 
 Each build holds, for the version in `Cargo.toml`:

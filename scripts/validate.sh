@@ -2,9 +2,10 @@
 # validate.sh: CLAUDEME pre-commit gate. RUN THIS BEFORE EVERY COMMIT.
 # Runs the checks of every CI job except those that need their own build or tools: the fuzz job
 # (pinned nightly and cargo-fuzz), the release-build verify timing gate, the armv7 job (QEMU),
-# and the release jobs (static builds twice from clean, SBOMs, demo image under docker, aarch64
-# and armv7 records under QEMU, benchmark, SHA256SUMS); scripts/build_release.sh, scripts/run_demo.sh and
-# docs/RELEASE.md run those by hand. Exits non-zero on any FAIL.
+# the release jobs (static builds twice from clean, SBOMs, demo image under docker, aarch64 and
+# armv7 records under QEMU, benchmark, SHA256SUMS), and the sandbox browser gate (wasm-bindgen-cli
+# and three browsers); scripts/build_release.sh, scripts/run_demo.sh, scripts/build_site.sh with
+# tests/browser/sandbox.test.mjs, and docs/RELEASE.md run those by hand. Exits non-zero on any FAIL.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,6 +32,8 @@ run "forbid(unsafe_code) in every crate root" check_forbid_unsafe
 # 2. Formatting, lints as errors, tests, all --locked (SPEC B1.10, "Code quality").
 run "rustfmt --check" cargo fmt --all --check
 run "clippy -D warnings" cargo clippy --workspace --all-targets --locked --quiet -- -D warnings
+run "clippy -D warnings, sfr-wasm for wasm32 (the page's bindings)" \
+  cargo clippy -p sfr-wasm --target wasm32-unknown-unknown --locked --quiet -- -D warnings
 run "cargo test --locked" cargo test --workspace --locked --quiet
 run "golden files agree with the independent oracle" scripts/testdata/regenerate.sh compare
 
@@ -48,6 +51,9 @@ run "README numbers match docs/receipts/ci-run.txt" scripts/regen_readme_numbers
 # test, the benchmark segment manifest, and every script parses.
 run "no private key self-test" scripts/check_no_private_keys.sh --self-test
 run "no private key in the repository" scripts/check_no_private_keys.sh
+run "no email address self-test" scripts/check_no_emails.sh --self-test
+run "no email address in the repository" scripts/check_no_emails.sh
+run "engine bundle check self-test" scripts/check_engine_bundle.sh --self-test
 run "release signing self-test" scripts/release_sign.sh --self-test
 run "benchmark segment manifest matches the golden VTOL flight" python3 -I scripts/benchmark/make_segments.py \
   --check scripts/benchmark/vtol_transition.segments testdata/sitl/v1.17.0/vtol_transition.ulg \

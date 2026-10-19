@@ -18,6 +18,7 @@
 10. Decisions the founder must approve before Chunk 2
 11. Cryptographic module boundary and key custody (security audit)
 12. Change Order 01: VTOL subtype, watched parameters, payload commands
+13. The sandbox (Chunk 6)
 
 Appendix A. Item 11 test programs
 
@@ -6150,7 +6151,7 @@ index c17bbda..9bcf026 100644
 --- a/platforms/posix/src/px4/common/px4_daemon/pxh.cpp
 +++ b/platforms/posix/src/px4/common/px4_daemon/pxh.cpp
 @@ -40,6 +40,7 @@
-  * @author Julian Oes <julian@oes.ch>
+  * @author Julian Oes
   */
  
 +#include <cstdint>
@@ -13636,6 +13637,23 @@ Skipped: PX4 v1.17.0 has no two-rotor tailsitter model in Gazebo Classic, so the
 | `testdata/sitl/v1.17.0/payload_two_sources.ulg` | SIH, `10040_sihsim_quadx`, PX4 instance 5 (system 6) | 15572427 | `d7cbd9eb7e438583574c1bb799637f0d92bb03f290f427da6ea61f177d1650df` | Multicopter: arm, takeoff and land from a ground station (255/190); actuator from the ground station and gripper, image capture and winch from a second source (42/191) (3e) |
 
 Each has a `.provenance.md` beside it with the build, the exact commands, and the timeline. Item 3d, the synthetic custom topic, is `testdata/synthetic/custom_detection.ulg`.
+
+## 13. The sandbox (Chunk 6)
+
+**Date:** 2026-10-19. Decisions taken building `crates/sfr-wasm`, its engine bundle and the `site/` test harness, each with its evidence.
+
+| Decision | Why | Evidence |
+|---|---|---|
+| Bindings through `wasm-bindgen` 0.2.129, only on wasm32 | Exporting a function from wasm32 needs `#[no_mangle]` or `#[export_name]`, which `#![forbid(unsafe_code)]` rejects; the `wasm-bindgen` macro generates the export code and builds under `forbid(unsafe_code)`. On every other target `sfr-wasm` is a plain Rust API, so `cargo test` and the armv7 job build no bindings | `cargo clippy -p sfr-wasm --target wasm32-unknown-unknown -- -D warnings` clean (CI job `sandbox`, `scripts/validate.sh`); `crates/sfr-wasm/Cargo.toml` |
+| `wasm-bindgen-cli` from its release binary, SHA-256 pinned | Building it from source took 1 min 32 s on this machine; downloading the release binary takes seconds. The pinned hash is the one the release publishes (`.tar.gz.sha256sum`), checked by `sha256sum -c` in CI | `.github/workflows/ci.yml` job `sandbox` |
+| The engine takes the CLI's steps, not new ones | `sfr-wasm` calls the `sfr-core` functions `sfr seal` and `sfr verify` call, in their order, with their messages; `sfr-core` is unchanged. The output text functions are copied from `crates/sfr/src/main.rs` and held to it by tests, not shared, so this chunk changes no Tier A code | `crates/sfr/tests/sandbox.rs` (records, reports, output, notes, exit codes and error messages equal on five golden logs, the no-baseline case, five verify cases, five bad inputs); `tests/browser/sandbox.test.mjs` check `records` (every golden log, three browsers) |
+| No randomness or clock in the engine | The in-browser key's seed comes from the browser's CSPRNG (`crypto.getRandomValues`) and the seal time from the page; `sfr-wasm` depends on neither `getrandom` nor `SystemTime`, which panics on wasm32-unknown-unknown | `crates/sfr-wasm/src/lib.rs` |
+| A worker reads the log a piece at a time | The page's thread cannot read a file synchronously; a worker can (`FileReaderSync`), 1 MiB at a time, straight into the engine's memory, so the engine never holds the whole log and the page stays responsive | browser check `memory` (engine memory after sealing the largest allowed log; CI job summary) |
+| Without a baseline: firmware `none`, no parameters | The CLI requires a baseline; the sandbox makes it optional by sealing against an empty one, so R2 and R3 fail and say what they found, and the same text given to the CLI gives the same record. A baseline built from the log itself would make R2 and R3 pass by construction | `NO_BASELINE` in `crates/sfr-wasm/src/lib.rs`; `sandbox.rs` `without_a_baseline_the_sandbox_seals_what_the_cli_seals_from_the_no_baseline_text` |
+| Limit: 100 MiB per log or record | Bounds a tab's memory; above the 100 MB benchmark log, so every benchmark size seals in the browser too | `docs/LIMITS.md` "The sandbox's limit" |
+| One sample log, the smallest that shows both changes, fetched on demand | The tamper demo needs a COMMAND event to change in the record and a float parameter at log start to change in the log. `mc_flight_1.ulg` has both and every rule passes on it: 8,536,869 bytes, 3,107,003 gzip-compressed, against 10,217,078 and 3,759,964 for `failsafe_gps_loss.ulg` and 58 MB for the two logs `run_demo.sh` uses. It is fetched, compressed, only when the demo runs, and unpacked in the browser (`DecompressionStream`), so it travels compressed on any static host | `scripts/build_engine.sh`; browser checks `demo` and `network` |
+| Structured verify results read from `sfr-core`'s text | The page needs each mismatch's kind, event sequence number and kind, field, and sealed and found values. `sfr_core::verify` returns text; the wasm glue (Tier B) splits it (`crates/sfr-wasm/src/result.rs`) rather than changing `sfr-core` (Tier A). A text it does not know stays whole as kind `record`; tests on real changed records and logs fail CI if `sfr-core`'s wording changes | `result.rs` tests; `crates/sfr/tests/sandbox.rs`; browser checks `verify` and `demo` |
+| A separable bundle with a JavaScript API | The production page is built with the Inquiro website; this repository ships the engine, `sfr.js` and `sfr-worker.js`, the sample with its notices, `BUILDINFO` with the source commit, and `SHA256SUMS`, as the CI artifact `sfr-engine-<commit>` | `scripts/build_engine.sh`, `scripts/check_engine_bundle.sh` |
 
 ## Appendix A. Item 11 test programs
 

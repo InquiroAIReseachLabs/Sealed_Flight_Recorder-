@@ -39,6 +39,7 @@ die() { echo "regen_readme_numbers.sh: $*" >&2; exit 1; }
 
 begin() { echo "<!-- BEGIN $1: written by scripts/regen_readme_numbers.sh, do not edit by hand -->"; }
 end() { echo "<!-- END $1 -->"; }
+known_blocks="verify-timing tests benchmark release-key"
 
 # The lines a job log contributes, by job.
 job_pattern() {
@@ -206,17 +207,23 @@ splice() {
 # regenerate <readme> <receipt> <release key> <out>: the README with the release-key block and
 # every block the receipt holds rewritten; fails on a marker of any other block.
 regenerate() {
-  local readme="$1" r="$2" key="$3" out="$4" block rendered marker
+  local readme="$1" r="$2" key="$3" out="$4" block rendered marker b
   [ -f "$r" ] || die "no receipt $r"
   [[ "$(field "$r" run)" =~ ^[0-9]+$ ]] || die "$r has no run id"
   [[ "$(field "$r" commit)" =~ ^[0-9a-f]{40}$ ]] || die "$r has no commit"
   rendered="$(blocks "$r")"
+  # Every line that looks like a marker (any case, any spacing, anywhere on the line) must be
+  # exactly a marker this script writes: an altered one, such as one with a trailing space,
+  # would hide hand-written numbers from the splice below.
   while IFS= read -r marker; do
-    [[ "$marker" == '<!-- '* ]] || die "$readme has a marker that does not start its line: $marker"
-    block="$(printf '%s\n' "$marker" | sed -E 's/^<!-- (BEGIN|END) ([a-z-]+).*$/\2/')"
+    block=""
+    for b in $known_blocks; do
+      if [ "$marker" = "$(begin "$b")" ] || [ "$marker" = "$(end "$b")" ]; then block="$b"; fi
+    done
+    [ -n "$block" ] || die "$readme has a marker line that is not exactly one this script writes: \"$marker\""
     [ "$block" = release-key ] || printf '%s\n' "$rendered" | grep -q -x -F -- "$block" \
       || die "$readme holds a $block block, but the receipt $r has no lines for it"
-  done < <(grep -E '<!-- (BEGIN|END) ' "$readme" || true)
+  done < <(grep -i -E '<!--[[:space:]]*(BEGIN|END)' "$readme" || true)
   render_release_key "$key" > "$work/block"
   splice "$readme" release-key "$work/block" > "$out"
   for block in $rendered; do
@@ -285,6 +292,20 @@ self_test() {
   main write "$t/indented.md" "$t/cq-receipt" "$t/no-such.pub"
   printf '%s\n' "  $(begin benchmark)" '| large_100mb | 9 |' "   $(end benchmark)" >> "$t/indented.md"
   if (main check "$t/indented.md" "$t/cq-receipt" "$t/no-such.pub" > /dev/null 2>&1); then die "self-test: an indented marker is accepted"; fi
+  # A second, altered copy of a block the receipt does fill, holding hand-written numbers: a
+  # trailing space, a missing word, a lowercase marker, a missing space. Each must fail.
+  local altered
+  for altered in "$(begin tests) |$(end tests) " "$(begin tests)|$(end tests) " \
+    "$(begin tests | sed 's/, do not edit by hand//')|$(end tests)" \
+    "$(begin tests | sed 's/BEGIN/begin/')|$(end tests | sed 's/END/end/')" \
+    "$(begin tests | sed 's/<!-- /<!--/')|$(end tests | sed 's/<!-- /<!--/')"; do
+    readme "$t/altered.md" verify-timing tests release-key
+    main write "$t/altered.md" "$t/cq-receipt" "$t/no-such.pub"
+    printf '%s\n' "${altered%%|*}" '| `cargo test --workspace --locked` | 999 passed |' "${altered#*|}" >> "$t/altered.md"
+    if (main check "$t/altered.md" "$t/cq-receipt" "$t/no-such.pub" > /dev/null 2>&1); then
+      die "self-test: an altered marker is accepted: ${altered%%|*}"
+    fi
+  done
   # The release key, with its fingerprint, once release/sfr-release.pub exists.
   openssl genpkey -algorithm ed25519 -out "$t/k.key" 2> /dev/null
   openssl pkey -in "$t/k.key" -pubout -out "$t/k.pub"

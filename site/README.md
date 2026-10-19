@@ -1,5 +1,11 @@
 # site/
 
-Static sandbox page (SPEC B1.2): HTML, CSS, and JS that loads `sfr-wasm`. Built in Chunk 6.
+The test harness page for the engine bundle (`docs/SANDBOX.md`): a plain page that CI's browser gate (`tests/browser/sandbox.test.mjs`) drives in Chromium, Firefox and WebKit. The production page is built elsewhere on the same bundle; this page has no design work and is not deployed.
 
-Rules: no third-party scripts, no analytics, no CDN calls, zero network requests after load. Files dropped on the page never leave the browser.
+| File | What it does |
+|---|---|
+| `index.html`, `style.css` | the page: Seal, Verify and Tamper demo panels |
+| `app.js` | the three panels, over `engine/sfr.js` (the bundle's API) |
+| `markdown.js` | shows the `.sfr.md` report as a page, setting text only, never HTML |
+
+`scripts/build_site.sh <out-dir>` puts these files next to a fresh engine bundle in `<out-dir>/engine/`. Files chosen on the page are read in the browser and never uploaded.

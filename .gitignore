@@ -4,6 +4,8 @@
 /fuzz/artifacts/
 /fuzz/corpus/
 /site/pkg/
+# The browser test's npm packages (tests/browser/package-lock.json pins them).
+/tests/browser/node_modules/
 
 # Private keys never enter the repository (SPEC B1.9).
 *.key
@@ -12,6 +14,11 @@
 # Local-only list of forbidden terms for scripts/check_language.sh (SPEC B1.12).
 # Kept out of the repository on purpose: the names it holds must not appear anywhere in it.
 .forbidden-terms
+
+# Local lists and settings that may name people or hold secrets: never committed.
+allowlist*
+*.allowlist
+.env*
 
 # Editor and OS noise
 .idea/

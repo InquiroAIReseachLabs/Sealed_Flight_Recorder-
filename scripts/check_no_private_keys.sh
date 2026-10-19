@@ -14,10 +14,12 @@ self='scripts/check_no_private_keys.sh'
 
 # Prints the files under work tree $1 that hold a private key block. Returns 1, after a message,
 # when git cannot list the files or a file cannot be read: a scan that did not run is no pass.
+# Git is pointed at $1 itself (its .git and its work tree), so it never searches the directories
+# above $1 for another repository, whatever the path: relative, or holding a colon.
 scan() {
   local list f rc
   list="$(mktemp)"
-  git -C "$1" ls-files -z --cached --others --exclude-standard > "$list" \
+  git -C "$1" --git-dir=.git --work-tree=. ls-files -z --cached --others --exclude-standard > "$list" \
     || { echo "check_no_private_keys.sh: git cannot list the files of $1" >&2; rm -f "$list"; return 1; }
   while IFS= read -r -d '' f; do
     case "$f" in "$allowed" | "$self") continue ;; esac
@@ -47,12 +49,25 @@ if [ "${1:-}" = --self-test ]; then
   scan "$tmp" > "$tmp.out" || { echo "FAIL: self-test: the scan did not run"; exit 1; }
   [ "$(sort "$tmp.out" | tr '\n' ' ')" = "notes.txt release/sfr-release.pem " ] \
     || { echo "FAIL: self-test: found [$(cat "$tmp.out")]"; exit 1; }
-  rm -rf "$tmp/.git"
-  # GIT_CEILING_DIRECTORIES: a TMPDIR inside a work tree must not let git find that repository.
-  if GIT_CEILING_DIRECTORIES="$(dirname "$tmp")" scan "$tmp" > /dev/null 2>&1; then
-    echo "FAIL: self-test: a directory git cannot list passes"; exit 1
+  # The same tree at a relative path holding a colon, inside another repository: the scan must
+  # read the tree's own repository, and with no .git of its own it must fail, never list the
+  # enclosing repository's files.
+  mkdir -p "$tmp/outer/in:side"
+  git -C "$tmp/outer" init -q
+  printf -- '-----BEGIN PRIVATE KEY-----\n' > "$tmp/outer/outer.pem"
+  mv "$tmp/.git" "$tmp/.gitignore" "$tmp/release" "$tmp/crates" "$tmp/notes.txt" "$tmp/ignored.key" "$tmp/outer/in:side/"
+  # The subshells change directory, so they get TMPDIR, which may be relative, as an absolute path.
+  abs="$(cd "$tmp" && pwd -P)"
+  (cd "$tmp/outer" && TMPDIR="$abs" scan "in:side") > "$tmp.out" \
+    || { echo "FAIL: self-test: the scan of a relative path with a colon did not run"; exit 1; }
+  [ "$(sort "$tmp.out" | tr '\n' ' ')" = "notes.txt release/sfr-release.pem " ] \
+    || { echo "FAIL: self-test: a relative path with a colon found [$(cat "$tmp.out")]"; exit 1; }
+  rm -rf "$tmp/outer/in:side/.git"
+  if (cd "$tmp/outer" && TMPDIR="$abs" scan "in:side") > /dev/null 2>&1; then
+    echo "FAIL: self-test: a directory with no repository of its own, inside another one, passes"; exit 1
   fi
-  echo "PASS: private key self-test (untracked and tracked files, PKCS#8 and EC, allow list, ignored files, no git)"
+  echo "PASS: private key self-test (untracked and tracked files, PKCS#8 and EC, allow list," \
+    "ignored files, no git, a relative path with a colon inside another repository)"
   exit 0
 fi
 

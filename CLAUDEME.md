@@ -53,7 +53,10 @@ Your code fits ONE place. Know where before you type. `verify` walks the same pi
 // LANGUAGES
 // Rust:  everything that ships (sfr-core, sfr, sfr-wasm). #![forbid(unsafe_code)] in every crate.
 // Shell: scripts/ (demo, benchmark, README numbers, release, validation).
-// JS:    site/ only, loading sfr-wasm. No third-party scripts. No CDN. No analytics.
+// JS:    crates/sfr-wasm/js/ (the engine bundle's API module and worker) and site/ (its test
+//        harness page). No third-party scripts. No CDN. No analytics.
+//        tests/browser/: the headless browser gate for site/ (Playwright, pinned by its
+//        package-lock.json). A test tool: never shipped, never served.
 // Python: offline tooling only, never in the runtime path, never shipped.
 
 // STORAGE: none. Files on disk. No database, no server, no upload, no fleet store.
@@ -201,9 +204,10 @@ sealed-flight-record/
 ├── crates/
 │   ├── sfr-core/             # engine: ingest, events, rules, record, Merkle, signing, verify
 │   ├── sfr/                  # CLI: seal, verify, keygen
-│   └── sfr-wasm/             # browser build of the same engine
+│   └── sfr-wasm/             # browser build of the same engine; js/ holds the bundle's API (scripts/build_engine.sh)
 ├── fuzz/                     # cargo-fuzz targets: ULog parser, .sfr reader
-├── site/                     # static sandbox page, zero network requests after load
+├── site/                     # test harness page for the engine bundle (scripts/build_site.sh); not deployed
+├── tests/browser/            # headless browser gate: same records as the CLI; user files never sent
 ├── scripts/                  # validate, check_deny_list, check_language, run_demo, benchmark, regen_readme_numbers, release
 ├── testdata/                 # golden logs with license notices; expected/ records
 ├── examples/                 # added with the rules engine: rules.extended.toml (SPEC B1.6) and the default rules and baseline the demo uses
@@ -269,6 +273,23 @@ Every check script ships with a `--self-test` that runs the real scanning code a
 4. The spec is the contract. The tests are the proof. Code that the spec does not ask for is not written.
 5. If a reviewer's claim and a primary source disagree (the package registry, the upstream repository, the PX4 source at the tag in question, a real log), the primary source wins. Verify before adopting.
 6. Nothing in this repository names a target company, aircraft, or customer.
+
+---
+
+# §11 REVIEW BUDGET
+
+Independent checks cost time and money; spend them where a mistake would change what a record proves.
+
+| Tier | What | Independent check |
+|---|---|---|
+| A | the record format, signing, verification, parsing, anything in `sfr-core` | one check on the diff only (`git diff main...HEAD` plus the SPEC sections it touches); one pass; no sub-agent per finding; 15 minutes wall-clock at most |
+| B | scripts, CI, docs, `site/`, the wasm glue (`crates/sfr-wasm`) | none: CI plus the executor's own checklist |
+
+1. A finding counts only with a failing test or a concrete input that triggers it. A finding without one is a wording note: all wording notes go into one commit, with no re-review.
+2. A fix commit is not re-reviewed: its regression test runs instead. It is checked again only if the fix touches Tier A code.
+3. When a class of finding recurs, it becomes a CI check, once, instead of being found again.
+4. An independent check runs in parallel with CI, not after it.
+5. Each gate report states how long each check took and roughly what it cost, and proposes any further efficiencies in one paragraph.
 
 ---
 
