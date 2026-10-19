@@ -1131,7 +1131,7 @@ fn verify_without_a_trusted_key_says_the_signer_is_not_checked() {
     for part in [
         "Integrity: NOT CHECKED (no trusted key given)\n",
         "Flight rules: UNKNOWN (the record's integrity was not checked)\n",
-        "key       sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f (named by the record, not proven)\n",
+        "key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51 (named by the record, not proven)\n",
         "custody   file-evaluation (declared by the record, not proven)\n",
         "through a channel you trust",
     ] {

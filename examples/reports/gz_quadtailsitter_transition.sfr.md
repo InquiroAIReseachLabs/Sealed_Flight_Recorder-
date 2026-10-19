@@ -90,15 +90,15 @@ The record holds no sealed topic digests.
 ## Seal
 
 - Sealed at: 2026\-10\-18T15\:00\:00Z
-- Key fingerprint: `sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f`
+- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
 - Key custody: file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
-- Merkle root: `b7981f970b4c79df5b5d16681e566e11755534507ff38cccaddf1289bffb7bbe` (sha256\-rfc6962, 35 leaves)
-- Schema version: 1
+- Merkle root: `40853d2a6ec3dc09e57648516395a704ba615edb9010812d8c60beb9089fce12` (sha256\-rfc6962, 35 leaves)
+- Schema version: 2
 
 ## Verify
 
-With the public key whose fingerprint is `sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f` saved as `sfr.pub`, in the directory that holds the record and the log:
+With the public key whose fingerprint is `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
 sfr verify gz_quadtailsitter_transition.sfr --pubkey sfr.pub --ulog gz_quadtailsitter_transition.ulg

@@ -15,7 +15,7 @@
 #                  timing is published, SPEC B1.10 armv7)
 #
 #   release-key    release/sfr-release.pub, the release public key, with its fingerprint; until
-#                  the founder generates it (scripts/release_sign.sh keygen), a line saying so
+#                  the release key holder generates it (scripts/release_sign.sh keygen), a line saying so
 #
 # docs/RELEASE.md holds the same release-key block, and docs/BENCHMARK.md holds the block
 # benchmark-arm-vm: the output of scripts/benchmark.sh on GitHub's arm64 hosted runner, from the
@@ -187,7 +187,7 @@ render_release_key() {
     cat "$key"
     echo '```'
   else
-    echo "Release public key: not generated yet. The founder generates the release key on an offline machine with \`scripts/release_sign.sh keygen <offline path>\`, which writes its public half to \`release/sfr-release.pub\`; \`scripts/regen_readme_numbers.sh\` then shows it here, and both are committed before the first release."
+    echo "Release public key: not generated yet. The release key holder generates the release key on an offline machine with \`scripts/release_sign.sh keygen <offline path>\`, which writes its public half to \`release/sfr-release.pub\`; \`scripts/regen_readme_numbers.sh\` then shows it here, and both are committed before the first release."
   fi
   end release-key
 }

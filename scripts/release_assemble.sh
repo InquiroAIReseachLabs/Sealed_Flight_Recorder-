@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # release_assemble.sh: check that a directory holds every release artifact, then write SHA256SUMS
-# over all of them (SPEC B1.10 Releases). Nothing is signed or published here: the founder signs
+# over all of them (SPEC B1.10 Releases). Nothing is signed or published here: the release key holder signs
 # SHA256SUMS offline with scripts/release_sign.sh (docs/RELEASE.md).
 #
 # The artifacts, for the version in Cargo.toml:

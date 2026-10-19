@@ -75,15 +75,15 @@ These are reported, not a rule failure: R3 compares the parameters at log start 
 ## Seal
 
 - Sealed at: 2026\-10\-18T15\:00\:00Z
-- Key fingerprint: `sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f`
+- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
 - Key custody: file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
-- Merkle root: `c39a33cc3d608ecb60c962a428360135732e72528aac611c18daf305cb40e21b` (sha256\-rfc6962, 29 leaves)
-- Schema version: 1
+- Merkle root: `9d34be2f6eae5d3d9c4b38041846522e5c1116b7c20edb1543b410cbc71b0835` (sha256\-rfc6962, 29 leaves)
+- Schema version: 2
 
 ## Verify
 
-With the public key whose fingerprint is `sha256:7ae78d654b7df5b081295eb9a7cac277c3340ff244c0d611765916e536045e8f` saved as `sfr.pub`, in the directory that holds the record and the log:
+With the public key whose fingerprint is `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
 sfr verify gz_x500_vision_hover.sfr --pubkey sfr.pub --ulog gz_x500_vision_hover.ulg

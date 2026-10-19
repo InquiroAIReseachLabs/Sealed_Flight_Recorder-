@@ -339,7 +339,7 @@ jobs:
 
   # Release artifacts. These jobs run beside the gates above and build everything a
   # release holds, unsigned: the three static tarballs, the benchmark kit, the demo image, one
-  # SBOM per target, and SHA256SUMS. They publish nothing; the founder signs SHA256SUMS offline
+  # SBOM per target, and SHA256SUMS. They publish nothing; the release key holder signs SHA256SUMS offline
   # and makes the release (docs/RELEASE.md).
   release-build:
     name: static ${{ matrix.target }} tarball, built twice from clean (SPEC B1.10 Static binaries)
