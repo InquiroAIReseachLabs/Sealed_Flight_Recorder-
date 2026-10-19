@@ -353,16 +353,21 @@ fn the_sandbox_verify_prints_what_the_cli_prints_verified_or_not() {
     log[mid] ^= 0x40;
     std::fs::write(dir.join("changed.ulg"), &log).unwrap();
     for (record, log, code, headline) in [
-        ("flight.sfr", None, 0, "VERIFIED (record)"),
+        ("flight.sfr", None, 0, "Integrity: VERIFIED (record)"),
         (
             "flight.sfr",
             Some("flight.ulg"),
             0,
-            "VERIFIED (record and log)",
+            "Integrity: VERIFIED (record and log)",
         ),
-        ("tampered.sfr", None, 1, "FAILED: Merkle root mismatch"),
-        ("tampered.sfr", Some("flight.ulg"), 1, "FAILED: "),
-        ("flight.sfr", Some("changed.ulg"), 1, "FAILED: "),
+        (
+            "tampered.sfr",
+            None,
+            1,
+            "Integrity: FAILED: Merkle root mismatch",
+        ),
+        ("tampered.sfr", Some("flight.ulg"), 1, "Integrity: FAILED: "),
+        ("flight.sfr", Some("changed.ulg"), 1, "Integrity: FAILED: "),
     ] {
         let (cli, out) = both_verify(&dir, record, log);
         assert_eq!(cli.status.code(), Some(code), "{record} {log:?}");
@@ -379,7 +384,8 @@ fn the_sandbox_verify_prints_what_the_cli_prints_verified_or_not() {
     let (sealed, found) = (first.sealed.clone().unwrap(), first.found.clone().unwrap());
     assert_ne!(sealed, found);
     assert!(
-        out.text.contains(&format!("FAILED: {}\n", first.text)),
+        out.text
+            .contains(&format!("Integrity: FAILED: {}\n", first.text)),
         "{}",
         out.text
     );

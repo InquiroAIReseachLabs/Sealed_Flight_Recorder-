@@ -138,7 +138,7 @@ Copy the records from `/var/lib/sfr/records/` off the vehicle with the logs; any
 
 ## In CI or another pipeline
 
-`sfr verify` exits 0 only when the record verifies, and 1 when it does not; `--json` adds the sealed `status`. This function fails a pipeline on a record that does not verify against its log, and on one that verifies but recorded a rule FAIL:
+`sfr verify` reports two things apart. `Integrity:` is the seal: VERIFIED when the record (and, with `--ulog`, the log) has not changed since it was sealed. `Flight rules:` is the rule results sealed in the record: PASS, or FAIL with the failing rule ids. The exit code follows integrity only: 0 when the record verifies, even if its flight rules failed, and 1 when it does not. `--json` gives the same as `integrity`, `flight_rules` and `failed_rules`. This function fails a pipeline on a record that does not verify against its log, and on one that verifies but recorded a rule FAIL:
 
 ```sh doc-test
 mkdir -p try
@@ -147,7 +147,7 @@ check_record() { # check_record <record.sfr> <sfr.pub> <log.ulg>
     echo "FAIL: $1 does not verify: $(grep '"first_mismatch"' try/verify.json)"
     return 1
   fi
-  if ! grep -q '"status": "PASS"' try/verify.json; then
+  if ! grep -q '"flight_rules": "PASS"' try/verify.json; then
     echo "FAIL: $1 verifies, but a rule failed when it was sealed"
     return 1
   fi

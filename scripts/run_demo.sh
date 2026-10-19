@@ -4,7 +4,7 @@
 #
 #   a. keygen an evaluation key
 #   b. seal the golden VTOL flight; seal prints the results table and the event count
-#   c. verify the record standalone, then with --ulog: VERIFIED both times
+#   c. verify the record standalone, then with --ulog: Integrity: VERIFIED both times
 #   d. change one byte of a COMMAND event in a copy of the record: verify fails, and verify
 #      --ulog names the event and the field
 #   e. seal the golden quad tailsitter flight, change the value of VT_B_TRANS_DUR (a VTOL
@@ -69,9 +69,9 @@ record="$work/sealed/vtol_transition.sfr"
 
 step "c. verify the record standalone, then with the log"
 run verify "$record" --pubkey "$work/key/sfr.pub"
-expect 0 "VERIFIED (record)"
+expect 0 "Integrity: VERIFIED (record)"
 run verify "$record" --pubkey "$work/key/sfr.pub" --ulog "$vtol"
-expect 0 "VERIFIED (record and log)"
+expect 0 "Integrity: VERIFIED (record and log)"
 
 step "d. change one byte of a COMMAND event in a copy of the record"
 cp "$record" "$work/tampered.sfr"
