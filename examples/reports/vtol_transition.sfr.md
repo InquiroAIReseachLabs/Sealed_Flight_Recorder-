@@ -20,6 +20,14 @@ EVALUATION KEY: not for operational use
 
 R3 found no difference between the baseline and the flown parameters.
 
+## Parameters changed in flight
+
+These are reported, not a rule failure: R3 compares the parameters at log start with the baseline.
+
+| Seq | Boot time (s) | Parameter | Old | New |
+|---|---|---|---|---|
+| 4 | 5.308000 | CAL\_BARO0\_OFF | f32\:0 | f32\:2\.4414062 |
+
 ## Transition tuning
 
 - VTOL type: standard (VT_TYPE 2)
@@ -68,6 +76,8 @@ The record holds no sealed topic digests.
 | 20 | 88.272000 | DISARM |  | reason 6; reason\_name auto\_disarm\_land |
 | 21 | 88.272000 | NAV\_STATE\_CHANGE |  | new 4; new\_name AUTO\_LOITER; old 18; old\_name AUTO\_LAND |
 
+`initial` (ARM, FAILSAFE_SET): true when the event comes from the log's first `vehicle_status` sample, because the log starts armed or in failsafe; false when it is a change between two samples.
+
 ## Log
 
 - File: vtol\_transition\.ulg
@@ -81,15 +91,15 @@ The record holds no sealed topic digests.
 ## Seal
 
 - Sealed at: 2026\-10\-18T15\:00\:00Z
-- Key fingerprint: `sha256:79f8ff973d02c252cb7740a48e532f6f3794b2c2299398e379e35bb36f7d8d39`
+- Key fingerprint: `sha256:e9189283def3921d2c7489ceed37e4680b4768b78faa311fdf49cf6325b5e4f4`
 - Key custody: file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
-- Merkle root: `eaedd9b8c926fac3a6cbaf137e26c98cce810013b446deac65ed3bc9adbc12a7` (sha256\-rfc6962, 34 leaves)
+- Merkle root: `31577a8e29ea34a41f09692efeb856903162f605e62702ba1c2fb8b6dda304c2` (sha256\-rfc6962, 34 leaves)
 - Schema version: 1
 
 ## Verify
 
-With the public key whose fingerprint is `sha256:79f8ff973d02c252cb7740a48e532f6f3794b2c2299398e379e35bb36f7d8d39` saved as `sfr.pub`, in the directory that holds the record and the log:
+With the public key whose fingerprint is `sha256:e9189283def3921d2c7489ceed37e4680b4768b78faa311fdf49cf6325b5e4f4` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
 sfr verify vtol_transition.sfr --pubkey sfr.pub --ulog vtol_transition.ulg

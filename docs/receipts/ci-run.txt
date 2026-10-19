@@ -1,0 +1,41 @@
+# README numbers come only from this file: scripts/regen_readme_numbers.sh writes them into
+# README.md. Every line after run and commit is copied from a job log of that CI run, after the
+# name of the job, by scripts/regen_readme_numbers.sh --receipt. Do not edit by hand.
+run 39190820606
+commit 0aa307f05d368cbc4984557e4492485a35d0732a
+code-quality tests: 136 passed, 0 failed, 1 ignored (cargo test --workspace --locked)
+code-quality perf: in-process verify (gated, under 10 ms): 10,000 events, 1704147 byte record, median 6.60 ms, min 6.53 ms, max 7.27 ms, 101 runs
+code-quality perf: end-to-end sfr verify (not gated): same record, median 9.70 ms, min 9.53 ms, max 10.27 ms, 101 runs
+records byte-identical records and reports, x86_64 and aarch64: 14 of 14 golden logs
+records byte-identical records and reports, x86_64 and armv7: 14 of 14 golden logs
+demo DEMO PASSED in 1 s: every step gave the expected result.
+demo demo: docker run --network=none, image loaded from its saved tarball, wall time 1.30 s
+benchmark benchmark: sfr 0.1.0 (build 0aa307f05d368cbc4984557e4492485a35d0732a); binary x86_64, machine x86_64; 5 run(s) per log
+benchmark hardware: x86_64; CPU AMD EPYC 7763 64-Core Processor; 4 cores; memory 15.6 GiB; kernel 6.17.0-1022-azure; OS Debian GNU/Linux 12 (bookworm)
+benchmark note: the large_* logs are built for size only from the golden VTOL flight (testdata/sitl/v1.17.0/vtol_transition.ulg) and the whole-record segments of it in scripts/benchmark/vtol_transition.segments: large_10mb is the flight cut at a record boundary; large_50mb and large_100mb are one copy of the flight followed by its segments repeated (concatenated, timestamps restart). They are not real flights.
+benchmark | log | bytes | seal median (s) | verify median (ms) | seal peak RSS (KB) |
+benchmark |---|---|---|---|---|
+benchmark | pyulog_sample | 4053364 | 0.025 | 1.48 | 1920 |
+benchmark | v1.14.4_mc_flight | 30583745 | 0.140 | 1.65 | 3112 |
+benchmark | v1.17.0_failsafe_battery_empty | 9208891 | 0.050 | 1.58 | 2556 |
+benchmark | v1.17.0_failsafe_gps_loss | 10217078 | 0.054 | 1.60 | 2556 |
+benchmark | v1.17.0_gz_quadtailsitter_transition | 34095400 | 0.163 | 1.74 | 3196 |
+benchmark | v1.17.0_gz_x500_vision_hover | 15797162 | 0.067 | 1.65 | 2744 |
+benchmark | v1.17.0_mc_flight_1 | 8536869 | 0.045 | 1.61 | 2472 |
+benchmark | v1.17.0_mc_flight_2 | 9727973 | 0.050 | 1.59 | 2560 |
+benchmark | v1.17.0_payload_two_sources | 15572427 | 0.075 | 1.62 | 2612 |
+benchmark | v1.17.0_vtol_quadchute | 20826338 | 0.119 | 1.73 | 2820 |
+benchmark | v1.17.0_vtol_transition | 24295307 | 0.134 | 1.71 | 2852 |
+benchmark | v1.17.0_vtol_transition_abort | 15324267 | 0.096 | 1.68 | 2700 |
+benchmark | synthetic_custom_detection | 1338 | 0.004 | 1.37 | 1460 |
+benchmark | synthetic_r4_quadchute_on_disarm | 1020 | 0.004 | 1.37 | 1456 |
+benchmark | large_10mb | 10229940 | 0.064 | 1.66 | 2600 |
+benchmark | large_10mb_sealed8 | 10229940 | 0.070 | 1.77 | 2596 |
+benchmark | large_50mb | 50275889 | 0.262 | 1.78 | 3572 |
+benchmark | large_50mb_sealed8 | 50275889 | 0.292 | 1.84 | 3488 |
+benchmark | large_100mb | 100649134 | 0.508 | 1.83 | 4636 |
+benchmark | large_100mb_sealed8 | 100649134 | 0.629 | 1.91 | 4624 |
+benchmark gate: x86_64 large_100mb seal median 0.508 s, under 2 s: PASS
+benchmark memory: large_100mb seal peak RSS 4636 KB, not above 256 MB (262144 KB)
+benchmark gate: x86_64 large_100mb_sealed8 seal median 0.629 s, under 2 s: PASS
+benchmark memory: large_100mb_sealed8 seal peak RSS 4624 KB, not above 256 MB (262144 KB)

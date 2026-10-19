@@ -5,14 +5,15 @@
 # Seals every golden log (scripts/testdata/regenerate.sh list) with each build, using one
 # evaluation key, the log's golden rules (testdata/rules/<name>.toml, else the default rules),
 # its golden baseline, and one --seal-time, and compares the records and their reports
-# (<name>.sfr.md) byte for byte. CI runs it with the x86_64 build and the armv7 build (under
-# QEMU) to show that a record and its report do not depend on where they are sealed.
+# (<name>.sfr.md) byte for byte. CI runs it with the x86_64 release binary against the aarch64
+# and the armv7 release binaries (under QEMU) to show that a record and its report do not depend
+# on where they are sealed. The label, when given, names the pair in the summary line.
 #
-# Usage: scripts/check_same_records.sh <sfr-a> <sfr-b>
+# Usage: scripts/check_same_records.sh <sfr-a> <sfr-b> [<label>]
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-[ $# -eq 2 ] || { echo "usage: $0 <sfr-a> <sfr-b>" >&2; exit 2; }
-a="$1" b="$2"
+[ $# -eq 2 ] || [ $# -eq 3 ] || { echo "usage: $0 <sfr-a> <sfr-b> [<label>]" >&2; exit 2; }
+a="$1" b="$2" label="${3:+, $3}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -41,6 +42,6 @@ while read -r name log; do
     echo "  $name: the records or their reports differ or are missing"; status=1
   fi
 done < <(scripts/testdata/regenerate.sh list)
-echo "byte-identical records and reports: $same of $total golden logs"
+echo "byte-identical records and reports$label: $same of $total golden logs"
 [ "$total" -gt 0 ] || status=1
 exit $status

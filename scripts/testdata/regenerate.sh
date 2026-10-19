@@ -15,23 +15,11 @@ cd "$(dirname "$0")/../.."
 
 SFR="${SFR:-target/debug/sfr}"
 
-# The rules file a golden log is sealed with: testdata/rules/<name>.toml when it exists (the
-# default rules plus what that log needs, such as [sealed_topics]), else the default.
-rules_for() {
-  if [ -f "testdata/rules/$1.toml" ]; then echo "testdata/rules/$1.toml"; else echo examples/rules.default.toml; fi
-}
-
-# name -> log path
-logs() {
-  echo "pyulog_sample testdata/pyulog/sample.ulg"
-  for f in testdata/sitl/*/*.ulg; do
-    v=$(basename "$(dirname "$f")")
-    echo "${v}_$(basename "$f" .ulg) $f"
-  done
-  for f in testdata/synthetic/*.ulg; do
-    echo "synthetic_$(basename "$f" .ulg) $f"
-  done
-}
+# The golden log list and the rules file of each (golden_logs, golden_rules_for).
+# shellcheck source=scripts/testdata/golden_logs.sh
+. scripts/testdata/golden_logs.sh
+rules_for() { golden_rules_for "$1"; }
+logs() { golden_logs; }
 
 case "${1:-}" in
   list)

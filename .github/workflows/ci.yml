@@ -27,7 +27,7 @@ env:
 jobs:
   code-quality:
     name: rustfmt, clippy, tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Install the pinned toolchain (rust-toolchain.toml)
@@ -49,10 +49,19 @@ jobs:
         run: cargo fmt --all --check
       - name: clippy, warnings as errors
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The "tests:" line is what scripts/regen_readme_numbers.sh copies into the README.
       - name: cargo test --locked
-        run: cargo test --workspace --locked
-      - name: README numbers script self-test
-        run: scripts/regen_readme_numbers.sh --self-test
+        run: |
+          set -euo pipefail
+          cargo test --workspace --locked 2>&1 | tee test.log
+          awk '/^test result:/ { p += $4; f += $6; i += $8 }
+            END { printf "tests: %d passed, %d failed, %d ignored (cargo test --workspace --locked)\n", p, f, i }' test.log \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: README numbers come only from docs/receipts/ci-run.txt (SPEC B1.10 Reproducible claims)
+        run: |
+          set -euo pipefail
+          scripts/regen_readme_numbers.sh --self-test
+          scripts/regen_readme_numbers.sh --check
       - name: Standalone verify of 10,000 events under 10 ms (SPEC B1.10 Performance, release build)
         run: |
           set -euo pipefail
@@ -61,15 +70,13 @@ jobs:
             echo "### Standalone verify, 10,000 events (SPEC B1.10)"
             echo
             grep -E '^perf: ' verify-perf.log | sed -e 's/^perf: /- /'
-            echo
-            echo "README block that scripts/regen_readme_numbers.sh writes from this run:"
-            echo
-            scripts/regen_readme_numbers.sh --print verify-perf.log "$GITHUB_RUN_ID" "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The static armv7 build and the comparison of its records with x86_64 run in release-build
+  # and records, from the release tarballs, beside this job.
   armv7:
-    name: armv7 static build, tests under QEMU, records identical to x86_64 (SPEC B1.10)
-    runs-on: ubuntu-latest
+    name: armv7 full test suite under QEMU (SPEC B1.10 armv7)
+    runs-on: ubuntu-24.04
     env:
       # Rust's own linker and the target's bundled musl startup files: no cross C toolchain.
       CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER: rust-lld
@@ -86,37 +93,26 @@ jobs:
             sudo sh -c 'cat /usr/lib/binfmt.d/qemu-arm.conf > /proc/sys/fs/binfmt_misc/register'
           fi
           qemu-arm-static --version | head -1
-      - name: Static armv7 build; file reports a statically linked 32-bit ARM executable
-        run: |
-          set -euo pipefail
-          cargo build --release --locked -p sfr --target armv7-unknown-linux-musleabihf
-          out="$(file target/armv7-unknown-linux-musleabihf/release/sfr)"
-          echo "$out"
-          grep -q 'ELF 32-bit LSB executable, ARM' <<<"$out"
-          grep -q 'statically linked' <<<"$out"
       # Profile qemu-test (Cargo.toml): optimized, with overflow checks and debug assertions on;
       # an unoptimized build under emulation was the slowest step of CI.
       - name: Full test suite on armv7 under QEMU (correctness only; no armv7 timing is gated)
         run: cargo test --workspace --locked --profile qemu-test --target armv7-unknown-linux-musleabihf
-      - name: Every golden log seals to the same bytes on x86_64 and armv7
-        run: |
-          set -euo pipefail
-          cargo build --release --locked -p sfr
-          scripts/check_same_records.sh target/release/sfr target/armv7-unknown-linux-musleabihf/release/sfr \
-            | tee same-records.log
-          { echo "### Records sealed on x86_64 and armv7"; echo; tail -1 same-records.log; } >> "$GITHUB_STEP_SUMMARY"
 
   golden-oracle:
     name: golden files agree with the independent pyulog oracle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Compare testdata/expected with testdata/expected/oracle (Python standard library only)
         run: scripts/testdata/regenerate.sh compare
+      - name: The benchmark segment manifest matches the golden VTOL flight
+        run: |
+          python3 -I scripts/benchmark/make_segments.py --check scripts/benchmark/vtol_transition.segments \
+            testdata/sitl/v1.17.0/vtol_transition.ulg testdata/sitl/v1.17.0/vtol_transition.ulg
 
   fuzz:
     name: fuzz ulog_ingest, sfr_verify and rules_parse for 60 s each (SPEC B1.10)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       # cargo-fuzz sets its own sanitizer flags; -D warnings still applies to the target.
       RUSTFLAGS: -D warnings
@@ -151,7 +147,7 @@ jobs:
 
   no-network:
     name: deny list (networking and async runtimes)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Install the pinned toolchain (rust-toolchain.toml)
@@ -163,7 +159,7 @@ jobs:
 
   supply-chain:
     name: cargo-deny (licenses, advisories, bans, sources)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1 (commit; the tag is annotated)
@@ -173,10 +169,204 @@ jobs:
 
   language:
     name: language rules (SPEC B1.12)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Language self-test
         run: scripts/check_language.sh --self-test
       - name: No em-dash, compliance claim, or banned term (scripts/check_language.sh)
         run: scripts/check_language.sh
+      - name: No private key in the repository (scripts/check_no_private_keys.sh)
+        run: |
+          set -euo pipefail
+          scripts/check_no_private_keys.sh --self-test
+          scripts/check_no_private_keys.sh
+
+  # Release artifacts (Chunk 5). These jobs run beside the gates above and build everything a
+  # release holds, unsigned: the three static tarballs, the benchmark kit, the demo image, one
+  # SBOM per target, and SHA256SUMS. They publish nothing; the founder signs SHA256SUMS offline
+  # and makes the release (docs/RELEASE.md).
+  release-build:
+    name: static ${{ matrix.target }} tarball, built twice from clean (SPEC B1.10 Static binaries)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, armv7-unknown-linux-musleabihf]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      # rust-lld and the target's own musl startup files; readelf shows no INTERP and no NEEDED,
+      # file reports static. Two builds from clean must give identical bytes.
+      - name: Build with rust-lld twice from clean; check static; compare binaries and tarballs
+        run: |
+          set -euo pipefail
+          scripts/check_reproducible.sh "${{ matrix.target }}" dist | tee reproducible.log
+          tarball="$(ls dist/sfr-*-${{ matrix.target }}.tar.gz)"
+          tar -xzOf "$tarball" --wildcards '*/BUILDINFO' | tee buildinfo.txt
+          {
+            echo "### ${{ matrix.target }}"
+            echo
+            sed 's/^/- /' reproducible.log
+            grep -E '^(file|sha256 bin/sfr):' buildinfo.txt | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  release-kit-sbom:
+    name: benchmark kit and one CycloneDX SBOM per target (SPEC B1.10 Supply chain)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain (rust-toolchain.toml) and cargo-cyclonedx
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+      - name: Benchmark kit, then the SBOMs for x86_64, aarch64 and armv7
+        run: |
+          set -euo pipefail
+          scripts/build_benchmark_kit.sh dist
+          scripts/release_sbom.sh dist | tee sboms.log
+          for f in $(cat sboms.log); do
+            jq -r --arg f "$(basename "$f")" '"- \($f): \(.metadata.properties[] | select(.name == "cdx:rustc:sbom:target:triple") | .value), \(.components | length) components"' "$f"
+          done >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: release-kit-sbom
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  demo:
+    name: demo image; run_demo.sh under docker run --network=none in under 60 s (SPEC B1.10 No network)
+    needs: release-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-x86_64-unknown-linux-musl
+          path: dist
+      - name: Build the image from the x86_64 release tarball and save it
+        run: scripts/build_demo_image.sh dist/sfr-*-x86_64-unknown-linux-musl.tar.gz image
+      # A clean machine: every image and the build cache are removed, the saved image is loaded,
+      # and the demo runs with no network. The "demo:" line is what the README copies.
+      - name: From the saved image alone, docker run --network=none runs run_demo.sh in under 60 s
+        run: |
+          set -euo pipefail
+          version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          docker system prune -af > /dev/null
+          docker load -i "image/sfr-$version-demo-image.tar.gz"
+          start="$EPOCHREALTIME"
+          docker run --rm --network=none "sfr-demo:$version" | tee demo.log
+          wall="$(awk -v a="$start" -v b="$EPOCHREALTIME" 'BEGIN { printf "%.2f", b - a }')"
+          echo "demo: docker run --network=none, image loaded from its saved tarball, wall time $wall s" | tee -a "$GITHUB_STEP_SUMMARY"
+          grep -q '^DEMO PASSED in ' demo.log
+          awk -v w="$wall" 'BEGIN { exit !(w < 60) }' || { echo "the demo took $wall s, not under 60 s"; exit 1; }
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: release-demo-image
+          path: image/
+          if-no-files-found: error
+          retention-days: 3
+
+  records:
+    name: every golden log seals to the same bytes on x86_64, aarch64 and armv7 (QEMU) (SPEC B1.10 Deterministic, armv7)
+    needs: release-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: release-*-unknown-linux-*
+          path: dist
+          merge-multiple: true
+      - name: Install QEMU user-mode emulation
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-user-static
+      # The release binaries of the three tarballs; aarch64 and armv7 run through QEMU wrappers.
+      # The "byte-identical" lines are what the README copies.
+      - name: Seal every golden log with the x86_64, aarch64 and armv7 release binaries; compare
+        run: |
+          set -euo pipefail
+          mkdir bin
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf; do
+            tar -C bin -xzf dist/sfr-*-$t.tar.gz
+          done
+          x86="$(ls -d "$PWD"/bin/sfr-*-x86_64-unknown-linux-musl)/bin/sfr"
+          for arch in aarch64:aarch64-unknown-linux-musl armv7:armv7-unknown-linux-musleabihf; do
+            name="${arch%%:*}" target="${arch#*:}"
+            qemu="qemu-${name/armv7/arm}-static"
+            printf '#!/bin/sh\nexec %s %s "$@"\n' "$qemu" "$(ls -d "$PWD"/bin/sfr-*-"$target")/bin/sfr" > "sfr-$name"
+            chmod +x "sfr-$name"
+            scripts/check_same_records.sh "$x86" "$PWD/sfr-$name" "x86_64 and $name" | tee "same-records-$name.log"
+          done
+          { echo "### Records sealed on x86_64, aarch64 and armv7"; echo; tail -qn1 same-records-*.log | sed 's/^/- /'; } >> "$GITHUB_STEP_SUMMARY"
+
+  # No source checkout and no Rust: the two tarballs, in debian:12-slim with GNU time added.
+  benchmark:
+    name: benchmark from the x86_64 release tarball, no build tools (SPEC B1.10 Performance, Peak memory)
+    needs: [release-build, release-kit-sbom]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-x86_64-unknown-linux-musl
+          path: dist
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-kit-sbom
+          path: dist
+      - name: scripts/benchmark.sh in debian:12-slim from the unpacked tarballs
+        run: |
+          set -euo pipefail
+          mkdir bench
+          tar -C bench -xzf dist/sfr-*-x86_64-unknown-linux-musl.tar.gz
+          tar -C bench -xzf dist/sfr-*-benchmark.tar.gz
+          docker run --rm -v "$PWD/bench:/w" -w /w \
+            debian:12-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 bash -c '
+              set -euo pipefail
+              apt-get -qq update
+              apt-get -qq install -y --no-install-recommends time > /dev/null
+              sfr-*-benchmark/scripts/benchmark.sh --sfr sfr-*-x86_64-unknown-linux-musl/bin/sfr' | tee benchmark.txt
+          { echo "### Benchmark (scripts/benchmark.sh)"; echo; grep -E '^(benchmark|hardware|gate|memory): ' benchmark.txt | sed 's/^/- /'; echo; grep -E '^\| ' benchmark.txt; } >> "$GITHUB_STEP_SUMMARY"
+
+  release-assemble:
+    name: SHA256SUMS over every artifact; release signing script with a test key (SPEC B1.10 Releases)
+    needs: [release-build, release-kit-sbom, demo]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      # The release key never reaches CI: a throwaway key signs, the documented openssl command
+      # verifies, and neither the key nor the signature is kept.
+      - name: SHA256SUMS over every artifact; sign with a test key; verify with openssl alone
+        run: |
+          set -euo pipefail
+          scripts/release_sign.sh --self-test
+          scripts/release_assemble.sh dist | tee sha256sums.log
+          key="$RUNNER_TEMP/test-release.key" pub="$RUNNER_TEMP/test-release.pub"
+          openssl genpkey -algorithm ed25519 -out "$key"
+          openssl pkey -in "$key" -pubout -out "$pub"
+          scripts/release_sign.sh sign dist/SHA256SUMS "$key" --pubkey "$pub"
+          (cd dist && openssl pkeyutl -verify -pubin -inkey "$pub" -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig && sha256sum -c SHA256SUMS)
+          rm -f "$key" dist/SHA256SUMS.sig
+          { echo "### SHA256SUMS (unsigned)"; echo; echo '```'; cat dist/SHA256SUMS; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: sfr-release-unsigned
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
