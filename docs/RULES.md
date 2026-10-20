@@ -5,29 +5,34 @@
 ## Outcomes and exit codes
 
 - **PASS**: the rule holds.
-- **FAIL**: the rule does not hold, or the log lacks the data it needs. Missing input is never N/A.
-- **N/A**: only R6 on a non-VTOL vehicle, and R7 when the rules file has no `[authorized_sources]`.
+- **WARN**: the rule holds, and the log shows something to look at, named on the result's line: a `failsafe_flags` flag true in flight that the flight mode does not require (R4), or a parameter changed in flight (R3).
+- **FAIL**: the rule does not hold, or the log lacks the data it needs, or has it with a type other than PX4's (`cannot evaluate`). Missing or unreadable input is never N/A.
+- **N/A**: only R6 on a non-VTOL vehicle, R7 when the rules file has no `[authorized_sources]`, and R4 and R5 on a log with no armed flight (no ARM and no DISARM).
+
+The record's `status` is FAIL when any rule is FAIL; else NO ARMED FLIGHT when the log has no ARM and no DISARM (R5 is N/A), which is not a PASS: the rules had no flight to check; else WARN when any rule is WARN; else PASS.
 
 `seal` writes the record whatever the results. Exit codes (`exit_code` in `crates/sfr-core/src/lib.rs`):
 
 | Exit | When |
 |---|---|
-| 0 | every rule PASS or N/A |
-| 1 | at least one rule FAIL, R1 not among them |
+| 0 | status PASS or WARN |
+| 1 | status FAIL (R1 not among the failures), or NO ARMED FLIGHT |
 | 2 | R1 FAIL (a required topic or field is missing) |
 | 3 | the log, rules file or baseline is malformed, truncated, or over an input limit; nothing is written |
 | 4 | a usage, key or file error; nothing is written |
 
-`seal --dry-run` runs the same rules, prints the table, writes nothing and exits the same way. The record's `status` is FAIL when any rule is FAIL. Results are R1 to R7, then each optional rule the rules file enables (X1 to X5).
+`seal --dry-run` runs the same rules, prints the table (with the detail lines of each FAIL and WARN), writes nothing and exits the same way. Results are R1 to R7, then each optional rule the rules file enables (X1 to X5).
 
 ## How the rules read the log
 
-- **Instances.** `vehicle_status` and `failsafe_flags` are read from the lowest instance with data records, else the lowest subscribed. R1 counts records across all instances.
-- **Field types.** Integer fields (`arming_state`, `nav_state`) must be unsigned integers that fit their type; `failsafe`, `is_vtol`, `in_transition_mode` and `in_transition_to_fw` must be ULog `bool`. Any other type reads as absent and the rule that needs it fails. `vehicle_command` and `vehicle_command_ack` fields must be `uint8_t`, `uint16_t` or `uint32_t` (`small_uint` in `crates/sfr-core/src/ingest.rs`).
-- **Armed.** From a `vehicle_status` sample with `arming_state` 2 until the next sample where it is not, or the end of the log.
+- **Instances.** Every `vehicle_status` instance (uORB `multi_id`) with data records is read: R4, R5 and R6 check each one, and a failsafe on any instance fails R4. The record states how many there are (`log.vehicle_status_instances`). Every `failsafe_flags` instance is read for R4; FAILSAFE_SET attribution uses the instance of the same number, else the lowest. R1 counts records across all instances.
+- **Field types.** Every field a rule reads must have the type the PX4 message definitions of v1.14 to v1.17 give it (`msg/*.msg` at the release tags, `msg/versioned/` from v1.16; `PINNED` in `crates/sfr-core/src/ingest.rs`): `vehicle_status` `arming_state`, `nav_state`, `vehicle_type`, `system_type` and the arming reasons `uint8_t`, `failsafe`, `is_vtol`, `in_transition_mode`, `in_transition_to_fw` `bool`; `failsafe_flags` `mode_req_*` `uint32_t`, `battery_warning` `uint8_t`, each PX4 flag name `bool`; `vehicle_command` `command` `uint32_t`, `source_system` `uint8_t`, `source_component` `uint8_t` in v1.14 and `uint16_t` from v1.15; and the fields the X rules read. A field with another type, in any subscription of the topic that has data records (a later format record can redefine a topic), is not read, and each rule that needs it FAILs with `cannot evaluate: <topic>.<field> is <type> in the log; PX4 defines <type>`.
+- **Format definitions.** A format that names a field twice is refused: the log is malformed, exit 3, nothing is written.
+- **Skipped messages.** Records of a type the reader does not know, data records for a message id with no subscription, and regions dropped to reach an appended-data offset are skipped and counted; the record holds the counts (`log.skipped`), and the report and the table say `sealed with N skipped messages`.
+- **Armed.** From a `vehicle_status` sample with `arming_state` 2 until the next sample where it is not, or the end of the log; with several instances, armed when any instance is.
 - **VTOL.** `vehicle_status.is_vtol` true on any sample. The VTOL state comes from `vehicle_status` alone (`vtol_state` in `crates/sfr-core/src/events.rs`): transition to fixed wing (`in_transition_mode` and `in_transition_to_fw`), transition to multicopter (`in_transition_mode` only), multicopter (`vehicle_type` 1) or fixed wing (`vehicle_type` 2). No rule branches on VTOL type, and `vtol_vehicle_status` is not read. The record names the type from `VT_TYPE` at log start: `tailsitter` (0), `tiltrotor` (1), `standard` (2), `unknown(<n>)`, or `unknown` without an int32 `VT_TYPE`.
 - **Versions.** Nav state and arming reason names depend on the PX4 version; outside v1.14 to v1.17 they are null and no result changes. `seal` refuses such a log, or one whose version it cannot read, unless given `--allow-untested-version`. With it, `seal` warns on stderr, and the record (`seal.allow_untested_version`) and report say so. The golden logs are from v1.14.4 and v1.17.0; no log outside the range is tested.
-- **Detail lines.** R4, R5, R6, R7, X2 and X3 list at most `MAX_DETAIL_LINES` findings, then `and N more; ...`. The status does not change.
+- **Detail lines.** R3's changes in flight, R4, R5, R6, R7, X2 and X3 list at most `MAX_DETAIL_LINES` findings, then `and N more; ...`. The status does not change.
 
 ## R1: required topics present
 
@@ -41,38 +46,43 @@ Each required topic has a data record, and the fields the core rules read exist.
 
 ## R2: firmware matches baseline
 
-The log's firmware equals the baseline's `# Firmware:` line. Inputs: the info messages `ver_sw_release` (`uint32_t`, shown as `major.minor.patch` plus a `-rc`, `-beta`, `-alpha` or `-dev` suffix) and `ver_sw` (git hash).
+The firmware the log states equals the baseline's `# Firmware:` line. Inputs: the info messages `ver_sw_release` (`uint32_t`, shown as `major.minor.patch` plus a `-rc`, `-beta`, `-alpha` or `-dev` suffix) and `ver_sw` (git hash). Both are what the log says about itself, and the baseline is what the operator gave, so the line says so: `log states PX4 <version> <hash> (self-reported); baseline file sha256 <digest> (operator-supplied)`. The baseline file's SHA-256 is in the record (`baseline.sha256`).
 
 **PASS** the versions are equal, and a baseline git hash prefix, if given, starts `ver_sw` (case-insensitive). **FAIL** one line per difference, such as `version: baseline 1.16.2, log 1.17.0` or `log has no ver_sw_release info message`. **N/A** never.
 
 ## R3: parameters match baseline
 
-The parameters at log start (the 'P' records before the first subscription) equal the baseline.
+The parameters in effect at every ARM equal the baseline, and none changes in flight. The parameters in effect at an ARM are those at log start (the 'P' records before the first subscription), changed by every data-section 'P' record before the arming `vehicle_status` row in file order. A log with no ARM is compared at its end.
 
 - **Which:** with `compare = "all"` (default), every name in the baseline or the log, so a parameter on one side only is a difference; with `"baseline"`, the baseline's names. Names matching a `parameters.ignore` pattern are skipped and counted. Watched parameters are compared like the rest.
 - **Equality:** same type and value. int32 compares exactly; float32 compares as numbers (`-0` equals `0`, any NaN equals any NaN); an int32 never equals a float32.
+- **Changes in flight:** a data-section 'P' record that changes a value after an ARM (a later time, or the same time and later in the file) and at or before the DISARM is a PARAM_CHANGED_IN_FLIGHT event. R3 counts those of the parameters it does not ignore: `N parameter(s) changed in flight`, a WARN, one detail line each.
+- **The line:** after the result, R3 prints its ignore list and how many differences and changes in flight the list suppressed (`ignore [<patterns>] suppressed N difference(s)`), and the baseline file's SHA-256 marked `(operator-supplied)`.
+- **Ignoring everything:** a pattern of `*` alone matches every name and turns R3 off. `seal` refuses such a rules file (exit 4) unless given `--allow-ignore-all`, which the record states (`seal.allow_ignore_all`) and the report shows.
 - **Changing parameters:** some change on their own (`CAL_BARO*_OFF` in v1.17, `COM_MODE*_HASH` from v1.15). `examples/rules.default.toml` ignores the ones found here.
 
-**PASS** `no differences`. **FAIL** one line per difference, `NAME: baseline <value>, flown <value>`, `absent` for a missing side, such as `MPC_XY_VEL_MAX: baseline f32:9.5, flown f32:12`. **N/A** never.
+**PASS** `no differences`. **WARN** `no differences at ARM; N parameter(s) changed in flight`. **FAIL** `N differ`, one line per difference, `NAME: baseline <value>, flown <value>`, `absent` for a missing side, such as `MPC_XY_VEL_MAX: baseline f32:9.5, flown f32:12`, followed by `(set by a parameter record at boot_us <t>)` when a data-section record set the flown value. **N/A** never.
 
 ## R4: no failsafe in flight
 
-`vehicle_status.failsafe` is never true in flight and, on a VTOL vehicle, no quadchute happens in flight.
+`vehicle_status.failsafe` is never true in flight, no `failsafe_flags` flag that the flight mode in effect requires is true in flight, and, on a VTOL vehicle, no quadchute happens in flight.
 
 - **In flight:** from the `vehicle_status` sample that arms through the sample that disarms, both included. A failsafe or quadchute on the disarming sample counts.
-- **Inputs:** `arming_state` and `failsafe`; on a VTOL vehicle also `in_transition_mode`, `in_transition_to_fw`, `vehicle_type`. Without `vehicle_status` or `is_vtol` the vehicle counts as not VTOL here, and R1 reports what is missing. The detail names the `failsafe_flags` booleans (and `battery_warning` above 0) responsible, or `unattributed`.
+- **Inputs:** `arming_state`, `nav_state`, `failsafe` and `failsafe_flags`; on a VTOL vehicle also `in_transition_mode`, `in_transition_to_fw`, `vehicle_type`. Without `vehicle_status` or `is_vtol` the vehicle counts as not VTOL here, and R1 reports what is missing. Without `failsafe_flags` data R4 FAILs (`cannot evaluate`). The detail of a failsafe names the `failsafe_flags` booleans (and `battery_warning` above 0) responsible, or `unattributed`.
+- **Flags:** every `failsafe_flags` boolean (and `battery_warning` above 0) true in flight, on every instance, is listed. A flag whose `mode_req_*` field has the bit of the `nav_state` in effect set is required by that mode (PX4 `FailsafeBase::modeCanRun`, the same pairing FAILSAFE_SET attribution uses): R4 FAILs, `required failsafe_flags <names> true in flight`. Any other flag true in flight is a warning, named on the R4 line: `warning: failsafe_flags <names> true in flight`, and R4 is WARN if nothing failed. SITL logs warn on `manual_control_signal_lost` and `gcs_connection_lost`, since SITL runs without an RC link or ground station.
+- **No armed flight:** with no ARM and no DISARM, R4 is N/A (`no armed flight: ...`).
 - **Quadchute:** the VTOL state goes from fixed wing straight to multicopter, with no transition between. It fails R4 whether or not PX4 raised `failsafe`, which it does only in some modes. On other vehicles a `vehicle_type` change is not a quadchute.
 - **Versions:** in v1.14 `failsafe` is true for any failsafe action, a warning included; from v1.15 only for an action other than none or a warning. Flag names change between versions, which changes the detail text only.
 
-**PASS** `never true in flight`. **FAIL** `true in flight N time(s)`, plus `, quadchute Q time(s)` if any; one line per failsafe (`failsafe in flight at boot_us <t>: <flags>`) and per quadchute (with `failsafe_flags.vtol_fixed_wing_system_failure` true, false or `not logged`). **N/A** never.
+**PASS** `never true in flight`. **WARN** `never true in flight; warning: failsafe_flags <names> true in flight`. **FAIL** `true in flight N time(s)`, plus `, quadchute Q time(s)` and `, required failsafe_flags <names> true in flight` if any; one line per failsafe (`failsafe in flight at boot_us <t>: <flags>`) and per quadchute (with `failsafe_flags.vtol_fixed_wing_system_failure` true, false or `not logged`). **N/A** no armed flight.
 
 The golden logs `failsafe_gps_loss` and `failsafe_battery_empty` fail on a failsafe and `vtol_quadchute` on a quadchute.
 
 ## R5: arm and disarm consistent
 
-Every ARM is followed by a DISARM, and the log does not end armed. Input: `vehicle_status.arming_state`; ARM and DISARM are its edges into and out of 2. A log that starts armed has an ARM at its first sample, marked `initial` ([RECORD_FORMAT.md](RECORD_FORMAT.md#event-field-initial)). Same in every version and vehicle type.
+Every ARM is followed by a DISARM, and the log does not end armed, on every `vehicle_status` instance. Input: `vehicle_status.arming_state`; ARM and DISARM are its edges into and out of 2. A log that starts armed has an ARM at its first sample, marked `initial` ([RECORD_FORMAT.md](RECORD_FORMAT.md#event-field-initial)). Same in every version and vehicle type.
 
-**PASS** `<n> ARM, <n> DISARM`; a log that never arms passes with `0 ARM, 0 DISARM`. **FAIL** each unmatched event: `ARM seq <n> at boot_us <t> has no DISARM`, `DISARM seq <n> ... has no ARM`, or `... has no DISARM: the log ends armed`. **N/A** never.
+**PASS** `<n> ARM, <n> DISARM`. **FAIL** each unmatched event: `ARM seq <n> at boot_us <t> has no DISARM`, `DISARM seq <n> ... has no ARM`, or `... has no DISARM: the log ends armed`. **N/A** `no armed flight: vehicle_status.arming_state has no ARM and no DISARM`: a log that never arms is no evidence of a consistent flight, and the record's status is NO ARMED FLIGHT.
 
 ## R6: VTOL transitions completed
 
@@ -80,23 +90,24 @@ Every VTOL transition that starts also ends, and none is aborted. Inputs: `is_vt
 
 The derivation is the same for all three VTOL types. On a VTOL vehicle the first detail line is the type, such as `VTOL type tailsitter (VT_TYPE 0)`.
 
-**PASS** `<s> START, <e> END, 0 problem(s)`; a VTOL vehicle that never transitions passes. **FAIL** one line per abort (`VTOL_TRANSITION_ABORT to_fw seq <n> at boot_us <t>`) and for a transition still open at the end; the golden log `vtol_transition_abort` fails this way. **N/A** `is_vtol` is false on every sample; without `vehicle_status` or `is_vtol`, R6 is FAIL.
+**PASS** `<s> START, <e> END, 0 problem(s)`; a VTOL vehicle that never transitions passes. **FAIL** one line per abort (`VTOL_TRANSITION_ABORT to_fw seq <n> at boot_us <t>`) and for a transition still open at the end; the golden log `vtol_transition_abort` fails this way. **N/A** `is_vtol` is false on every sample; without `vehicle_status` or `is_vtol`, R6 is FAIL. When `is_vtol` is false on every sample but `system_type` is a VTOL MAV_TYPE (19 to 25, `VTOL_MAV_TYPES` in `crates/sfr-core/src/evaluate.rs`) on some sample, the log contradicts itself and R6 FAILs: `cannot evaluate: vehicle_status.system_type is <n>, a VTOL MAV_TYPE, but is_vtol is false on every sample`.
 
 ## R7: authorized command sources (optional)
 
 Every COMMAND event came from a MAVLink source listed in `[authorized_sources]`; with `category`, only commands of that category are checked. R7 is off without `[authorized_sources]`, because only the operator knows their own system and component ids.
 
 - **Inputs:** `vehicle_command.command`, `source_system`, `source_component`, every instance, the whole log. A command is PAYLOAD when its id is in `[payload_commands]`, else GENERAL.
+- **The line:** R7 states its scope (`every category`, or `GENERAL only` or `PAYLOAD only`), how many commands the scope excluded, and that source ids are self-reported by the sender; the line is part of the signed record.
 - **Versions:** `source_component` is `uint8_t` in v1.14 and `uint16_t` from v1.15; both are read. PX4 v1.17 builds with `payload_deliverer` (SITL included) publish a DO_GRIPPER (211, PAYLOAD; listed in `examples/rules.default.toml`) at start-up with arbitrary source ids, so R7 reports it unless `category = "GENERAL"`.
 - MAVLink source ids are self-reported unless message signing is on, so R7 shows which source the log names, not that it was genuine ([THREAT_MODEL.md](THREAT_MODEL.md)).
 
-**PASS** `<n> command(s) checked, all from authorized sources`. **FAIL** each unauthorized command, `event seq <n>: command <id> (<category>) from system <s> component <c> at boot_us <t>`; or `cannot evaluate: ...` when `vehicle_command` has no data, lacks one of the three fields, or has a sample whose fields are not `uint8_t`, `uint16_t` or `uint32_t`. A log with no commands is no evidence of authorized ones. **N/A** no `[authorized_sources]`.
+**PASS** `<n> command(s) checked, all from authorized sources; scope <scope>, <m> excluded by scope; source ids are self-reported by the sender`. **FAIL** each unauthorized command, `event seq <n>: command <id> (<category>) from system <s> component <c> at boot_us <t>`; or `cannot evaluate: ...` when `vehicle_command` has no data, lacks one of the three fields, or has one with a type other than PX4's. A log with no commands is no evidence of authorized ones. **N/A** no `[authorized_sources]`.
 
 The example record `examples/reports/gz_x500_vision_hover.sfr` fails R7 on the start-up DO_GRIPPER ([examples/reports/README.md](../examples/reports/README.md)).
 
 ## Optional rules X1 to X5
 
-`examples/rules.extended.toml` enables all five with example thresholds; set your own. X1 to X4 need `arming_state` and at least one armed interval, or they fail with `the vehicle never armed, so there is no flight to check`. None is ever N/A; each fails without its input data.
+`examples/rules.extended.toml` enables all five with example thresholds; set your own. X1 to X4 need `arming_state` and at least one armed interval, or they fail with `the vehicle never armed, so there is no flight to check`. None is ever N/A; each fails without its input data, or when a field it reads has a type other than PX4's.
 
 | Rule | Table | Reads | FAIL when |
 |---|---|---|---|
@@ -137,7 +148,7 @@ A QGroundControl parameter export (`.params`) plus one firmware line, read by `p
 - Each parameter line has five tab-separated columns: vehicle id, component id, name, value, type. The type is 6 (int32) or 9 (float32); a float32 value is rounded once as it is read, and `nan`, `inf` and `-inf` are accepted. A name is 1 to 16 letters, digits and `_`, and appears once.
 - Errors exit 3 and name the line.
 
-Each golden log's baseline in `testdata/baselines/` is that log's own start-of-log parameters (`scripts/testdata/make_baseline.py`).
+Each golden log's baseline in `testdata/baselines/` is that log's own parameters in effect at its first ARM (`scripts/testdata/make_baseline.py`).
 
 ## Write and run your own rules file
 
@@ -179,15 +190,19 @@ crypto    blake3 1.8.7, ed25519-dalek 3.0.0, sha2 0.11.1 (crate versions)
 
 RULE  STATUS  NAME                          FOUND
 R1    PASS    required topics present       all present
-R2    PASS    firmware matches baseline     1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4
-R3    PASS    parameters match baseline     no differences
-R4    PASS    no failsafe in flight         never true in flight
+R2    PASS    firmware matches baseline     log states PX4 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4 (self-reported); baseline file sha256 2a9d3eadefab6e234295a2c43f8b8dbec92744812fc7edecec1ceada763c1b63 (operator-supplied)
+R3    PASS    parameters match baseline     no differences; ignore [COM_FLIGHT_UUID, LND_FLIGHT_T_*, EKF2_MAG_DECL, CAL_BARO*_OFF, ASPD_SCALE_*, COM_MODE*_HASH] suppressed 1 difference(s); baseline file sha256 2a9d3eadefab6e234295a2c43f8b8dbec92744812fc7edecec1ceada763c1b63 (operator-supplied)
+R4    WARN    no failsafe in flight         never true in flight; warning: failsafe_flags auto_mission_missing, gcs_connection_lost, manual_control_signal_lost, offboard_control_signal_lost true in flight
+              - warning: failsafe_flags.auto_mission_missing true in flight from boot_us 4424000 (62 sample(s)), not required by the nav_state in effect
+              - warning: failsafe_flags.gcs_connection_lost true in flight from boot_us 4424000 (62 sample(s)), not required by the nav_state in effect
+              - warning: failsafe_flags.manual_control_signal_lost true in flight from boot_us 4424000 (62 sample(s)), not required by the nav_state in effect
+              - warning: failsafe_flags.offboard_control_signal_lost true in flight from boot_us 4424000 (62 sample(s)), not required by the nav_state in effect
 R5    PASS    arm and disarm consistent     1 ARM, 1 DISARM
 R6    N/A     VTOL transitions completed    vehicle_status.is_vtol false on every sample
-R7    PASS    authorized command sources    12 command(s) checked, all from authorized sources
+R7    PASS    authorized command sources    12 command(s) checked, all from authorized sources; scope GENERAL only, 1 excluded by scope; source ids are self-reported by the sender
 
 events    22
-status    PASS
+status    WARN
 ```
 
 Without `category`, R7 checks every command and fails on the start-up DO_GRIPPER, so `seal` exits 1:
@@ -202,7 +217,7 @@ echo "exit $rc"
 ```
 
 ```text doc-output
-R7    FAIL    authorized command sources    1 of 13 command(s) from unauthorized sources
+R7    FAIL    authorized command sources    1 of 13 command(s) from unauthorized sources; scope every category, 0 excluded by scope; source ids are self-reported by the sender
               - event seq 1: command 211 (PAYLOAD) from system 191 component 46144 at boot_us 764000
 exit 1
 ```

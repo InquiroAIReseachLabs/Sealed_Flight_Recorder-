@@ -42,6 +42,10 @@ class _TracingMessageData(ULog._MessageData):
             if msg_id in subscriptions:
                 ulog_object._sfr_lit_ts = self.timestamp
                 ulog_object._sfr_data_count += 1
+                sub = subscriptions[msg_id]
+                if sub.message_name == 'vehicle_status':
+                    ulog_object._sfr_vs_ordinals.setdefault(sub.multi_id, []).append(
+                        ulog_object._sfr_data_count)
         return bad
 
 
@@ -54,6 +58,7 @@ class TracingULog(ULog):
         self._sfr_in_data = False
         self._sfr_lit_ts = None          # timestamp of the last valid 'D' so far
         self._sfr_data_count = 0
+        self._sfr_vs_ordinals = {}       # vehicle_status multi_id -> data-record ordinal of each row
         self._sfr_seen_add = False       # an 'A' record has been seen
         self._sfr_def_param_types = {}   # name -> key type, definitions-section 'P'
         self._sfr_def_param_count = 0    # number of definitions-section 'P'
@@ -97,6 +102,7 @@ class TracingULog(ULog):
                     'value': info.value,
                     'lit_ts': self._sfr_last_ts(),
                     'max_ts': self._last_timestamp,
+                    'data_seen': self._sfr_data_count,
                 })
         return info
 
@@ -186,6 +192,19 @@ MODE_REQ = {
     'manual_control_signal_lost': 'mode_req_manual_control',
     'wind_limit_exceeded': 'mode_req_wind_and_flight_time_compliance',
     'flight_time_limit_exceeded': 'mode_req_wind_and_flight_time_compliance',
+}
+
+# The failsafe_flags booleans of PX4 v1.14 to v1.17 (msg/FailsafeFlags.msg).
+PX4_FLAGS = {
+    'angular_velocity_invalid', 'attitude_invalid', 'local_altitude_invalid',
+    'local_position_invalid', 'local_position_invalid_relaxed', 'local_velocity_invalid',
+    'global_position_invalid', 'global_position_invalid_relaxed', 'auto_mission_missing',
+    'offboard_control_signal_lost', 'home_position_invalid', 'manual_control_signal_lost',
+    'gcs_connection_lost', 'battery_low_remaining_time', 'battery_unhealthy',
+    'primary_geofence_breached', 'geofence_breached', 'mission_failure',
+    'vtol_fixed_wing_system_failure', 'wind_limit_exceeded', 'flight_time_limit_exceeded',
+    'local_position_accuracy_low', 'position_accuracy_low', 'navigator_failure',
+    'fd_critical_failure', 'fd_esc_arming_failure', 'fd_imbalanced_prop', 'fd_motor_failure',
 }
 
 VS_REQUIRED_FIELDS = ['timestamp', 'arming_state', 'nav_state', 'failsafe', 'is_vtol',
@@ -520,6 +539,7 @@ def run(path, rules, required, ptime, param_index, debug):
     vc_insts = topic_instances(u, 'vehicle_command', debug)
     ack_insts = topic_instances(u, 'vehicle_command_ack', debug)
     vs = Topic(vs_insts[0]) if vs_insts else None
+    vs_ordinals = u._sfr_vs_ordinals
     ff = Topic(ff_insts[0]) if ff_insts else None
     if len(vs_insts) > 1 or len(ff_insts) > 1:
         warn(debug, "WARNING: several vehicle_status / failsafe_flags instances; using the lowest")
@@ -559,41 +579,53 @@ def run(path, rules, required, ptime, param_index, debug):
         events.append((key, gen[0], ev))
         gen[0] += 1
 
-    # ---- failsafe_flags helpers
-    ff_ts = ff['timestamp'] if (ff is not None and ff.has('timestamp')) else []
-    if ff_ts and not is_monotonic(ff_ts):
-        warn(debug, "WARNING: failsafe_flags timestamps are not monotonic")
-    ff_bool_flags = []
-    if ff is not None:
-        ff_bool_flags = sorted(f for f, t in ff.types.items() if t == 'bool')
+    # ---- failsafe_flags helpers, per failsafe_flags instance
+    def ff_helpers(ff):
+        ff_ts = ff['timestamp'] if (ff is not None and ff.has('timestamp')) else []
+        if ff_ts and not is_monotonic(ff_ts):
+            warn(debug, "WARNING: failsafe_flags timestamps are not monotonic")
+        bools = sorted(f for f, t in ff.types.items() if t == 'bool') if ff is not None else []
 
-    def ff_row_at(t):
-        """Index of the latest failsafe_flags row with timestamp <= t, or None."""
-        if not ff_ts:
-            return None
-        k = bisect.bisect_right(ff_ts, t) - 1
-        return k if k >= 0 else None
+        def row_at(t):
+            """Index of the latest failsafe_flags row with timestamp <= t, or None."""
+            if not ff_ts:
+                return None
+            k = bisect.bisect_right(ff_ts, t) - 1
+            return k if k >= 0 else None
 
-    def flag_true(row, f):
-        if f == 'battery_warning':
-            return ff[f][row] > 0
-        return ff[f][row] != 0
+        def flag_true(row, f):
+            if f == 'battery_warning':
+                return ff[f][row] > 0
+            return ff[f][row] != 0
 
-    def ff_flag_names():
-        names = list(ff_bool_flags)
-        if ff is not None and ff.has('battery_warning'):
-            names.append('battery_warning')
-        return sorted(names)
+        def names():
+            n = list(bools)
+            if ff is not None and ff.has('battery_warning') and ff.types['battery_warning'] == 'uint8_t':
+                n.append('battery_warning')
+            return sorted(n)
+        return row_at, flag_true, names
 
-    # ---- vehicle_status driven events
-    armed_rows = []          # per row: armed bool (None if unknown)
-    arm_events = []          # ARM times, in order
-    intervals = []           # [t_arm, t_disarm or None]
-    vtol_open = None         # direction of the open transition
-    vtol_abort = False
-    quadchute_rows = []      # vehicle_status rows that carry a QUADCHUTE event, in file order
-    is_vtol = False
-    if vs is not None and vs.has('timestamp'):
+    ff_by_inst = {d.multi_id: Topic(d) for d in ff_insts}
+
+    def ff_for(instance):
+        """The failsafe_flags instance that attributes vehicle_status instance `instance`."""
+        return ff_by_inst.get(instance, ff)
+
+    # ---- vehicle_status driven events, one instance at a time
+    is_vtol = any(Topic(d).has('is_vtol') and any(x != 0 for x in Topic(d)['is_vtol'])
+                  for d in vs_insts)
+
+    def instance_events(vs):
+        st = {'armed_rows': [], 'intervals': [], 'vtol_open': None, 'vtol_abort': False,
+              'quadchute_rows': [], 'arms': 0, 'disarms': 0, 'arm_ordinals': []}
+        armed_rows = st['armed_rows']
+        arm_events = []
+        intervals = st['intervals']
+        quadchute_rows = st['quadchute_rows']
+        ff = ff_for(vs.instance)
+        ff_row_at, flag_true, ff_flag_names = ff_helpers(ff)
+        if not vs.has('timestamp'):
+            return st
         ts = vs['timestamp']
         if not is_monotonic(ts):
             warn(debug, "WARNING: vehicle_status timestamps are not monotonic")
@@ -601,8 +633,6 @@ def run(path, rules, required, ptime, param_index, debug):
         has_nav = vs.has('nav_state')
         has_fs = vs.has('failsafe')
         has_vtol = all(vs.has(f) for f in ('in_transition_mode', 'in_transition_to_fw', 'vehicle_type'))
-        if vs.has('is_vtol'):
-            is_vtol = any(x != 0 for x in vs['is_vtol'])
         armed_prev = None
         nav_prev = None
         fs_prev = None
@@ -635,11 +665,14 @@ def run(path, rules, required, ptime, param_index, debug):
                     last_arm_t = t
                     arm_events.append(t)
                     intervals.append([t, None])
+                    st['arms'] += 1
+                    st['arm_ordinals'].append(vs_ordinals.get(vs.instance, [None] * (i + 1))[i])
                 elif kind == 'DISARM':
                     reason = vs['latest_disarming_reason'][i] if vs.has('latest_disarming_reason') else None
                     emit(dict(base, kind='DISARM', initial=False, reason=reason))
                     if intervals and intervals[-1][1] is None:
                         intervals[-1][1] = t
+                    st['disarms'] += 1
                 armed_prev = armed
             else:
                 armed_rows.append(None)
@@ -692,7 +725,7 @@ def run(path, rules, required, ptime, param_index, debug):
                 if i == 0:
                     if cur in direction:
                         emit(dict(base, kind='VTOL_TRANSITION_START', direction=direction[cur]))
-                        vtol_open = direction[cur]
+                        st['vtol_open'] = direction[cur]
                 elif cur != vstate_prev:
                     # SPEC B1.5: fixed wing straight to multicopter is a QUADCHUTE, not a transition.
                     if (vstate_prev, cur) == ('FW', 'MC'):
@@ -707,12 +740,17 @@ def run(path, rules, required, ptime, param_index, debug):
                             emit(dict(base, kind='VTOL_TRANSITION_END', direction=direction[vstate_prev]))
                         else:
                             emit(dict(base, kind='VTOL_TRANSITION_ABORT', direction=direction[vstate_prev]))
-                            vtol_abort = True
-                        vtol_open = None
+                            st['vtol_abort'] = True
+                        st['vtol_open'] = None
                     if cur in direction:
                         emit(dict(base, kind='VTOL_TRANSITION_START', direction=direction[cur]))
-                        vtol_open = direction[cur]
+                        st['vtol_open'] = direction[cur]
                 vstate_prev = cur
+        st['arm_pairs'] = list(zip([iv[0] for iv in intervals], st['arm_ordinals']))
+        return st
+
+    vs_topics = [Topic(d) for d in vs_insts]
+    states = [instance_events(t) for t in vs_topics]
 
     # ---- COMMAND
     cmds = []
@@ -769,10 +807,19 @@ def run(path, rules, required, ptime, param_index, debug):
               'source_system': c['ss'], 'source_component': c['sc'], 'result': result})
 
     # ---- PARAM_CHANGED_IN_FLIGHT
-    def in_flight(t):
-        # Window: strictly after the ARM time, at or before the DISARM time.
-        for a, d in intervals:
-            if a < t and (d is None or t <= d):
+    # Every instance's armed intervals with the data-record ordinal of the arming row.
+    all_intervals = []
+    for st in states:
+        for (a, d), (_, ordinal) in zip(st['intervals'], st['arm_pairs']):
+            all_intervals.append((a, d, ordinal))
+
+    def in_flight(t, data_seen=None):
+        # Window: after the arming row (a later time, or the same time with the 'P' record
+        # after that row in the file), at or before the DISARM time.
+        for a, d, ordinal in all_intervals:
+            after = a < t or (a == t and data_seen is not None and ordinal is not None
+                              and data_seen >= ordinal)
+            if after and (d is None or t <= d):
                 return True
         return False
 
@@ -787,7 +834,7 @@ def run(path, rules, required, ptime, param_index, debug):
             warn(debug, "P change %s %s -> %s at lit %d max %d in_flight(lit)=%s in_flight(max)=%s"
                  % (p['name'], old, new, p['lit_ts'], p['max_ts'],
                     in_flight(p['lit_ts']), in_flight(p['max_ts'])))
-            if in_flight(t):
+            if in_flight(t, p['data_seen']):
                 idx = p['ordinal_all'] if param_index == 'all' else p['ordinal_data']
                 emit({'kind': 'PARAM_CHANGED_IN_FLIGHT', 'boot_us': str(t), 'topic': 'ulog.parameter',
                       'instance': 0, 'index': idx, 'name': p['name'], 'old': old, 'new': new})
@@ -812,81 +859,111 @@ def run(path, rules, required, ptime, param_index, debug):
     ev_list = [e[2] for e in events]
 
     # ---- Rules
+    # The types PX4 v1.14 to v1.17 give the vehicle_status fields the rules read
+    # (msg/VehicleStatus.msg at the release tags, msg/versioned/ from v1.16).
+    vs_types = {'arming_state': 'uint8_t', 'nav_state': 'uint8_t', 'failsafe': 'bool',
+                'is_vtol': 'bool', 'in_transition_mode': 'bool', 'in_transition_to_fw': 'bool',
+                'vehicle_type': 'uint8_t', 'system_type': 'uint8_t'}
+
+    def vs_ok(fields):
+        """Every instance has each field with PX4's type."""
+        return bool(vs_topics) and all(t.has(f) and t.types.get(f) == vs_types.get(f, t.types.get(f))
+                                       for t in vs_topics for f in fields)
+
+    def ff_ok():
+        """failsafe_flags flags as PX4 types them: the mode_req_* fields uint32, battery_warning
+        uint8, each PX4 flag name bool."""
+        for t in ff_by_inst.values():
+            for f, ty in t.types.items():
+                if f.startswith('mode_req_') and ty != 'uint32_t':
+                    return False
+                if f == 'battery_warning' and ty != 'uint8_t':
+                    return False
+                if f in PX4_FLAGS and ty != 'bool':
+                    return False
+        return bool(ff_by_inst)
+
     results = {}
     results['R1'] = 'FAIL' if missing else 'PASS'
+    any_arm = any(st['arms'] or st['disarms'] for st in states)
     if vs is None:
         results['R4'] = results['R5'] = results['R6'] = 'FAIL'
     else:
-        # R4 (SPEC B1.6): vehicle_status.failsafe never true from ARM through the
-        # vehicle_status sample that disarms, and no QUADCHUTE (B1.5) in that window.
-        # The window of one ARM is every vehicle_status row from the ARM row through the
-        # DISARM row, both included (through the last row when there is no DISARM). In file
-        # order that is every armed row plus every disarmed row whose predecessor is armed.
-        # A QUADCHUTE counts when the row that carries it (the multicopter row that follows
-        # the fixed wing row) is in the window. R4 always reads arming_state and failsafe.
-        # The quadchute check reads the VTOL state fields (in_transition_mode,
-        # in_transition_to_fw, vehicle_type) only when the vehicle is VTOL, that is when
-        # vehicle_status.is_vtol is true on some sample; an absent is_vtol field means not
-        # VTOL here (R1 carries that failure), so R4 then neither reads nor needs those
-        # fields and counts no quadchute. A rule whose input is missing is FAIL (B1.6), never
-        # N/A: arming_state or failsafe absent, or a VTOL vehicle without the VTOL state fields.
-        r4_vtol = bool(is_vtol)  # False when vehicle_status.is_vtol is absent
-        r4_fields = ['timestamp', 'arming_state', 'failsafe']
-        if r4_vtol:
+        # R4 (SPEC B1.6): vehicle_status.failsafe never true from ARM through the sample that
+        # disarms, no QUADCHUTE in that window, and no failsafe_flags flag the nav_state in
+        # effect requires true in that window (its mode_req_* bit), on every instance. Missing
+        # or mistyped input is FAIL; a log with no ARM and no DISARM is N/A (no armed flight).
+        r4_fields = ['arming_state', 'nav_state', 'failsafe']
+        if is_vtol:
             r4_fields += ['in_transition_mode', 'in_transition_to_fw', 'vehicle_type']
-        r4_missing = [f for f in r4_fields if not vs.has(f)]
-        warn(debug, "R4 vehicle is VTOL:", r4_vtol, "(is_vtol field present: %s)" % vs.has('is_vtol'),
-             "inputs:", r4_fields, "missing:", r4_missing)
-        if not r4_missing and len(armed_rows) == vs.n:
-            ts = vs['timestamp']
-            qc_set = set(quadchute_rows) if r4_vtol else set()
-            in_window = [bool(armed_rows[i]) or (i > 0 and bool(armed_rows[i - 1]))
-                         for i in range(vs.n)]
-            r4_fs = [i for i in range(vs.n) if in_window[i] and vs['failsafe'][i] != 0]
-            r4_qc = [i for i in range(vs.n) if in_window[i] and i in qc_set]
-            results['R4'] = 'FAIL' if (r4_fs or r4_qc) else 'PASS'
-            if debug:
-                # Cross-check: the window read as times, ARM <= t <= DISARM (open interval runs
-                # to the end of the log), against the row window above.
-                in_time = [any(a <= ts[i] and (d is None or ts[i] <= d) for a, d in intervals)
-                           for i in range(vs.n)]
-                diff = [i for i in range(vs.n) if in_time[i] != in_window[i]]
-                warn(debug, "R4 rows where row window and time window differ:", len(diff),
-                     ["%d:%d row=%s time=%s fs=%d" % (i, ts[i], in_window[i], in_time[i],
-                                                      vs['failsafe'][i]) for i in diff[:20]])
-                if not r4_vtol and quadchute_rows:
-                    warn(debug, "R4 not VTOL: QUADCHUTE events not read by R4:",
-                         ["%d:%d" % (i, ts[i]) for i in quadchute_rows])
-                spans = []
-                for i in range(vs.n):
-                    if in_window[i] and (i == 0 or not in_window[i - 1]):
-                        spans.append([i, i])
-                    elif in_window[i]:
-                        spans[-1][1] = i
-                warn(debug, "R4 windows (row:boot_us .. row:boot_us):",
-                     ["%d:%d..%d:%d" % (a, ts[a], b, ts[b]) for a, b in spans])
-                warn(debug, "R4 failsafe rows in window:", len(r4_fs),
-                     ["%d:%d" % (i, ts[i]) for i in r4_fs[:20]])
-                warn(debug, "R4 quadchute rows in window:",
-                     ["%d:%d" % (i, ts[i]) for i in r4_qc])
-                warn(debug, "R4 quadchute rows outside window:",
-                     ["%d:%d" % (i, ts[i]) for i in sorted(qc_set) if i not in set(r4_qc)])
-        else:
+        if not vs_ok(r4_fields) or not ff_ok() or ff is None or ff.n == 0:
             results['R4'] = 'FAIL'
-        # R5: log must not end armed
-        if vs.has('arming_state') and vs.n > 0:
-            results['R5'] = 'FAIL' if armed_rows[-1] else 'PASS'
+        elif not any_arm:
+            results['R4'] = 'N/A'
         else:
+            bad = False
+            warned = False
+            windows = []
+            for t, st in zip(vs_topics, states):
+                rows = st['armed_rows']
+                win = [bool(rows[i]) or (i > 0 and bool(rows[i - 1])) for i in range(t.n)]
+                qc = set(st['quadchute_rows']) if is_vtol else set()
+                if any(win[i] and (t['failsafe'][i] != 0 or i in qc) for i in range(t.n)):
+                    bad = True
+                ts = t['timestamp']
+                for i in range(t.n):
+                    if win[i] and (i == 0 or not win[i - 1]):
+                        windows.append([ts[i], ts[i]])
+                    elif win[i]:
+                        windows[-1][1] = ts[i]
+            # Flags: every failsafe_flags instance, in any instance's window; nav_state from the
+            # vehicle_status instance of the same number, else the lowest.
+            by_num = {t.instance: t for t in vs_topics}
+            for fft in ff_by_inst.values():
+                nav_t = by_num.get(fft.instance, vs_topics[0])
+                nav_ts, nav = nav_t['timestamp'], nav_t['nav_state']
+                for k, tk in enumerate(fft['timestamp']):
+                    if not any(a <= tk <= b for a, b in windows):
+                        continue
+                    j = bisect.bisect_right(nav_ts, tk) - 1
+                    if j < 0:
+                        continue
+                    n = nav[j]
+                    # Every bool field is a flag, and battery_warning above 0.
+                    flags = [f for f, ty in fft.types.items() if ty == 'bool']
+                    if fft.types.get('battery_warning') == 'uint8_t':
+                        flags.append('battery_warning')
+                    for flag in flags:
+                        if fft[flag][k] == 0:
+                            continue
+                        req = MODE_REQ.get(flag)
+                        if req and fft.has(req) and 0 <= n < 32 and (fft[req][k] >> n) & 1:
+                            bad = True
+                        else:
+                            warned = True
+            results['R4'] = 'FAIL' if bad else ('WARN' if warned else 'PASS')
+        # R5: every ARM followed by a DISARM, per instance; no ARM and no DISARM is N/A.
+        if not vs_ok(['arming_state']):
             results['R5'] = 'FAIL'
+        elif not any_arm:
+            results['R5'] = 'N/A'
+        else:
+            results['R5'] = 'FAIL' if any(st['armed_rows'] and st['armed_rows'][-1]
+                                          or st['arms'] != st['disarms'] for st in states) else 'PASS'
         # R6
-        if not vs.has('is_vtol'):
+        vtol_types = range(19, 26)
+        sys_typed = all(t.types.get('system_type', 'uint8_t') == 'uint8_t' for t in vs_topics)
+        if not vs_ok(['is_vtol']) or not sys_typed:
             results['R6'] = 'FAIL'
         elif not is_vtol:
-            results['R6'] = 'N/A'
-        elif not all(vs.has(f) for f in ('in_transition_mode', 'in_transition_to_fw', 'vehicle_type')):
+            sys_vtol = any(x in vtol_types for t in vs_topics if t.has('system_type')
+                           for x in t['system_type'])
+            results['R6'] = 'FAIL' if sys_vtol else 'N/A'
+        elif not vs_ok(['in_transition_mode', 'in_transition_to_fw', 'vehicle_type']):
             results['R6'] = 'FAIL'
         else:
-            results['R6'] = 'FAIL' if (vtol_abort or vtol_open is not None) else 'PASS'
+            results['R6'] = 'FAIL' if any(st['vtol_abort'] or st['vtol_open'] is not None
+                                          for st in states) else 'PASS'
 
     # R7 (SPEC B1.6), authorized command sources, over the whole log (every COMMAND event).
     # N/A without [authorized_sources]. With `category`, only COMMAND events of that category

@@ -18,7 +18,7 @@ use sfr_core::ingest::{FlightLogIngestor, IngestError, Ingested, Px4Ingestor};
 use sfr_core::json;
 use sfr_core::keys::{fingerprint, parse_public_key_pem, pem_decode, public_key_pem};
 use sfr_core::params::{Baseline, parse_baseline};
-use sfr_core::rules::{Compare, Rules, parse_rules};
+use sfr_core::rules::{Rules, parse_rules};
 use sfr_core::seal::{
     SealParams, check_seal_time, parse_seal_time, parse_seal_time_seconds, this_tool,
 };
@@ -390,7 +390,12 @@ fn crates_line(crypto: &dyn CryptoBackend) -> String {
 
 /// The transition tuning section, as `sfr seal` prints it (SPEC B1.8): the VTOL type and each
 /// watched parameter with its baseline and flown values. Empty for a vehicle that is not VTOL.
-fn transition_tuning(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> String {
+fn transition_tuning(
+    ing: &Ingested,
+    rules: &Rules,
+    baseline: &Baseline,
+    eval: &Evaluation,
+) -> String {
     let Some(vtol) = &ing.identity.vehicle.vtol_type else {
         return String::new();
     };
@@ -408,14 +413,13 @@ fn transition_tuning(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Stri
     for name in &rules.watched {
         let b = baseline.params.get(name);
         let l = ing.config.params.get(name);
-        // As R3 and the report (sfr_core::report::watched_mark): R3 compares a parameter only
-        // when the baseline has it, or with compare = "all" when the log has it.
-        let mark = match (b, l) {
-            (None, None) => "not compared",
-            (None, _) if rules.compare == Compare::Baseline => "not compared",
-            (Some(b), Some(l)) if b.same_as(l) => "MATCH",
-            _ => "DIFF",
-        };
+        // As the report: from R3's own findings.
+        let r3_lines = eval
+            .results
+            .iter()
+            .find(|r| r.id == "R3")
+            .map_or(&[][..], |r| &r.detail[..]);
+        let mark = sfr_core::report::watched_mark(name, b.is_some(), r3_lines);
         out.push_str(&format!(
             "  {name:<18}{:<16}{:<16}{mark}\n",
             show(b),
@@ -469,20 +473,30 @@ fn table(ing: &Ingested, eval: &Evaluation, rules: &Rules, baseline: &Baseline) 
             r.name,
             r.found
         ));
-        if r.status == Status::Fail {
+        if matches!(r.status, Status::Fail | Status::Warn) {
             for d in &r.detail {
                 out.push_str(&format!("{:<14}- {d}\n", ""));
             }
         }
     }
-    let tuning = transition_tuning(ing, rules, baseline);
+    let tuning = transition_tuning(ing, rules, baseline, eval);
     if !tuning.is_empty() {
         out.push('\n');
         out.push_str(&tuning);
     }
     out.push('\n');
     out.push_str(&format!("{:<10}{}\n", "events", ing.events.len()));
+    if let Some(line) = sfr_core::report::skipped_line(&id.skipped) {
+        out.push_str(&format!("{:<10}{line}\n", "skipped"));
+    }
     out.push_str(&format!("{:<10}{}\n", "status", eval.status.as_str()));
+    if eval.status == sfr_core::evaluate::Overall::NoArmedFlight {
+        out.push_str(&format!(
+            "{:<10}{}\n",
+            "",
+            sfr_core::report::NO_ARMED_FLIGHT_LINE
+        ));
+    }
     out
 }
 
@@ -526,12 +540,19 @@ pub fn seal(req: SealRequest<'_>) -> Result<SealOutput, Failure> {
         bytes: NO_BASELINE.as_bytes(),
     });
     let baseline_text = text(&baseline_input, "baseline", exit_code::MALFORMED_INPUT)?;
-    let baseline: Baseline = parse_baseline(baseline_text).map_err(|e| {
+    if rules.ignores_everything() {
+        return Err(fail(
+            exit_code::USAGE,
+            "the rules file ignores every parameter; the sandbox does not seal such a file",
+        ));
+    }
+    let mut baseline: Baseline = parse_baseline(baseline_text).map_err(|e| {
         fail(
             exit_code::MALFORMED_INPUT,
             format!("baseline {}: {e}", baseline_input.name),
         )
     })?;
+    baseline.sha256 = Some(crypto.sha256(baseline_text.as_bytes()));
     check_sandbox_size("log", log, req.log.size)?;
     let mut capped = Capped {
         inner: req.log.reader,
@@ -565,6 +586,7 @@ pub fn seal(req: SealRequest<'_>) -> Result<SealOutput, Failure> {
         certificate_chain: Vec::new(),
         allow_untested_version: req.allow_untested_version
             && !sfr_core::events::tested_firmware(&ing.identity.firmware),
+        allow_ignore_all: false,
     };
     let sealed = sfr_core::seal::seal(&ing, &eval, &rules, &baseline, &params, &crypto, &key)
         .map_err(|e| fail(exit_code::USAGE, e.to_string()))?;

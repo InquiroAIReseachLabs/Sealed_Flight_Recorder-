@@ -10,7 +10,7 @@
 //! signature is Ed25519 over it.
 
 use crate::crypto::{CrateVersion, CryptoBackend, Signer};
-use crate::evaluate::{Evaluation, Status};
+use crate::evaluate::Evaluation;
 use crate::ingest::Ingested;
 use crate::json::{Obj, Value, canonical};
 use crate::keys::{base64_encode, fingerprint};
@@ -366,6 +366,9 @@ pub struct SealParams {
     /// sealed only because of `seal --allow-untested-version`. Recorded as
     /// `seal.allow_untested_version`.
     pub allow_untested_version: bool,
+    /// True when the rules file ignores every parameter (`ignore = ["*"]`) and was accepted
+    /// only because of `seal --allow-ignore-all`. Recorded as `seal.allow_ignore_all`.
+    pub allow_ignore_all: bool,
 }
 
 /// What `seal` says about a log whose PX4 version `sfr` is not tested on
@@ -440,6 +443,7 @@ pub fn seal(
                 "allow_untested_version",
                 Value::Bool(params.allow_untested_version),
             )
+            .field("allow_ignore_all", Value::Bool(params.allow_ignore_all))
             .field("key_fingerprint", Value::str(fp.clone()))
             .field("key_label", Value::str(signer.label()))
             .field("key_custody", Value::str(signer.custody().as_str()))
@@ -486,12 +490,7 @@ pub fn seal(
     );
     record.insert("sealed_topics".to_string(), sealed_topics_json(ing));
     record.insert("events".to_string(), events_json(ing, rules));
-    let status = if eval.status == Status::Fail {
-        "FAIL"
-    } else {
-        "PASS"
-    };
-    record.insert("status".to_string(), Value::str(status));
+    record.insert("status".to_string(), Value::str(eval.status.as_str()));
 
     let (root, shape) = merkle_root(crypto, &record).map_err(SealError)?;
     let payload = signed_payload(SCHEMA_VERSION, &shape, &root);

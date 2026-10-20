@@ -504,7 +504,8 @@
       "VT_WV_LND_EN": "i32:0",
       "VT_WV_LTR_EN": "i32:0",
       "VT_WV_YAWR_SCL": "f32:0.15"
-    }
+    },
+    "sha256": "c98502135f6d94479c888286207ca3381b7d50e691bda13d07102f265d7b9a16"
   },
   "config": {
     "firmware": null,
@@ -1126,11 +1127,18 @@
     },
     "sha256": "81952e6059bc095717e7911c010e07f85749d6b04d332a5ffc51575a3fd0a558",
     "size": "4053364",
+    "skipped": {
+      "orphan_data_records": 0,
+      "region_bytes": "0",
+      "regions": 0,
+      "unknown_records": 0
+    },
     "vehicle": {
       "is_vtol": false,
       "system_type": 2,
       "vtol_type": null
-    }
+    },
+    "vehicle_status_instances": 1
   },
   "results": [
     {
@@ -1148,35 +1156,37 @@
       "detail": [
         "log has no ver_sw_release info message"
       ],
-      "expected": "unknown fd483321a5cf50ead91164356d15aa474643aa73",
-      "found": "no ver_sw_release, ver_sw fd483321a5cf50ead91164356d15aa474643aa73",
+      "expected": "unknown fd483321a5cf50ead91164356d15aa474643aa73, from the baseline's # Firmware: line",
+      "found": "log states no ver_sw_release, ver_sw fd483321a5cf50ead91164356d15aa474643aa73 (self-reported); baseline file sha256 c98502135f6d94479c888286207ca3381b7d50e691bda13d07102f265d7b9a16 (operator-supplied)",
       "id": "R2",
       "name": "firmware matches baseline",
       "status": "FAIL"
     },
     {
       "detail": [],
-      "expected": "every parameter in the baseline or the log equal, 0 ignored by pattern",
-      "found": "no differences",
+      "expected": "every parameter in the baseline or the log equal to the baseline at every ARM, none changed in flight, 0 ignored by pattern",
+      "found": "no differences; ignore [COM_FLIGHT_UUID, LND_FLIGHT_T_HI, LND_FLIGHT_T_LO, EKF2_MAG_DECL, CAL_BARO*_OFF, ASPD_SCALE_*, COM_MODE*_HASH] suppressed 0 difference(s); baseline file sha256 c98502135f6d94479c888286207ca3381b7d50e691bda13d07102f265d7b9a16 (operator-supplied)",
       "id": "R3",
       "name": "parameters match baseline",
       "status": "PASS"
     },
     {
-      "detail": [],
-      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight",
-      "found": "never true in flight",
+      "detail": [
+        "missing failsafe_flags"
+      ],
+      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), no quadchute (fixed wing straight to multicopter) in flight, and no failsafe_flags flag that the current nav_state requires true in flight; other failsafe_flags flags true in flight are warnings",
+      "found": "cannot evaluate: missing failsafe_flags",
       "id": "R4",
       "name": "no failsafe in flight",
-      "status": "PASS"
+      "status": "FAIL"
     },
     {
       "detail": [],
       "expected": "every ARM followed by a DISARM; log does not end armed",
-      "found": "0 ARM, 0 DISARM",
+      "found": "no armed flight: vehicle_status.arming_state has no ARM and no DISARM",
       "id": "R5",
       "name": "arm and disarm consistent",
-      "status": "PASS"
+      "status": "N/A"
     },
     {
       "detail": [],

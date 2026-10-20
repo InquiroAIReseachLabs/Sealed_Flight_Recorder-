@@ -48,11 +48,14 @@ pub const RECORD_EXTENSION: &str = "sfr";
 /// `seal.token_cmvp_certificate`. A verifier must reject any version it does not know and must
 /// never guess; this one knows [`KNOWN_SCHEMA_VERSIONS`], which is schema 3 only: a schema 1 or
 /// 2 record has leaves that are not bound to their section, so it is refused, not accepted
-/// beside the new form.
-pub const SCHEMA_VERSION: u32 = 3;
+/// beside the new form. Schema 4 adds the WARN result status, the overall statuses WARN and
+/// NO ARMED FLIGHT, `log.vehicle_status_instances`, `log.skipped`, `baseline.sha256` and
+/// `seal.allow_ignore_all`; a schema 3 record is refused, as its results were computed under
+/// rules that read less of the log.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// The schema versions `verify` accepts.
-pub const KNOWN_SCHEMA_VERSIONS: [u32; 1] = [3];
+pub const KNOWN_SCHEMA_VERSIONS: [u32; 1] = [4];
 
 /// The PX4 versions `sfr` is tested on, as (major, minor) series, inclusive: v1.14 to v1.17.
 /// `seal` refuses a log outside them, or one whose version it cannot read, unless given
@@ -87,12 +90,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_version_is_three_and_only_three_verifies() {
-        assert_eq!(
-            SCHEMA_VERSION, 3,
-            "SPEC B1.7: schema 3 signs the tree shape and tags every leaf with its section"
-        );
-        assert_eq!(KNOWN_SCHEMA_VERSIONS, [3]);
+    fn schema_version_is_four_and_only_four_verifies() {
+        assert_eq!(SCHEMA_VERSION, 4, "SPEC B1.7: schema 4");
+        assert_eq!(KNOWN_SCHEMA_VERSIONS, [4]);
     }
 
     #[test]

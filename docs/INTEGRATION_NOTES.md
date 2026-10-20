@@ -116,7 +116,7 @@ Copy the records from `/var/lib/sfr/records/` off the vehicle with the logs; any
 
 ## In CI or another pipeline
 
-`sfr verify` reports two things apart. `Integrity:` is VERIFIED when the record (and, with `--ulog`, the log) has not changed since sealing. `Flight rules:` is the rule results sealed in the record: PASS, or FAIL with the failing rule ids. The exit code follows integrity only: 0 when the record verifies, even if its rules failed, 1 when it does not. `--json` gives `integrity`, `flight_rules` and `failed_rules`. This function fails a pipeline on a record that does not verify against its log, and on one that verifies but recorded a rule FAIL:
+`sfr verify` reports two things apart. `Integrity:` is VERIFIED when the record (and, with `--ulog`, the log) has not changed since sealing. `Flight rules:` is the rule results sealed in the record: PASS; WARN with the ids of the rules that warned; NO ARMED FLIGHT when the log has no ARM and no DISARM, so no flight was checked; or FAIL with the failing rule ids. The exit code follows integrity only: 0 when the record verifies, even if its rules failed, 1 when it does not. `--json` gives `integrity`, `flight_rules`, `failed_rules` and `warned_rules`. This function fails a pipeline on a record that does not verify against its log, and on one that verifies but recorded a rule FAIL or no armed flight; a WARN passes and is shown:
 
 ```sh doc-test
 mkdir -p try
@@ -125,11 +125,11 @@ check_record() { # check_record <record.sfr> <sfr.pub> <log.ulg>
     echo "FAIL: $1 does not verify: $(grep '"first_mismatch"' try/verify.json)"
     return 1
   fi
-  if ! grep -q '"flight_rules": "PASS"' try/verify.json; then
-    echo "FAIL: $1 verifies, but a rule failed when it was sealed"
+  if grep -q -e '"flight_rules": "FAIL"' -e '"flight_rules": "NO ARMED FLIGHT"' try/verify.json; then
+    echo "FAIL: $1 verifies, but a rule failed or no flight was checked when it was sealed"
     return 1
   fi
-  echo "ok: $1"
+  echo "ok: $1 ($(grep -o '"flight_rules": "[A-Z ]*"' try/verify.json))"
 }
 check_record examples/reports/vtol_transition.sfr examples/reports/sfr.pub testdata/sitl/v1.17.0/vtol_transition.ulg
 check_record examples/reports/failsafe_gps_loss.sfr examples/reports/sfr.pub testdata/sitl/v1.17.0/failsafe_gps_loss.ulg || echo "the pipeline stops here"
@@ -139,8 +139,8 @@ check_record examples/reports/vtol_transition.sfr examples/reports/sfr.pub try/c
 ```
 
 ```text doc-output
-ok: examples/reports/vtol_transition.sfr
-FAIL: examples/reports/failsafe_gps_loss.sfr verifies, but a rule failed when it was sealed
+ok: examples/reports/vtol_transition.sfr ("flight_rules": "WARN")
+FAIL: examples/reports/failsafe_gps_loss.sfr verifies, but a rule failed or no flight was checked when it was sealed
 the pipeline stops here
 FAIL: examples/reports/vtol_transition.sfr does not verify:   "first_mismatch": "log digest mismatch: sha256 sealed \"86d64e54d1261991f4035355550f64e017f8a486c5c665848d6e68ae67fc9bf3\", found \"4df365611ef8c5dfb0f783f6bbffd18b7214dbc29cdc3253cc512f28b0d9ddba\"",
 the pipeline stops here

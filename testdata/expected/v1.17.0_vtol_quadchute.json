@@ -73,7 +73,7 @@
       "CAL_AIR_TUBED_MM": "f32:1.5",
       "CAL_AIR_TUBELEN": "f32:0.2",
       "CAL_BARO0_ID": "i32:6620172",
-      "CAL_BARO0_OFF": "f32:0",
+      "CAL_BARO0_OFF": "f32:2.4414062",
       "CAL_BARO0_PRIO": "i32:50",
       "CAL_BARO1_ID": "i32:0",
       "CAL_BARO2_ID": "i32:0",
@@ -378,7 +378,7 @@
       "COM_POS_LOW_EPH": "f32:50",
       "COM_POWER_COUNT": "i32:1",
       "COM_PREARM_MODE": "i32:0",
-      "COM_QC_ACT": "i32:0",
+      "COM_QC_ACT": "i32:1",
       "COM_RAM_MAX": "f32:-1",
       "COM_RCL_EXCEPT": "i32:0",
       "COM_RC_ARM_HYST": "i32:1000",
@@ -1156,7 +1156,8 @@
       "WV_GAIN": "f32:1",
       "WV_ROLL_MIN": "f32:1",
       "WV_YRATE_MAX": "f32:90"
-    }
+    },
+    "sha256": "2d0ded696c7301002f02ab781532c862b97f4b7a91f2e6d11da410303c2a3413"
   },
   "config": {
     "firmware": "1.17.0",
@@ -2640,6 +2641,12 @@
     },
     "sha256": "f76535f492c2ea7e81c5e55977eb9a5225bc5434da8804791fc7408a10e40aa1",
     "size": "20826338",
+    "skipped": {
+      "orphan_data_records": 0,
+      "region_bytes": "0",
+      "regions": 0,
+      "unknown_records": 0
+    },
     "vehicle": {
       "is_vtol": true,
       "system_type": 22,
@@ -2647,7 +2654,8 @@
         "name": "standard",
         "value": 2
       }
-    }
+    },
+    "vehicle_status_instances": 1
   },
   "results": [
     {
@@ -2660,27 +2668,34 @@
     },
     {
       "detail": [],
-      "expected": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
-      "found": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+      "expected": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4, from the baseline's # Firmware: line",
+      "found": "log states PX4 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4 (self-reported); baseline file sha256 2d0ded696c7301002f02ab781532c862b97f4b7a91f2e6d11da410303c2a3413 (operator-supplied)",
       "id": "R2",
       "name": "firmware matches baseline",
       "status": "PASS"
     },
     {
-      "detail": [],
-      "expected": "every parameter in the baseline or the log equal, 10 ignored by pattern",
-      "found": "no differences",
+      "detail": [
+        "changed in flight: VT_FW_MIN_ALT at boot_us 39012000 (event seq 12)"
+      ],
+      "expected": "every parameter in the baseline or the log equal to the baseline at every ARM, none changed in flight, 10 ignored by pattern",
+      "found": "no differences at ARM; 1 parameter(s) changed in flight; ignore [COM_FLIGHT_UUID, LND_FLIGHT_T_HI, LND_FLIGHT_T_LO, EKF2_MAG_DECL, CAL_BARO*_OFF, ASPD_SCALE_*, COM_MODE*_HASH] suppressed 0 difference(s); baseline file sha256 2d0ded696c7301002f02ab781532c862b97f4b7a91f2e6d11da410303c2a3413 (operator-supplied)",
       "id": "R3",
       "name": "parameters match baseline",
-      "status": "PASS"
+      "status": "WARN"
     },
     {
       "detail": [
         "failsafe in flight at boot_us 39028000: vtol_fixed_wing_system_failure",
-        "quadchute in flight at boot_us 39028000: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure true"
+        "quadchute in flight at boot_us 39028000: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure true",
+        "warning: failsafe_flags.auto_mission_missing true in flight from boot_us 5856000 (131 sample(s)), not required by the nav_state in effect",
+        "warning: failsafe_flags.gcs_connection_lost true in flight from boot_us 5856000 (131 sample(s)), not required by the nav_state in effect",
+        "warning: failsafe_flags.manual_control_signal_lost true in flight from boot_us 5856000 (131 sample(s)), not required by the nav_state in effect",
+        "warning: failsafe_flags.offboard_control_signal_lost true in flight from boot_us 5856000 (131 sample(s)), not required by the nav_state in effect",
+        "warning: failsafe_flags.vtol_fixed_wing_system_failure true in flight from boot_us 39016000 (69 sample(s)), not required by the nav_state in effect"
       ],
-      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight",
-      "found": "true in flight 1 time(s), quadchute 1 time(s)",
+      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), no quadchute (fixed wing straight to multicopter) in flight, and no failsafe_flags flag that the current nav_state requires true in flight; other failsafe_flags flags true in flight are warnings",
+      "found": "true in flight 1 time(s), quadchute 1 time(s); warning: failsafe_flags auto_mission_missing, gcs_connection_lost, manual_control_signal_lost, offboard_control_signal_lost, vtol_fixed_wing_system_failure true in flight",
       "id": "R4",
       "name": "no failsafe in flight",
       "status": "FAIL"

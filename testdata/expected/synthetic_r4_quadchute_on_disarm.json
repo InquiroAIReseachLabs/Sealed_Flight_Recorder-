@@ -13,7 +13,8 @@
     "parameters": {
       "COM_DISARM_LAND": "i32:2",
       "SYS_AUTOSTART": "i32:10043"
-    }
+    },
+    "sha256": "a18851939d38fb81342261c761bc868b98c9c4110ddc9d5d74c2c47e3f40a425"
   },
   "config": {
     "firmware": "1.17.0",
@@ -166,6 +167,12 @@
     },
     "sha256": "29a263a9f582d66b912c69c74915f40b03c9e7bd054641cd5af1b62219813604",
     "size": "1020",
+    "skipped": {
+      "orphan_data_records": 0,
+      "region_bytes": "0",
+      "regions": 0,
+      "unknown_records": 0
+    },
     "vehicle": {
       "is_vtol": true,
       "system_type": 22,
@@ -173,7 +180,8 @@
         "name": "unknown",
         "value": null
       }
-    }
+    },
+    "vehicle_status_instances": 1
   },
   "results": [
     {
@@ -186,16 +194,16 @@
     },
     {
       "detail": [],
-      "expected": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
-      "found": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+      "expected": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4, from the baseline's # Firmware: line",
+      "found": "log states PX4 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4 (self-reported); baseline file sha256 a18851939d38fb81342261c761bc868b98c9c4110ddc9d5d74c2c47e3f40a425 (operator-supplied)",
       "id": "R2",
       "name": "firmware matches baseline",
       "status": "PASS"
     },
     {
       "detail": [],
-      "expected": "every parameter in the baseline or the log equal, 0 ignored by pattern",
-      "found": "no differences",
+      "expected": "every parameter in the baseline or the log equal to the baseline at every ARM, none changed in flight, 0 ignored by pattern",
+      "found": "no differences; ignore [COM_FLIGHT_UUID, LND_FLIGHT_T_HI, LND_FLIGHT_T_LO, EKF2_MAG_DECL, CAL_BARO*_OFF, ASPD_SCALE_*, COM_MODE*_HASH] suppressed 0 difference(s); baseline file sha256 a18851939d38fb81342261c761bc868b98c9c4110ddc9d5d74c2c47e3f40a425 (operator-supplied)",
       "id": "R3",
       "name": "parameters match baseline",
       "status": "PASS"
@@ -204,7 +212,7 @@
       "detail": [
         "quadchute in flight at boot_us 5000000: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure false"
       ],
-      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight",
+      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), no quadchute (fixed wing straight to multicopter) in flight, and no failsafe_flags flag that the current nav_state requires true in flight; other failsafe_flags flags true in flight are warnings",
       "found": "true in flight 0 time(s), quadchute 1 time(s)",
       "id": "R4",
       "name": "no failsafe in flight",

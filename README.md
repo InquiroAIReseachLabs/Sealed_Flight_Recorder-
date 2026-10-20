@@ -51,13 +51,13 @@ You need git and a C compiler and linker (`cc`; on Debian or Ubuntu, `build-esse
    ```text doc-output
    EVALUATION KEY: not for operational use
    Integrity: VERIFIED (record and log)
-   Flight rules: PASS
+   Flight rules: WARN (R4)
    record    examples/reports/vtol_transition.sfr
    report    examples/reports/vtol_transition.sfr.md matches the record
    trust     the public key given with --pubkey (trusted as far as its source is)
    custody   unattested (declared file-evaluation)
-   key       sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be
-   merkle    745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430 (34 leaves)
+   key       sha256:1ab979d4bed49693df5e1482cfb3a5432a6dd632de3c95dc24f7c9896c7eec45
+   merkle    cb0183bc5b2bb55bd02c2d2a2f592cb10f60c36520d2ab22f8701c3e66ff9375 (34 leaves)
    crypto    blake3 1.8.7, ed25519-dalek 3.0.0, sha2 0.11.1 (crate versions)
    seal time 2026-10-18T15:00:00Z (claimed by the sealer, not proven)
    events    22
@@ -75,9 +75,9 @@ You need git and a C compiler and linker (`cc`; on Debian or Ubuntu, `build-esse
 
    ```text doc-output
    EVALUATION KEY: not for operational use
-   Integrity: FAILED: Merkle root mismatch: a leaf changed after sealing (recorded 745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430, computed 7c8b315562e5c20e420dd3ac1efc0ee03dd3776c68ba77f6bd2a05f9a5ba0392)
+   Integrity: FAILED: Merkle root mismatch: a leaf changed after sealing (recorded cb0183bc5b2bb55bd02c2d2a2f592cb10f60c36520d2ab22f8701c3e66ff9375, computed 78ad1b57928f3c6ab6dc6407ead4012b77ed6fd96e3c84f1d9f782515640587f)
    Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
-   key       sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be (named by the record, not proven)
+   key       sha256:1ab979d4bed49693df5e1482cfb3a5432a6dd632de3c95dc24f7c9896c7eec45 (named by the record, not proven)
    custody   unattested (declared file-evaluation)
    exit 1
    ```
@@ -92,9 +92,9 @@ You need git and a C compiler and linker (`cc`; on Debian or Ubuntu, `build-esse
    ```text doc-output
    EVALUATION KEY: not for operational use
    Integrity: FAILED: event seq 1 (COMMAND) field `command`: sealed 311, found 211
-     also: Merkle root mismatch: a leaf changed after sealing (recorded 745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430, computed 7c8b315562e5c20e420dd3ac1efc0ee03dd3776c68ba77f6bd2a05f9a5ba0392)
+     also: Merkle root mismatch: a leaf changed after sealing (recorded cb0183bc5b2bb55bd02c2d2a2f592cb10f60c36520d2ab22f8701c3e66ff9375, computed 78ad1b57928f3c6ab6dc6407ead4012b77ed6fd96e3c84f1d9f782515640587f)
    Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
-   key       sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be (named by the record, not proven)
+   key       sha256:1ab979d4bed49693df5e1482cfb3a5432a6dd632de3c95dc24f7c9896c7eec45 (named by the record, not proven)
    custody   unattested (declared file-evaluation)
    exit 1
    ```
@@ -114,13 +114,13 @@ You need git and a C compiler and linker (`cc`; on Debian or Ubuntu, `build-esse
    ```text doc-output
    EVALUATION KEY: not for operational use
    R1    PASS    required topics present       all present
-   R2    PASS    firmware matches baseline     1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4
-   R3    PASS    parameters match baseline     no differences
-   R4    PASS    no failsafe in flight         never true in flight
+   R2    PASS    firmware matches baseline     log states PX4 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4 (self-reported); baseline file sha256 d4da23c173b4031487e802b4971921f834d255f1eb47c4906228cb93edf18885 (operator-supplied)
+   R3    PASS    parameters match baseline     no differences; ignore [COM_FLIGHT_UUID, LND_FLIGHT_T_HI, LND_FLIGHT_T_LO, EKF2_MAG_DECL, CAL_BARO*_OFF, ASPD_SCALE_*, COM_MODE*_HASH] suppressed 1 difference(s); baseline file sha256 d4da23c173b4031487e802b4971921f834d255f1eb47c4906228cb93edf18885 (operator-supplied)
+   R4    WARN    no failsafe in flight         never true in flight; warning: failsafe_flags auto_mission_missing, gcs_connection_lost, manual_control_signal_lost, offboard_control_signal_lost true in flight
    R5    PASS    arm and disarm consistent     1 ARM, 1 DISARM
    R6    PASS    VTOL transitions completed    2 START, 2 END, 0 problem(s)
    R7    N/A     authorized command sources    no [authorized_sources] in the rules file
-   status    PASS
+   status    WARN
    record    try/out/vtol_transition.sfr
    report    try/out/vtol_transition.sfr.md
    ```
@@ -137,7 +137,7 @@ You need git and a C compiler and linker (`cc`; on Debian or Ubuntu, `build-esse
    ```text doc-output
    EVALUATION KEY: not for operational use
    Integrity: VERIFIED (record and log)
-   Flight rules: PASS
+   Flight rules: WARN (R4)
    ```
 
 To seal your own log you need a rules file (start from `examples/rules.default.toml`) and a baseline: the parameter file QGroundControl exports, plus one line `# Firmware: <version>` ([docs/RULES.md](docs/RULES.md)). Operational records use a key in a PKCS#11 token or HSM, or a seed sealed to a TPM ([docs/INTEGRATION_NOTES.md](docs/INTEGRATION_NOTES.md#keys)). Not run in CI: it needs your files.
@@ -154,8 +154,8 @@ From `crates/sfr-core/src/lib.rs` (`exit_code`):
 
 | Exit | `sfr seal` | `sfr verify` |
 |---|---|---|
-| 0 | every rule PASS or N/A; record written | `Integrity: VERIFIED`, whatever the `Flight rules:` line says |
-| 1 | a rule FAIL; the record is still written | `Integrity: FAILED` (record, log or certificate chain does not check, or an input limit is exceeded) or `Integrity: REFUSED` (good signature, but an evaluation key without `--allow-evaluation-key`, or custody `--require-hardware-key` does not accept) |
+| 0 | status PASS or WARN; record written | `Integrity: VERIFIED`, whatever the `Flight rules:` line says |
+| 1 | a rule FAIL, or no armed flight (status NO ARMED FLIGHT); the record is still written | `Integrity: FAILED` (record, log or certificate chain does not check, or an input limit is exceeded) or `Integrity: REFUSED` (good signature, but an evaluation key without `--allow-evaluation-key`, or custody `--require-hardware-key` does not accept) |
 | 2 | a required topic or field is missing (R1 FAIL); the record is still written | not used |
 | 3 | the log, rules file or baseline is malformed, truncated, or over an input limit; nothing written | not used |
 | 4 | a usage, key or file error; nothing written | a usage, key or file error, or no trust source given (`Integrity: NOT CHECKED`) |

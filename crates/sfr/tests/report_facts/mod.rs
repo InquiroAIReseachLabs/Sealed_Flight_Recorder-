@@ -295,9 +295,38 @@ pub fn check(record: &Value, md: &str) {
         esc(&format!("{stem}.sfr"))
     ));
     l.expect("");
+    // Schema 4: a log with no armed flight says so under the status.
+    if plain(f(r, "status")) == "NO ARMED FLIGHT" {
+        l.expect(
+            "No armed flight: the log has no ARM and no DISARM, so the rules had no flight to check. This is not a PASS.",
+        );
+        l.expect("");
+    }
     // Schema 2: the untested-version line exactly when the record says the flag was given.
     if seal.get("allow_untested_version") == Some(&Value::Bool(true)) {
         l.expect(sfr_core::report::UNTESTED_VERSION_LINE);
+        l.expect("");
+    }
+    // Schema 4: the ignore-everything line exactly when the record says the flag was given.
+    if seal.get("allow_ignore_all") == Some(&Value::Bool(true)) {
+        l.expect(sfr_core::report::IGNORE_ALL_LINE);
+        l.expect("");
+    }
+    // Schema 4: what the reader skipped, when it skipped anything.
+    let skipped = o(f(log, "skipped"), "skipped");
+    let count = |k: &str| plain(f(skipped, k)).parse::<u64>().unwrap();
+    let n = count("unknown_records") + count("orphan_data_records") + count("regions");
+    if n > 0 {
+        l.expect(&format!(
+            "**Skipped.** {}.",
+            esc(&format!(
+                "sealed with {n} skipped messages: {} of an unknown type, {} data records without a subscription, {} region(s) ({} bytes) before an appended-data offset",
+                count("unknown_records"),
+                count("orphan_data_records"),
+                count("regions"),
+                count("region_bytes")
+            ))
+        ));
         l.expect("");
     }
 
@@ -316,15 +345,21 @@ pub fn check(record: &Value, md: &str) {
             .collect();
         assert_eq!(row, &want, "rules row");
         if plain(f(res, "id")) == "R3" {
-            r3 = a(res, "detail").iter().map(plain).collect();
+            // The detail lines that name a difference; the others list changes in flight.
+            r3 = a(res, "detail")
+                .iter()
+                .map(plain)
+                .filter(|d| d.contains(": baseline ") && d.contains(", flown "))
+                .collect();
         }
     }
     for res in results {
         let res = o(res, "result");
-        if plain(f(res, "status")) != "FAIL" {
+        let status = plain(f(res, "status"));
+        if status != "FAIL" && status != "WARN" {
             continue;
         }
-        l.expect(&format!("### {} FAIL", ev(f(res, "id"))));
+        l.expect(&format!("### {} {status}", ev(f(res, "id"))));
         l.expect("");
         assert_eq!(l.item("Expected"), ev(f(res, "expected")));
         for d in a(res, "detail") {
@@ -355,7 +390,7 @@ pub fn check(record: &Value, md: &str) {
     l.expect("## Parameters changed in flight");
     l.expect("");
     l.expect(
-        "These are reported, not a rule failure: R3 compares the parameters at log start with the baseline.",
+        "R3 compares the parameters in effect at each ARM with the baseline; a change in flight of a parameter it does not ignore makes R3 WARN.",
     );
     l.expect("");
     let changes: Vec<&Obj> = a(r, "events")

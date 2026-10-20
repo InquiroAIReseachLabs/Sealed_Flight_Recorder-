@@ -460,7 +460,7 @@ for (const name of opt.browsers.split(',')) {
     link(kdir, 'testdata/sitl/v1.17.0/gz_quadtailsitter_transition.ulg', 'tailsitter.ulg');
     const v = sfr(kdir, ['verify', 'tailsitter.sfr', '--pubkey', 'sfr.pub', '--allow-evaluation-key', '--no-report', '--ulog', 'tailsitter.ulg']);
     const label = /"key_label":"([^"]*)"/.exec(fs.readFileSync(path.join(kdir, 'tailsitter.sfr'), 'utf8'));
-    check(name, 'in-browser key', r.banner.includes('PASS.') && v.code === 0 && v.stdout.includes('VERIFIED (record and log)') && label && label[1].startsWith('EVALUATION KEY'),
+    check(name, 'in-browser key', r.banner.includes('PASS or WARN.') && v.code === 0 && v.stdout.includes('VERIFIED (record and log)') && label && label[1].startsWith('EVALUATION KEY'),
       `sealed with the in-browser key (label "${label ? label[1] : '?'}"); sfr verify --ulog with the page's sfr.pub: exit ${v.code}, ${v.stdout.split('\n')[1] || v.stdout.split('\n')[0]}`, (Date.now() - t) / 1000);
   }
   userFile.push(['seal with the in-browser key', since(w)]);

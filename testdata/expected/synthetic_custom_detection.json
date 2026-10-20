@@ -13,7 +13,8 @@
     "parameters": {
       "COM_DISARM_LAND": "i32:2",
       "SYS_AUTOSTART": "i32:10040"
-    }
+    },
+    "sha256": "6818094316bdebe241f074977160f42fd252975197ac6789c7e539ff4e78855e"
   },
   "config": {
     "firmware": "1.17.0",
@@ -83,11 +84,18 @@
     },
     "sha256": "80fb3f281fb9642a75e8289d9080a24be85669328d4f044cafdb3da68d4ae108",
     "size": "1338",
+    "skipped": {
+      "orphan_data_records": 0,
+      "region_bytes": "0",
+      "regions": 0,
+      "unknown_records": 0
+    },
     "vehicle": {
       "is_vtol": false,
       "system_type": 2,
       "vtol_type": null
-    }
+    },
+    "vehicle_status_instances": 1
   },
   "results": [
     {
@@ -100,23 +108,23 @@
     },
     {
       "detail": [],
-      "expected": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
-      "found": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+      "expected": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4, from the baseline's # Firmware: line",
+      "found": "log states PX4 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4 (self-reported); baseline file sha256 6818094316bdebe241f074977160f42fd252975197ac6789c7e539ff4e78855e (operator-supplied)",
       "id": "R2",
       "name": "firmware matches baseline",
       "status": "PASS"
     },
     {
       "detail": [],
-      "expected": "every parameter in the baseline or the log equal, 0 ignored by pattern",
-      "found": "no differences",
+      "expected": "every parameter in the baseline or the log equal to the baseline at every ARM, none changed in flight, 0 ignored by pattern",
+      "found": "no differences; ignore [COM_FLIGHT_UUID, LND_FLIGHT_T_HI, LND_FLIGHT_T_LO, EKF2_MAG_DECL, CAL_BARO*_OFF, ASPD_SCALE_*, COM_MODE*_HASH] suppressed 0 difference(s); baseline file sha256 6818094316bdebe241f074977160f42fd252975197ac6789c7e539ff4e78855e (operator-supplied)",
       "id": "R3",
       "name": "parameters match baseline",
       "status": "PASS"
     },
     {
       "detail": [],
-      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight",
+      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), no quadchute (fixed wing straight to multicopter) in flight, and no failsafe_flags flag that the current nav_state requires true in flight; other failsafe_flags flags true in flight are warnings",
       "found": "never true in flight",
       "id": "R4",
       "name": "no failsafe in flight",

@@ -1,6 +1,6 @@
 # Onboard parameters for Vehicle 1
 #
-# Initial parameters of sample.ulg (definitions-section 'P' records)
+# Parameters of sample.ulg in effect at the first ARM
 # Firmware: unknown fd483321a5cf50ead91164356d15aa474643aa73
 #
 # Vehicle-Id Component-Id Name Value Type

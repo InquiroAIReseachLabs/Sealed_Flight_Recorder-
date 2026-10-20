@@ -1,6 +1,6 @@
 # Onboard parameters for Vehicle 1
 #
-# Initial parameters of mc_flight.ulg (definitions-section 'P' records)
+# Parameters of mc_flight.ulg in effect at the first ARM
 # Firmware: 1.14.4 1555f2bd2229544c43966ab5f94879c41d8e1e01
 #
 # Vehicle-Id Component-Id Name Value Type

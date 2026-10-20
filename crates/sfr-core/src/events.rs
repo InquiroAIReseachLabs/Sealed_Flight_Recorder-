@@ -211,6 +211,9 @@ pub struct Event {
 pub struct ArmedInterval {
     /// ARM time.
     pub arm: u64,
+    /// File position of the `vehicle_status` row that armed
+    /// ([`crate::ingest::VehicleStatusRow::file_order`]).
+    pub arm_order: u64,
     /// DISARM time, or `None` if the log ends armed.
     pub disarm: Option<u64>,
 }
@@ -221,11 +224,12 @@ impl ArmedInterval {
         t >= self.arm && self.disarm.is_none_or(|d| t < d)
     }
 
-    /// Whether a record timed by "last data timestamp before it" lies in `(arm, disarm]`. At
-    /// equal times `ulog.parameter` sorts before `vehicle_status`, so this matches the order
-    /// in which the timeline shows them.
-    pub fn contains_record(&self, t: u64) -> bool {
-        t > self.arm && self.disarm.is_none_or(|d| t <= d)
+    /// Whether a record timed by "last data timestamp before it" and at file position `order`
+    /// lies in flight: after the arming row (a later time, or the same time and later in the
+    /// file) and at or before the disarm time.
+    pub fn contains_record(&self, t: u64, order: u64) -> bool {
+        (t > self.arm || (t == self.arm && order > self.arm_order))
+            && self.disarm.is_none_or(|d| t <= d)
     }
 }
 
@@ -238,29 +242,31 @@ pub fn armed_sample(armed: &[ArmedInterval], t: u64) -> bool {
         .is_some_and(|a| a.contains_sample(t))
 }
 
-/// Whether a record timed by "last data timestamp before it" lies in an armed interval
-/// (`(arm, disarm]`, see [`ArmedInterval::contains_record`]).
-pub fn in_flight_record(armed: &[ArmedInterval], t: u64) -> bool {
-    let n = armed.partition_point(|a| a.arm < t);
+/// Whether a record timed by "last data timestamp before it" at file position `order` lies
+/// in an armed interval ([`ArmedInterval::contains_record`]).
+pub fn in_flight_record(armed: &[ArmedInterval], t: u64, order: u64) -> bool {
+    let n = armed.partition_point(|a| a.arm <= t);
     n.checked_sub(1)
         .and_then(|i| armed.get(i))
-        .is_some_and(|a| a.contains_record(t))
+        .is_some_and(|a| a.contains_record(t, order))
 }
 
-/// Armed intervals from `arming_state == 2` (ARMING_STATE_ARMED in v1.14 through v1.17).
+/// Armed intervals of one `vehicle_status` instance, from `arming_state == 2`
+/// (ARMING_STATE_ARMED in v1.14 through v1.17).
 pub fn armed_intervals(rows: &[VehicleStatusRow]) -> Vec<ArmedInterval> {
     let mut out = Vec::new();
-    let mut open: Option<u64> = None;
+    let mut open: Option<(u64, u64)> = None;
     for r in rows {
         let Some(state) = r.arming_state else {
             continue;
         };
         let armed = state == 2;
         match (armed, open) {
-            (true, None) => open = Some(r.id.ts),
-            (false, Some(arm)) => {
+            (true, None) => open = Some((r.id.ts, r.file_order)),
+            (false, Some((arm, arm_order))) => {
                 out.push(ArmedInterval {
                     arm,
+                    arm_order,
                     disarm: Some(r.id.ts),
                 });
                 open = None;
@@ -268,8 +274,36 @@ pub fn armed_intervals(rows: &[VehicleStatusRow]) -> Vec<ArmedInterval> {
             _ => {}
         }
     }
-    if let Some(arm) = open {
-        out.push(ArmedInterval { arm, disarm: None });
+    if let Some((arm, arm_order)) = open {
+        out.push(ArmedInterval {
+            arm,
+            arm_order,
+            disarm: None,
+        });
+    }
+    out
+}
+
+/// The times any `vehicle_status` instance was armed: the armed intervals of every instance,
+/// sorted, with overlapping ones merged (SPEC B1.6: every instance counts).
+pub fn flight_armed_intervals(flight: &FlightLog) -> Vec<ArmedInterval> {
+    let mut all: Vec<ArmedInterval> = flight
+        .vehicle_status_instances()
+        .into_iter()
+        .flat_map(armed_intervals)
+        .collect();
+    all.sort_by_key(|a| (a.arm, a.arm_order));
+    let mut out: Vec<ArmedInterval> = Vec::new();
+    for a in all {
+        match out.last_mut() {
+            Some(last) if last.disarm.is_none_or(|d| a.arm <= d) => {
+                last.disarm = match (last.disarm, a.disarm) {
+                    (Some(x), Some(y)) => Some(x.max(y)),
+                    _ => None,
+                };
+            }
+            _ => out.push(a),
+        }
     }
     out
 }
@@ -481,11 +515,30 @@ impl Builder {
 }
 
 fn vehicle_status_events(b: &mut Builder, flight: &FlightLog) {
-    let fs = &flight.failsafe_flags;
+    for rows in flight.vehicle_status_instances() {
+        instance_events(b, flight, rows);
+    }
+}
+
+/// The failsafe_flags instance that attributes failsafes of `vehicle_status` instance
+/// `instance`: the one of the same instance, else the lowest one.
+pub fn flags_for_instance(flight: &FlightLog, instance: u8) -> &FailsafeFlags {
+    flight
+        .failsafe_flags_others
+        .iter()
+        .find(|f| f.multi_id == instance)
+        .unwrap_or(&flight.failsafe_flags)
+}
+
+fn instance_events(b: &mut Builder, flight: &FlightLog, rows: &[VehicleStatusRow]) {
+    let Some(instance) = rows.first().map(|r| r.id.instance) else {
+        return;
+    };
+    let fs = flags_for_instance(flight, instance);
     let flag_rows = sorted_flag_rows(fs);
     let mut prev: Option<&VehicleStatusRow> = None;
     let mut last_arm: Option<u64> = None;
-    for r in &flight.vehicle_status {
+    for r in rows {
         if b.overflow {
             return;
         }
@@ -736,7 +789,7 @@ pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> 
         );
     }
 
-    let armed = armed_intervals(&flight.vehicle_status);
+    let armed = flight_armed_intervals(flight);
     let mut last: BTreeMap<&str, ParamValue> = config
         .params
         .iter()
@@ -749,7 +802,7 @@ pub fn build(flight: &FlightLog, config: &Config) -> Result<Vec<Event>, String> 
         let old = last.get(p.name.as_str()).copied();
         let changed = old.is_none_or(|o| !o.same_as(&p.value));
         last.insert(p.name.as_str(), p.value);
-        if changed && in_flight_record(&armed, p.time) {
+        if changed && in_flight_record(&armed, p.time, p.file_order) {
             b.push(
                 p.time,
                 TOPIC_PARAMETER,
@@ -916,7 +969,7 @@ pub fn event_json(e: &Event, fw: &Firmware, rules: &crate::rules::Rules) -> Valu
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::ingest::{FlagDef, RowId};
+    use crate::ingest::{FlagDef, RowId, VehicleStatusRow};
 
     #[allow(clippy::too_many_arguments)]
     fn vs(
@@ -935,6 +988,7 @@ mod tests {
                 instance: 0,
                 index,
             },
+            file_order: 0,
             arming_state: Some(arming),
             nav_state: Some(nav),
             failsafe: Some(failsafe),
@@ -1077,6 +1131,8 @@ mod tests {
     fn events_from_one_row_keep_the_spec_order() {
         // Flags as ingest delivers them: sorted by name.
         let fs = FailsafeFlags {
+            multi_id: 0,
+            mode_req_unreadable: false,
             flags: vec![flag("a_flag"), flag("b_flag")],
             rows: vec![fs_row(0, 0, &[false, false]), fs_row(25, 1, &[true, true])],
         };
@@ -1123,6 +1179,8 @@ mod tests {
     fn failsafe_flags_at_a_moment_follow_timestamp_then_file_order() {
         let quadchute = |fs_rows: Vec<FailsafeRow>| {
             let fs = FailsafeFlags {
+                multi_id: 0,
+                mode_req_unreadable: false,
                 flags: vec![flag("vtol_fixed_wing_system_failure")],
                 rows: fs_rows,
             };
@@ -1159,6 +1217,8 @@ mod tests {
 
         // A failsafe edge with no failsafe_flags sample at or before it is unattributed.
         let fs = FailsafeFlags {
+            multi_id: 0,
+            mode_req_unreadable: false,
             flags: vec![flag("x_flag")],
             rows: vec![fs_row(50, 0, &[true])],
         };
@@ -1179,6 +1239,8 @@ mod tests {
     #[test]
     fn failsafe_reference_falls_back_to_the_earliest_sample() {
         let fs = FailsafeFlags {
+            multi_id: 0,
+            mode_req_unreadable: false,
             flags: vec![flag("x_flag")],
             rows: vec![fs_row(20, 1, &[true]), fs_row(10, 0, &[true])],
         };
@@ -1199,6 +1261,8 @@ mod tests {
     #[test]
     fn failsafe_attribution_names_required_or_new_flags() {
         let fs = FailsafeFlags {
+            multi_id: 0,
+            mode_req_unreadable: false,
             flags: vec![flag("a_always"), flag("b_required"), flag("c_new")],
             rows: vec![
                 FailsafeRow {
@@ -1343,6 +1407,8 @@ mod tests {
         // flags per edge: about 2 million events, over the cap.
         let names: Vec<String> = (0..256).map(|i| format!("f{i:03}")).collect();
         let fs = FailsafeFlags {
+            multi_id: 0,
+            mode_req_unreadable: false,
             flags: names.iter().map(|n| flag(n)).collect(),
             rows: vec![
                 FailsafeRow {
@@ -1381,18 +1447,22 @@ mod tests {
         let armed = [
             ArmedInterval {
                 arm: 5,
+                arm_order: 0,
                 disarm: Some(5),
             },
             ArmedInterval {
                 arm: 5,
+                arm_order: 0,
                 disarm: Some(9),
             },
             ArmedInterval {
                 arm: 9,
+                arm_order: 0,
                 disarm: Some(12),
             },
             ArmedInterval {
                 arm: 20,
+                arm_order: 0,
                 disarm: None,
             },
         ];
@@ -1403,8 +1473,8 @@ mod tests {
                 "sample {t}"
             );
             assert_eq!(
-                in_flight_record(&armed, t),
-                armed.iter().any(|a| a.contains_record(t)),
+                in_flight_record(&armed, t, u64::MAX),
+                armed.iter().any(|a| a.contains_record(t, u64::MAX)),
                 "record {t}"
             );
         }
@@ -1477,5 +1547,61 @@ mod tests {
         assert_eq!(reason_name(1, &v(0x010F_04FF)), Some("rc_stick"));
         assert_eq!(reason_name(1, &v(0x0110_02FF)), Some("stick_gesture"));
         assert_eq!(reason_name(15, &v(0x0111_00FF)), None);
+    }
+
+    #[test]
+    fn armed_intervals_of_all_instances_merge() {
+        let row = |ts: u64, instance: u8, index: u64, arming: u8| VehicleStatusRow {
+            id: RowId {
+                ts,
+                instance,
+                index,
+            },
+            file_order: ts,
+            arming_state: Some(arming),
+            nav_state: None,
+            failsafe: None,
+            is_vtol: None,
+            in_transition_mode: None,
+            in_transition_to_fw: None,
+            vehicle_type: None,
+            system_type: None,
+            latest_arming_reason: None,
+            latest_disarming_reason: None,
+        };
+        let flight = FlightLog {
+            vehicle_status: vec![
+                row(10, 0, 0, 2),
+                row(20, 0, 1, 1),
+                row(15, 1, 0, 2),
+                row(30, 1, 1, 1),
+                row(40, 1, 2, 2),
+            ],
+            ..FlightLog::default()
+        };
+        let merged: Vec<(u64, Option<u64>)> = flight_armed_intervals(&flight)
+            .iter()
+            .map(|a| (a.arm, a.disarm))
+            .collect();
+        assert_eq!(merged, [(10, Some(30)), (40, None)]);
+    }
+
+    #[test]
+    fn a_parameter_record_at_the_arm_time_is_in_flight_when_it_follows_the_arming_row() {
+        let a = ArmedInterval {
+            arm: 100,
+            arm_order: 7,
+            disarm: Some(200),
+        };
+        assert!(
+            !a.contains_record(100, 6),
+            "before the arming row in the file"
+        );
+        assert!(
+            a.contains_record(100, 8),
+            "after the arming row in the file"
+        );
+        assert!(a.contains_record(200, 0));
+        assert!(!a.contains_record(201, 99));
     }
 }

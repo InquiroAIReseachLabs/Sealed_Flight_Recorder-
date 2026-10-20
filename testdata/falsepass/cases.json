@@ -1,0 +1,566 @@
+[
+  {
+    "baseline": "failsafe_uint8.params",
+    "case": "failsafe_uint8",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "vehicle_status.failsafe is uint8_t in the log; PX4 defines bool"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.1",
+    "kind": "attack",
+    "log": "failsafe_uint8.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "vehicle_status.failsafe declared uint8_t, true in flight"
+  },
+  {
+    "baseline": "failsafe_uint8_control.params",
+    "case": "failsafe_uint8_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "true in flight 1 time(s)"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.1",
+    "kind": "control",
+    "log": "failsafe_uint8_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for failsafe_uint8"
+  },
+  {
+    "baseline": "arming_int8.params",
+    "case": "arming_int8",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R5": "vehicle_status.arming_state is int8_t in the log; PX4 defines uint8_t"
+      },
+      "results": {
+        "R4": "FAIL",
+        "R5": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.1",
+    "kind": "attack",
+    "log": "arming_int8.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "vehicle_status.arming_state declared int8_t, failsafe in flight"
+  },
+  {
+    "baseline": "arming_int8_control.params",
+    "case": "arming_int8_control",
+    "expect": {
+      "exit": 1,
+      "results": {
+        "R4": "FAIL",
+        "R5": "PASS"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.1",
+    "kind": "control",
+    "log": "arming_int8_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for arming_int8"
+  },
+  {
+    "baseline": "transition_uint8.params",
+    "case": "transition_uint8",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R6": "vehicle_status.in_transition_mode is uint8_t in the log; PX4 defines bool"
+      },
+      "results": {
+        "R6": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.1",
+    "kind": "attack",
+    "log": "transition_uint8.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "vehicle_status.in_transition_mode declared uint8_t, aborted transition"
+  },
+  {
+    "baseline": "transition_uint8_control.params",
+    "case": "transition_uint8_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R6": "1 problem(s)"
+      },
+      "results": {
+        "R6": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.1",
+    "kind": "control",
+    "log": "transition_uint8_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for transition_uint8"
+  },
+  {
+    "baseline": "resubscribe_retyped.params",
+    "case": "resubscribe_retyped",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "vehicle_status.failsafe is uint8_t in the log; PX4 defines bool"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.1",
+    "kind": "attack",
+    "log": "resubscribe_retyped.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "a second subscription of vehicle_status retypes failsafe to uint8_t"
+  },
+  {
+    "baseline": "resubscribe_retyped_control.params",
+    "case": "resubscribe_retyped_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "true in flight 1 time(s)"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.1",
+    "kind": "control",
+    "log": "resubscribe_retyped_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for resubscribe_retyped"
+  },
+  {
+    "baseline": "instance_one_failsafe.params",
+    "case": "instance_one_failsafe",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "true in flight 1 time(s)"
+      },
+      "instances": 2,
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.2",
+    "kind": "attack",
+    "log": "instance_one_failsafe.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "a clean vehicle_status instance 0, failsafe in flight on instance 1"
+  },
+  {
+    "baseline": "instance_one_failsafe_control.params",
+    "case": "instance_one_failsafe_control",
+    "expect": {
+      "exit": 1,
+      "instances": 1,
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.2",
+    "kind": "control",
+    "log": "instance_one_failsafe_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for instance_one_failsafe"
+  },
+  {
+    "baseline": "never_armed_failsafe.params",
+    "case": "never_armed_failsafe",
+    "expect": {
+      "exit": 1,
+      "results": {
+        "R4": "N/A",
+        "R5": "N/A"
+      },
+      "status": "NO ARMED FLIGHT"
+    },
+    "item": "1.3",
+    "kind": "attack",
+    "log": "never_armed_failsafe.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "never armed, failsafe set"
+  },
+  {
+    "baseline": "never_armed_failsafe_control.params",
+    "case": "never_armed_failsafe_control",
+    "expect": {
+      "exit": 1,
+      "results": {
+        "R4": "FAIL",
+        "R5": "PASS"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.3",
+    "kind": "control",
+    "log": "never_armed_failsafe_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for never_armed_failsafe"
+  },
+  {
+    "baseline": "golden_armed_rows_deleted.params",
+    "case": "golden_armed_rows_deleted",
+    "expect": {
+      "exit": 1,
+      "results": {
+        "R5": "N/A"
+      },
+      "status": "NO ARMED FLIGHT"
+    },
+    "item": "1.3",
+    "kind": "attack",
+    "log": "golden_armed_rows_deleted.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "a real flight with every armed vehicle_status row deleted"
+  },
+  {
+    "baseline": "golden_armed_rows_deleted_control.params",
+    "case": "golden_armed_rows_deleted_control",
+    "expect": {
+      "exit": 0,
+      "results": {
+        "R5": "PASS"
+      },
+      "status": "WARN"
+    },
+    "item": "1.3",
+    "kind": "control",
+    "log": "golden_armed_rows_deleted_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for golden_armed_rows_deleted"
+  },
+  {
+    "baseline": "flag_gps_invalid.params",
+    "case": "flag_gps_invalid",
+    "expect": {
+      "exit": 0,
+      "found": {
+        "R4": "warning: failsafe_flags gps_invalid true in flight"
+      },
+      "results": {
+        "R4": "WARN"
+      },
+      "status": "WARN"
+    },
+    "item": "1.4",
+    "kind": "attack",
+    "log": "flag_gps_invalid.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "failsafe_flags.gps_invalid true for the whole armed interval"
+  },
+  {
+    "baseline": "flag_gps_invalid_control.params",
+    "case": "flag_gps_invalid_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "required failsafe_flags global_position_invalid true in flight"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.4",
+    "kind": "control",
+    "log": "flag_gps_invalid_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for flag_gps_invalid"
+  },
+  {
+    "baseline": "duplicate_failsafe.params",
+    "case": "duplicate_failsafe",
+    "expect": {
+      "exit": 3,
+      "results": {},
+      "status": null
+    },
+    "item": "1.5",
+    "kind": "attack",
+    "log": "duplicate_failsafe.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "a second `bool failsafe` field in the vehicle_status format"
+  },
+  {
+    "baseline": "duplicate_failsafe_control.params",
+    "case": "duplicate_failsafe_control",
+    "expect": {
+      "exit": 1,
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.5",
+    "kind": "control",
+    "log": "duplicate_failsafe_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for duplicate_failsafe"
+  },
+  {
+    "baseline": "golden_param_at_arm.params",
+    "case": "golden_param_at_arm",
+    "expect": {
+      "events": {
+        "PARAM_CHANGED_IN_FLIGHT": 2
+      },
+      "exit": 0,
+      "found": {
+        "R3": "2 parameter(s) changed in flight"
+      },
+      "results": {
+        "R3": "WARN"
+      },
+      "status": "WARN"
+    },
+    "item": "1.6",
+    "kind": "attack",
+    "log": "golden_param_at_arm.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "a parameter change at the ARM time, after the ARM row"
+  },
+  {
+    "baseline": "golden_param_at_arm_control.params",
+    "case": "golden_param_at_arm_control",
+    "expect": {
+      "events": {
+        "PARAM_CHANGED_IN_FLIGHT": 2
+      },
+      "exit": 0,
+      "results": {
+        "R3": "WARN"
+      },
+      "status": "WARN"
+    },
+    "item": "1.6",
+    "kind": "control",
+    "log": "golden_param_at_arm_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for golden_param_at_arm"
+  },
+  {
+    "baseline": "ignore_all.params",
+    "case": "ignore_all",
+    "expect": {
+      "exit": 4,
+      "results": {},
+      "status": null
+    },
+    "item": "1.7",
+    "kind": "attack",
+    "log": "ignore_all.ulg",
+    "options": [],
+    "rules": "rules_ignore_all.toml",
+    "what": "ignore = [\"*\"] in the rules file hides a parameter difference"
+  },
+  {
+    "baseline": "ignore_all_control.params",
+    "case": "ignore_all_control",
+    "expect": {
+      "exit": 1,
+      "results": {
+        "R3": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.7",
+    "kind": "control",
+    "log": "ignore_all_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for ignore_all"
+  },
+  {
+    "baseline": "vtol_mav_type_not_vtol.params",
+    "case": "vtol_mav_type_not_vtol",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R6": "a VTOL MAV_TYPE, but is_vtol is false on every sample"
+      },
+      "results": {
+        "R6": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.8",
+    "kind": "attack",
+    "log": "vtol_mav_type_not_vtol.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "system_type 22 (a VTOL) with is_vtol false, aborted transition"
+  },
+  {
+    "baseline": "vtol_mav_type_not_vtol_control.params",
+    "case": "vtol_mav_type_not_vtol_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R6": "1 problem(s)"
+      },
+      "results": {
+        "R6": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.8",
+    "kind": "control",
+    "log": "vtol_mav_type_not_vtol_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for vtol_mav_type_not_vtol"
+  },
+  {
+    "baseline": "r7_scoped_general.params",
+    "case": "r7_scoped_general",
+    "expect": {
+      "exit": 0,
+      "found": {
+        "R7": "scope GENERAL only, 1 excluded by scope; source ids are self-reported by the sender"
+      },
+      "results": {
+        "R7": "PASS"
+      },
+      "status": "PASS"
+    },
+    "item": "1.9",
+    "kind": "attack",
+    "log": "r7_scoped_general.ulg",
+    "options": [],
+    "rules": "rules_r7_general.toml",
+    "what": "R7 scoped to GENERAL hides a PAYLOAD command from an unknown source"
+  },
+  {
+    "baseline": "r7_scoped_general_control.params",
+    "case": "r7_scoped_general_control",
+    "expect": {
+      "exit": 1,
+      "results": {
+        "R7": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.9",
+    "kind": "control",
+    "log": "r7_scoped_general_control.ulg",
+    "options": [],
+    "rules": "rules_r7_all.toml",
+    "what": "control for r7_scoped_general"
+  },
+  {
+    "baseline": "unknown_messages.params",
+    "case": "unknown_messages",
+    "expect": {
+      "exit": 0,
+      "results": {},
+      "skipped": 2,
+      "status": "PASS"
+    },
+    "item": "1.10",
+    "kind": "attack",
+    "log": "unknown_messages.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "a record of an unknown type and a data record without a subscription"
+  },
+  {
+    "baseline": "unknown_messages_control.params",
+    "case": "unknown_messages_control",
+    "expect": {
+      "exit": 0,
+      "results": {},
+      "skipped": 0,
+      "status": "PASS"
+    },
+    "item": "1.10",
+    "kind": "control",
+    "log": "unknown_messages_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for unknown_messages"
+  },
+  {
+    "baseline": "mode_req_uint64.params",
+    "case": "mode_req_uint64",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "failsafe_flags.mode_req_global_position is uint64_t in the log; PX4 defines uint32_t"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.11",
+    "kind": "attack",
+    "log": "mode_req_uint64.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "mode_req_global_position declared uint64_t, bit 36 set"
+  },
+  {
+    "baseline": "mode_req_uint64_control.params",
+    "case": "mode_req_uint64_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "required failsafe_flags global_position_invalid true in flight"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.11",
+    "kind": "control",
+    "log": "mode_req_uint64_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for mode_req_uint64"
+  }
+]

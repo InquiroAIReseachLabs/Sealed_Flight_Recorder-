@@ -1,6 +1,6 @@
 # Onboard parameters for Vehicle 1
 #
-# Initial parameters of custom_detection.ulg (definitions-section 'P' records)
+# Parameters of custom_detection.ulg in effect at the first ARM
 # Firmware: 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4
 #
 # Vehicle-Id Component-Id Name Value Type

@@ -246,11 +246,13 @@ fn table_prints_results_and_event_count() {
         "R1    PASS",
         "R2    PASS",
         "R3    PASS",
-        "R4    PASS",
+        // SITL has no RC link and no ground station: those flags are true in flight, not
+        // required by the mission mode, so R4 warns and names them.
+        "R4    WARN    no failsafe in flight         never true in flight; warning: failsafe_flags auto_mission_missing, gcs_connection_lost, manual_control_signal_lost, offboard_control_signal_lost true in flight",
         "R5    PASS",
         "R6    N/A",
         "events    22",
-        "status    PASS",
+        "status    WARN",
     ] {
         assert!(s.contains(line), "missing `{line}` in:\n{s}");
     }
@@ -432,7 +434,7 @@ fn second_flight_against_first_baseline_shows_only_unignored_differences() {
     assert_eq!(
         r3,
         [
-            "R3    FAIL    parameters match baseline     3 differ",
+            "R3    FAIL    parameters match baseline     3 differ; ignore [COM_FLIGHT_UUID, LND_FLIGHT_T_HI, LND_FLIGHT_T_LO, EKF2_MAG_DECL, CAL_BARO*_OFF, ASPD_SCALE_*, COM_MODE*_HASH] suppressed 4 difference(s); baseline file sha256 2a9d3eadefab6e234295a2c43f8b8dbec92744812fc7edecec1ceada763c1b63 (operator-supplied)",
             "              - CAL_BARO1_ID: baseline i32:0, flown absent",
             "              - CAL_BARO2_ID: baseline i32:0, flown absent",
             "              - CAL_BARO3_ID: baseline i32:0, flown absent",

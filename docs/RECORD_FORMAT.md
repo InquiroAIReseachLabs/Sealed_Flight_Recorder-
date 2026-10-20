@@ -35,18 +35,18 @@ A record holds exactly these thirteen fields (`RECORD_FIELDS` in `crates/sfr-cor
 
 | Field | Type | Contents |
 |---|---|---|
-| `baseline` | object | the baseline the rules compared against: `firmware`, `ignore`, `parameters` |
+| `baseline` | object | the baseline the rules compared against: `firmware`, `ignore`, `parameters`, `sha256` |
 | `config` | object | the configuration that flew: `firmware`, `parameters`, `watched_parameters` |
 | `events` | array | the timeline, in sequence order |
-| `log` | object | the log's identity: `blake3`, `file_name`, `firmware`, `sha256`, `size`, `vehicle` |
+| `log` | object | the log's identity: `blake3`, `file_name`, `firmware`, `sha256`, `size`, `skipped`, `vehicle`, `vehicle_status_instances` |
 | `merkle` | object | `algorithm`, `leaf_count`, `root`, `sections` |
 | `results` | array | one result per rule, in rule-id order |
 | `rules` | object | the rules file: `sha256`, `text` |
-| `schema_version` | integer | `3`. Schemas 1 and 2 are not verified: their leaves are not bound to a section and the signature does not cover the tree's shape. Seal the log again |
+| `schema_version` | integer | `4`. Schemas 1 and 2 are not verified: their leaves are not bound to a section and the signature does not cover the tree's shape. Schema 3 is not verified: its results come from rules that read less of the log (one `vehicle_status` instance, field names without their types). Seal the log again |
 | `seal` | object | who sealed, when, and how the key is held |
 | `sealed_topics` | array | one digest per instance of each sealed topic; empty without `[sealed_topics]` |
 | `signature` | object | `algorithm`, `value` |
-| `status` | string | `PASS` or `FAIL` |
+| `status` | string | `PASS`, `WARN`, `FAIL` or `NO ARMED FLIGHT`, computed from the results |
 | `tool` | object | `build_commit`, `name`, `version` |
 
 ### `tool`
@@ -57,6 +57,7 @@ A record holds exactly these thirteen fields (`RECORD_FIELDS` in `crates/sfr-cor
 
 | Member | Value |
 |---|---|
+| `allow_ignore_all` | `true` when the rules file has an ignore pattern that matches every parameter name (`*`), so R3 compared none, and `seal` was given `--allow-ignore-all`; else `false` |
 | `allow_untested_version` | `true` when the log's PX4 version is outside v1.14 to v1.17, or unreadable, and `seal` was given `--allow-untested-version`; else `false` |
 | `certificate_chain` | `null`, or beside a signer certificate, the intermediate CA certificates given with `seal --chain`, nearest the signer first, each the padded standard base64 (RFC 4648) of its DER |
 | `crypto_crates` | array of `{"name": ..., "version": ...}`, sorted by name: `blake3`, `ed25519-dalek`, `sha2` (`RUSTCRYPTO_CRATES` in `crates/sfr-core/src/crypto.rs`) |
@@ -79,6 +80,8 @@ A record holds exactly these thirteen fields (`RECORD_FIELDS` in `crates/sfr-cor
 | `firmware` | `git`: the `ver_sw` info message, or null; `ver_sw_release`: that info message as `0x` and eight lowercase hex digits, or null; `version`: `major.minor.patch` with a `-rc`, `-beta`, `-alpha` or `-dev` suffix from its last byte (`version_string` in `crates/sfr-core/src/ingest.rs`), or null |
 | `sha256` | lowercase hex SHA-256 of the whole file |
 | `size` | length in bytes, a decimal string |
+| `skipped` | what the reader skipped: `unknown_records` (records of a type it does not know), `orphan_data_records` (data records for a message id with no subscription), `regions` (regions skipped to reach an appended-data offset, a record crossing the offset dropped) and `region_bytes` (their bytes, a decimal string); the report says `sealed with N skipped messages` when any count is above 0 |
+| `vehicle_status_instances` | the number of `vehicle_status` instances with data records; the rules read every one |
 | `vehicle` | `system_type` (MAVLink `MAV_TYPE`, integer) and `is_vtol` (boolean) from the first `vehicle_status` sample, each null when absent; `vtol_type`: null for a vehicle that is not VTOL, else `{"name": ..., "value": ...}` from parameter `VT_TYPE` (`tailsitter` for 0, `tiltrotor` for 1, `standard` for 2, `unknown(<n>)` otherwise, and `unknown` with value null without an int32 `VT_TYPE`) |
 
 A vehicle counts as VTOL when `vehicle_status.is_vtol` is true on any sample, so `vtol_type` can be set while `is_vtol`, taken from the first sample, is false.
@@ -86,10 +89,10 @@ A vehicle counts as VTOL when `vehicle_status.is_vtol` is true on any sample, so
 ### `config`, `baseline`, `rules`, `results`, `status`
 
 - `config`: `firmware` (the log's version string, as `log.firmware.version`, or null); `parameters` (every parameter at log start, the 'P' records before the first subscription, name to typed value, sorted by name); `watched_parameters` (the names in `[watched_parameters]`, sorted; empty without that section).
-- `baseline`: `firmware` (the version, then a space and the git hash prefix if the `# Firmware:` line gives one: `1.17.0 d6f12ad1`); `parameters` (name to typed value); `ignore` (the `parameters.ignore` patterns, in file order). With `rules`, this is everything a deep verify needs besides the log.
+- `baseline`: `firmware` (the version, then a space and the git hash prefix if the `# Firmware:` line gives one: `1.17.0 d6f12ad1`); `parameters` (name to typed value); `ignore` (the `parameters.ignore` patterns, in file order); `sha256` (lowercase hex SHA-256 of the baseline file the operator gave, or null). With `rules`, this is everything a deep verify needs besides the log.
 - `rules`: `text` (the whole rules file as UTF-8) and `sha256` (lowercase hex SHA-256 of `text`'s UTF-8 bytes).
-- `results`: one object per rule, R1 to R7 and then each enabled optional rule X1 to X5, with `id`, `name`, `status` (`PASS`, `FAIL` or `N/A`), `expected` and `found` (strings) and `detail` (array of strings, one per finding). An `id` is one uppercase ASCII letter and a decimal number with no leading zero (`R7`, `X1`; not `R01` or `r1`). The array is in strictly increasing id order, by letter then number as an integer (`R2`, `R10`, `X1`). [RULES.md](RULES.md) gives each rule.
-- `status`: `FAIL` when any result is `FAIL`, else `PASS`.
+- `results`: one object per rule, R1 to R7 and then each enabled optional rule X1 to X5, with `id`, `name`, `status` (`PASS`, `WARN`, `FAIL` or `N/A`), `expected` and `found` (strings) and `detail` (array of strings, one per finding). An `id` is one uppercase ASCII letter and a decimal number with no leading zero (`R7`, `X1`; not `R01` or `r1`). The array is in strictly increasing id order, by letter then number as an integer (`R2`, `R10`, `X1`). [RULES.md](RULES.md) gives each rule.
+- `status`: `FAIL` when any result is `FAIL`; else `NO ARMED FLIGHT` when R5 is `N/A` (the log has no ARM and no DISARM, so no flight was checked); else `WARN` when any result is `WARN`; else `PASS` (`Overall::of` in `crates/sfr-core/src/evaluate.rs`).
 
 ### `sealed_topics`
 
@@ -158,7 +161,7 @@ The signed payload is, byte for byte (`signed_payload` in `crates/sfr-core/src/s
 |---|---|
 | ASCII `SFR-RECORD-V1` | the domain separation prefix |
 | `0x00` | a separator |
-| `0x00 0x00 0x00 0x03` | `schema_version` as a 4-byte big-endian unsigned integer |
+| `0x00 0x00 0x00 0x04` | `schema_version` as a 4-byte big-endian unsigned integer |
 | 8 bytes | the tree size (`merkle.leaf_count`), big-endian unsigned |
 | 8 times 8 bytes | the number of leaves in each section, big-endian unsigned, in this order: seal context, `log`, `config`, `baseline`, `rules`, `results`, `sealed_topics`, `events` (the values of `merkle.sections`; the first five are always 1) |
 | the Merkle root | its raw bytes, not hex |
@@ -176,17 +179,17 @@ The signature is pure Ed25519 (RFC 8032, no prehash) over that payload, stored a
 `sfr verify --pubkey <sfr.pub>` (standalone) checks, in this order (`standalone` in `crates/sfr-core/src/verify.rs`):
 
 1. The size is at most `MAX_RECORD_BYTES`.
-2. `schema_version` is `3`. Any other value is rejected, never guessed at; `sfr` names an unknown version when the file parses within the value subset, even if not canonical, and otherwise reports the parse error.
+2. `schema_version` is `4`. Any other value is rejected, never guessed at; `sfr` names an unknown version when the file parses within the value subset, even if not canonical, and otherwise reports the parse error.
 3. The bytes are canonical, and the object holds exactly the thirteen fields.
-4. Every `results` element is an object whose `id` is a rule id, in strictly increasing order; every `sealed_topics` element is an object with a string `topic` and an integer `multi_id`, in strictly increasing order; event `i` has `seq` `i`.
+4. Every `results` element is an object whose `id` is a rule id, in strictly increasing order, with a `status` of `PASS`, `WARN`, `FAIL` or `N/A`; R1 to R7 each appear exactly once, and any other id is X1 to X5; every `sealed_topics` element is an object with a string `topic` and an integer `multi_id`, in strictly increasing order; event `i` has `seq` `i`.
 5. `merkle` holds exactly its four members, the algorithm is `sha256-rfc6962`, and `leaf_count`, `root` and `sections` equal the values recomputed from the leaves.
-6. `rules.text` and `rules.sha256` are strings, and `rules.sha256` is the SHA-256 of `rules.text`.
-7. `status` is a string that agrees with the results.
+6. `rules.text` and `rules.sha256` are strings, `rules.sha256` is the SHA-256 of `rules.text`, and `rules.text` is a rules file `sfr` reads.
+7. `status` is a string equal to the status computed from the results.
 8. `seal.key_fingerprint` is a string, the fingerprint of the given public key.
 9. `signature` holds exactly `algorithm` `ed25519` and `value`; `value` is 128 and `merkle.root` 64 lowercase hex digits; the signature over the payload, built from the recorded root and the leaf counts the arrays hold, verifies under the given key.
 10. `seal.key_custody` is one of the three values.
 11. `seal.crypto_crates` is an array of objects with string `name` and `version`, and `seal.time_utc` is a string.
-12. `seal.allow_untested_version` is a boolean.
+12. `seal.allow_untested_version` and `seal.allow_ignore_all` are booleans, and `seal.allow_ignore_all` is true exactly when the embedded rules file ignores every parameter.
 13. `seal.signer_certificate` is null or base64, and `seal.certificate_chain` is null or, beside a signer certificate, a non-empty array of base64 strings.
 
 With `--trust-anchor` instead of `--pubkey`, step 9 uses the key in `seal.signer_certificate`, and once the record verifies:
@@ -255,7 +258,7 @@ They need:
 - **OpenSSL 3.0 or later** for the signature: `openssl pkeyutl -rawin` (Ed25519 over the raw message) arrived in OpenSSL 3.0, and 1.1.1 has no `-rawin` (not run). The commands were also run with OpenSSL `3.0.13`. LibreSSL and other programs installed as `openssl` were not tested.
 - **b3sum** for BLAKE3 (`cargo install b3sum --locked`, or a package); CI installs b3sum `1.8.7`, the version of the `blake3` crate `sfr` uses.
 - **coreutils** (`sha256sum`, `wc`), `grep`, `sed` and **bash**, whose `printf` turns hex into bytes.
-- **Python 3**, standard library only, for the Merkle root and the structural checks.
+- **Python 3.11 or later**, standard library only, for the reference verifier (step 4).
 
 The commands write only into `try/`.
 
@@ -289,7 +292,7 @@ if [ "$fp" = "$recorded" ]; then echo "key fingerprint matches: sha256:$fp"; els
 ```
 
 ```text doc-output
-key fingerprint matches: sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be
+key fingerprint matches: sha256:1ab979d4bed49693df5e1482cfb3a5432a6dd632de3c95dc24f7c9896c7eec45
 ```
 
 ### 3. The signature over the recorded Merkle root and tree shape
@@ -324,126 +327,16 @@ Signature Verified Successfully
 
 `openssl pkeyutl -verify` exits 0 and prints `Signature Verified Successfully` only for a good signature by that key; for any other it prints `Signature Verification Failure` and exits 1.
 
-### 4. Structure, order, digests and the Merkle root
+### 4. Every standalone check: the reference verifier
 
-This script does every standalone check above except the signature and the key fingerprint, which steps 2 and 3 do: canonical form, field set, member types, leaf order, rules digest, status, custody value, and the Merkle root and leaf count recomputed from the content.
+`tools/reference_verifier/sfr_ref_verify.py` is a separate program, written from this page alone: it imports nothing from `sfr`, needs only the Python 3.11+ standard library, and implements Ed25519 itself (RFC 8032). It does every standalone check above: strict JSON, canonical form, field set and member types, results R1 to R7 exactly once each with known statuses, leaf order, rules digest, the overall status, the flags, custody value, the Merkle root, the key fingerprint and the signature. Its header lists what it does not check: certificate chains and CRLs, the custody policy (it accepts an evaluation key), the report, the log, and the rules file beyond its TOML syntax and ignore list. Its test vectors (`tools/reference_verifier/vectors/`, written by `make_vectors.py`) include records built to trip a lenient JSON reader; `crates/sfr/tests/reference_verifier.rs` requires it and `sfr verify` to give each vector the verdict `expected.json` lists.
 
 ```sh doc-test
-mkdir -p try
-cat > try/sfr_check.py <<'EOF'
-# sfr_check.py: standalone checks of a schema 3 record, without sfr (docs/RECORD_FORMAT.md).
-# Everything but the signature, which openssl checks. Python 3 standard library only.
-import hashlib, json, re, sys
-
-def quote(s):
-    esc = {'"': '\\"', "\\": "\\\\", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
-    return '"' + "".join(esc.get(c) or ("\\u%04x" % ord(c) if ord(c) < 0x20 else c) for c in s) + '"'
-
-def jcs(v):  # RFC 8785 for the record's subset: null, booleans, safe integers, strings, arrays, objects
-    if v is None or isinstance(v, bool):
-        return {None: "null", True: "true", False: "false"}[v]
-    if isinstance(v, int) and abs(v) <= 2**53 - 1:
-        return str(v)
-    if isinstance(v, str):
-        return quote(v)
-    if isinstance(v, list):
-        return "[" + ",".join(jcs(x) for x in v) + "]"
-    if isinstance(v, dict):  # keys in UTF-16 code unit order
-        keys = sorted(v, key=lambda k: k.encode("utf-16-be"))
-        return "{" + ",".join(quote(k) + ":" + jcs(v[k]) for k in keys) + "}"
-    raise ValueError("not in the record's value subset: %r" % (v,))
-
-def unique(pairs):
-    if len({k for k, _ in pairs}) != len(pairs):
-        raise ValueError("duplicate key")
-    return dict(pairs)
-
-def no_float(text):
-    raise ValueError("floating-point number " + text)
-
-def sha256(b):
-    return hashlib.sha256(b).digest()
-
-def mth(h):  # RFC 6962 Merkle tree hash of leaf hashes
-    if len(h) == 1:
-        return h[0]
-    k = 1
-    while k * 2 < len(h):
-        k *= 2
-    return sha256(b"\x01" + mth(h[:k]) + mth(h[k:]))
-
-def check(path):
-    raw = open(path, "rb").read()
-    r = json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_float=no_float, parse_constant=no_float)
-    if r.get("schema_version") != 3:
-        return "unknown schema_version %r; this checker knows 3 only" % r.get("schema_version")
-    if jcs(r).encode("utf-8") != raw:
-        return "not in canonical form"
-    fields = {"schema_version", "tool", "seal", "log", "config", "baseline", "rules", "results",
-              "sealed_topics", "events", "status", "merkle", "signature"}
-    if set(r) != fields:
-        return "fields differ from the schema: %s" % sorted(set(r) ^ fields)
-    obj = lambda v, *keys: isinstance(v, dict) and all(k in v for k in keys)
-    if not (obj(r["seal"], "key_custody", "key_fingerprint", "time_utc", "crypto_crates")
-            and obj(r["merkle"]) and obj(r["signature"], "value") and obj(r["rules"], "text", "sha256")
-            and all(isinstance(x, list) for x in (r["results"], r["sealed_topics"], r["events"]))):
-        return "a field is missing or of the wrong type"
-    seal = r["seal"]
-    if not (all(isinstance(seal[k], str) for k in ("key_custody", "key_fingerprint", "time_utc"))
-            and isinstance(seal["crypto_crates"], list)
-            and all(obj(c, "name", "version") and isinstance(c["name"], str) and isinstance(c["version"], str)
-                    for c in seal["crypto_crates"])):
-        return "a seal member is missing or of the wrong type"
-    ids = [re.fullmatch(r"([A-Z])([1-9][0-9]*)", x["id"]) if obj(x, "id") and isinstance(x["id"], str) else None
-           for x in r["results"]]
-    if not all(ids) or [(m[1], int(m[2])) for m in ids] != sorted({(m[1], int(m[2])) for m in ids}):
-        return "results are not in strictly increasing rule-id order"
-    if not all(obj(t, "topic", "multi_id") and isinstance(t["topic"], str) and type(t["multi_id"]) is int
-               for t in r["sealed_topics"]):
-        return "a sealed topic has no topic and multi_id"
-    topics = [(t["topic"], t["multi_id"]) for t in r["sealed_topics"]]
-    if topics != sorted(set(topics)):
-        return "sealed topics are not in strictly increasing topic and multi_id order"
-    if [e.get("seq") if isinstance(e, dict) else None for e in r["events"]] != list(range(len(r["events"]))):
-        return "events are not in sequence order"
-    text, digest = r["rules"]["text"], r["rules"]["sha256"]
-    if not (isinstance(text, str) and isinstance(digest, str)) or digest != sha256(text.encode("utf-8")).hex():
-        return "rules.sha256 does not match rules.text"
-    if r["status"] != ("FAIL" if any(obj(x) and x.get("status") == "FAIL" for x in r["results"]) else "PASS"):
-        return "status disagrees with the results"
-    if seal["key_custody"] not in ("pkcs11-token", "tpm-sealed", "file-evaluation"):
-        return "unknown key custody"
-    if not isinstance(seal.get("allow_untested_version"), bool):
-        return "seal.allow_untested_version must be a boolean"
-    context = {"schema_version": r["schema_version"], "tool": r["tool"], "seal": r["seal"]}
-    # Each section's leaves carry the section's tag byte, in the hash and in the signed counts.
-    sections = [("seal_context", 1, [context]), ("log", 2, [r["log"]]), ("config", 3, [r["config"]]),
-                ("baseline", 4, [r["baseline"]]), ("rules", 5, [r["rules"]]), ("results", 6, r["results"]),
-                ("sealed_topics", 7, r["sealed_topics"]), ("events", 8, r["events"])]
-    leaves = [(tag, x) for _, tag, xs in sections for x in xs]
-    root = mth([sha256(b"\x00" + bytes([tag]) + jcs(x).encode("utf-8")) for tag, x in leaves]).hex()
-    counts = {name: len(xs) for name, _, xs in sections}
-    if r["merkle"] != {"algorithm": "sha256-rfc6962", "leaf_count": len(leaves), "root": root, "sections": counts}:
-        return "merkle differs: computed root %s over %d leaves" % (root, len(leaves))
-    sig = r["signature"]
-    if set(sig) != {"algorithm", "value"} or sig["algorithm"] != "ed25519" \
-            or not (isinstance(sig["value"], str) and re.fullmatch(r"[0-9a-f]{128}", sig["value"])):
-        return "signature must hold exactly algorithm ed25519 and a value of 128 lowercase hex digits"
-    print("structure, order, rules digest and status: ok")
-    print("merkle root %s over %d leaves: matches the record" % (root, len(leaves)))
-    return None
-
-problem = check(sys.argv[1])
-if problem:
-    print("FAILED: " + problem)
-    sys.exit(1)
-EOF
-python3 -I try/sfr_check.py examples/reports/vtol_transition.sfr
+python3 -I tools/reference_verifier/sfr_ref_verify.py examples/reports/vtol_transition.sfr examples/reports/sfr.pub
 ```
 
 ```text doc-output
-structure, order, rules digest and status: ok
-merkle root 745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430 over 34 leaves: matches the record
+VERIFIED
 ```
 
 Steps 2 and 3 show the record is unchanged since the holder of that key signed it. Step 1 shows the log is the one it was sealed from.
@@ -456,11 +349,11 @@ Change the command id of the first COMMAND event in `examples/reports/vtol_trans
 mkdir -p try
 sed 's/"command":211,/"command":311,/' examples/reports/vtol_transition.sfr > try/changed.sfr
 rc=0
-python3 -I try/sfr_check.py try/changed.sfr || rc=$?
+python3 -I tools/reference_verifier/sfr_ref_verify.py try/changed.sfr examples/reports/sfr.pub || rc=$?
 echo "exit $rc"
 ```
 
 ```text doc-output
-FAILED: merkle differs: computed root 7c8b315562e5c20e420dd3ac1efc0ee03dd3776c68ba77f6bd2a05f9a5ba0392 over 34 leaves
+FAILED: merkle differs from the leaves: root 78ad1b57928f3c6ab6dc6407ead4012b77ed6fd96e3c84f1d9f782515640587f over 34 leaves
 exit 1
 ```
