@@ -755,11 +755,15 @@ fn flips_in_sealed_topic_messages(case: SealedCase, rng_seed: u64) {
         let mut t = ulg.clone();
         t[at] ^= x;
         let named = format!("sealed topic {topic} instance {multi_id} ");
+        // A flip that makes a timestamp go back leaves a log that no longer parses; the reason
+        // names the topic and instance.
+        let unparsed = format!("data record for `{topic}` instance {multi_id} (message id ");
         match verify(&rec, Some(&mut &t[..]), &crypto, &pk) {
             Err(VerifyError::Mismatch(m)) => {
                 let all: Vec<&String> = std::iter::once(&m.first).chain(&m.also).collect();
                 assert!(
-                    all.iter().any(|l| l.starts_with(&named)),
+                    all.iter().any(|l| l.starts_with(&named)
+                        || (l.contains("the log no longer parses") && l.contains(&unparsed))),
                     "{topic} flip {i} at byte {at} (xor {x:#04x}) did not name {named:?}: {all:?}"
                 );
             }

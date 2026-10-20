@@ -624,6 +624,193 @@
     "what": "control for resubscribe_identical"
   },
   {
+    "baseline": "failsafe_backdated.params",
+    "case": "failsafe_backdated",
+    "expect": {
+      "exit": 3,
+      "results": {},
+      "status": null
+    },
+    "item": "2.4",
+    "kind": "attack",
+    "log": "failsafe_backdated.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "a vehicle_status sample in failsafe written in flight with a timestamp before the ARM"
+  },
+  {
+    "baseline": "failsafe_backdated_control.params",
+    "case": "failsafe_backdated_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "true in flight 1 time(s)"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "2.4",
+    "kind": "control",
+    "log": "failsafe_backdated_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for failsafe_backdated"
+  },
+  {
+    "baseline": "mav_type_24_not_px4_vtol.params",
+    "case": "mav_type_24_not_px4_vtol",
+    "expect": {
+      "exit": 0,
+      "found": {
+        "R6": "system_type 24 is a MAVLink VTOL MAV_TYPE that PX4's is_vtol does not count"
+      },
+      "results": {
+        "R6": "N/A"
+      },
+      "status": "PASS"
+    },
+    "item": "2.2",
+    "kind": "attack",
+    "log": "mav_type_24_not_px4_vtol.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "system_type 24, a MAVLink VTOL type PX4 does not count, with is_vtol false (no R6 FAIL)"
+  },
+  {
+    "baseline": "mav_type_24_not_px4_vtol_control.params",
+    "case": "mav_type_24_not_px4_vtol_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R6": "a VTOL MAV_TYPE, but is_vtol is false on every sample"
+      },
+      "results": {
+        "R6": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "2.2",
+    "kind": "control",
+    "log": "mav_type_24_not_px4_vtol_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for mav_type_24_not_px4_vtol"
+  },
+  {
+    "baseline": "nav_state_beyond_max.params",
+    "case": "nav_state_beyond_max",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "cannot evaluate: vehicle_status.nav_state is 31 in flight"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "2.5",
+    "kind": "attack",
+    "log": "nav_state_beyond_max.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "nav_state at NAVIGATION_STATE_MAX in flight, with a flag true that AUTO_LOITER requires"
+  },
+  {
+    "baseline": "nav_state_beyond_max_control.params",
+    "case": "nav_state_beyond_max_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "required failsafe_flags global_position_invalid true in flight"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "2.5",
+    "kind": "control",
+    "log": "nav_state_beyond_max_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for nav_state_beyond_max"
+  },
+  {
+    "baseline": "hazard_whole_flight.params",
+    "case": "hazard_whole_flight",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "hazard failsafe_flags geofence_breached true for the whole flight"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "2.3",
+    "kind": "attack",
+    "log": "hazard_whole_flight.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "a hazard flag (geofence_breached) true for the whole flight, not required by the mode"
+  },
+  {
+    "baseline": "hazard_whole_flight_control.params",
+    "case": "hazard_whole_flight_control",
+    "expect": {
+      "exit": 0,
+      "found": {
+        "R4": "warning: failsafe_flags geofence_breached true in flight"
+      },
+      "results": {
+        "R4": "WARN"
+      },
+      "status": "WARN"
+    },
+    "item": "2.3",
+    "kind": "control",
+    "log": "hazard_whole_flight_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for hazard_whole_flight"
+  },
+  {
+    "baseline": "clipping_decoy_field.params",
+    "case": "clipping_decoy_field",
+    "expect": {
+      "exit": 3,
+      "results": {},
+      "status": null
+    },
+    "item": "2.1",
+    "kind": "attack",
+    "log": "clipping_decoy_field.ulg",
+    "options": [],
+    "rules": "rules_x4.toml",
+    "what": "a scalar field named accel_clipping[0] before the real accel_clipping array"
+  },
+  {
+    "baseline": "clipping_decoy_field_control.params",
+    "case": "clipping_decoy_field_control",
+    "expect": {
+      "exit": 1,
+      "results": {
+        "X4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "2.1",
+    "kind": "control",
+    "log": "clipping_decoy_field_control.ulg",
+    "options": [],
+    "rules": "rules_x4.toml",
+    "what": "control for clipping_decoy_field"
+  },
+  {
     "baseline": "mode_req_uint64.params",
     "case": "mode_req_uint64",
     "expect": {

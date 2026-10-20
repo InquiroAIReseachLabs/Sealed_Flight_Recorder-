@@ -565,6 +565,13 @@ def run(path, rules, required, ptime, param_index, debug):
     if redefined:
         raise SystemExit("oracle.py: %s has %d format record(s) after the definitions section;"
                          " refused" % (path, redefined))
+    # The ULog specification: the timestamps of one subscription (msg_id) are monotonic
+    # increasing. sfr refuses a log whose timestamp goes back within one; so does this oracle.
+    for d in u.data_list:
+        t = d.data['timestamp'].astype(np.int64)
+        if len(t) > 1 and (t[1:] < t[:-1]).any():
+            raise SystemExit("oracle.py: %s: a timestamp of %s (msg_id %d) goes back; refused"
+                             % (path, d.name, d.msg_id))
     merge_resubscriptions(u)
     warn(debug, "data-section P before first A:", u._sfr_p_before_add)
 
@@ -954,6 +961,30 @@ def run(path, rules, required, ptime, param_index, debug):
                         windows.append([ts[i], ts[i]])
                     elif win[i]:
                         windows[-1][1] = ts[i]
+            # A nav_state in a window at or above NAVIGATION_STATE_MAX of every tag the log's
+            # version selects: no mode requirement names it, so R4 cannot evaluate (FAIL).
+            nav_max = max(PX4['msgs'][r['topics']['vehicle_status']]['constants']['NAVIGATION_STATE_MAX']
+                          for r in rels)
+            for t, st in zip(vs_topics, states):
+                rows = st['armed_rows']
+                for i in range(t.n):
+                    if (bool(rows[i]) or (i > 0 and bool(rows[i - 1]))) and t['nav_state'][i] >= nav_max:
+                        bad = True
+            # A hazard-class flag (sfr's HAZARD_FLAGS) true on every failsafe_flags sample of a
+            # window: FAIL whatever the mode requires.
+            hazards = {'fd_critical_failure', 'fd_esc_arming_failure', 'fd_imbalanced_prop',
+                       'fd_motor_failure', 'battery_unhealthy', 'primary_geofence_breached',
+                       'geofence_breached', 'mission_failure', 'navigator_failure',
+                       'vtol_fixed_wing_system_failure', 'wind_limit_exceeded',
+                       'flight_time_limit_exceeded'}
+            for fft in ff_by_inst.values():
+                for flag in hazards:
+                    if fft.types.get(flag) != 'bool':
+                        continue
+                    for a, b in windows:
+                        ks = [k for k, tk in enumerate(fft['timestamp']) if a <= tk <= b]
+                        if ks and all(fft[flag][k] != 0 for k in ks):
+                            bad = True
             # Flags: every failsafe_flags instance, in any instance's window; nav_state from the
             # vehicle_status instance of the same number, else the lowest.
             by_num = {t.instance: t for t in vs_topics}
@@ -990,7 +1021,8 @@ def run(path, rules, required, ptime, param_index, debug):
             results['R5'] = 'FAIL' if any(st['armed_rows'] and st['armed_rows'][-1]
                                           or st['arms'] != st['disarms'] for st in states) else 'PASS'
         # R6
-        vtol_types = range(19, 26)
+        # PX4's is_vtol (commander_helper.cpp, every supported tag): system_type 19 to 23.
+        vtol_types = range(19, 24)
         sys_typed = all(t.types.get('system_type', 'uint8_t') == 'uint8_t' for t in vs_topics)
         if not vs_ok(['is_vtol']) or not sys_typed:
             results['R6'] = 'FAIL'

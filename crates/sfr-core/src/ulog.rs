@@ -675,6 +675,22 @@ fn parse_format(body: &[u8], offset: u64) -> Result<(String, Vec<FieldDef>), Ulo
         if fname.len() > MAX_NAME_LEN {
             return Err(too_long("a field name"));
         }
+        // The ULog specification: "`field_name` must consist of the characters in the set
+        // `a-zA-Z0-9_`". `[`, `]` and `.` are what flattening adds (`x[0]`, `a.b`); a declared
+        // name holding one could stand for another field's flattened name. Padding is exempt:
+        // the specification's own example is `_padding[3]`, and no rule reads padding.
+        if let Some(c) = fname
+            .chars()
+            .find(|c| matches!(c, '[' | ']' | '.'))
+            .filter(|_| !fname.starts_with("_padding"))
+        {
+            return Err(malformed(
+                offset,
+                format!(
+                    "format `{name}`: field name `{fname}` contains `{c}`; the ULog specification allows letters, digits and `_` only"
+                ),
+            ));
+        }
         let (ty, array) = parse_type(ty, offset)?;
         if matches!(&ty, FieldType::Nested(t) if t.len() > MAX_NAME_LEN) {
             return Err(too_long("a field type name"));
@@ -838,6 +854,18 @@ fn flatten(
         let name = |i: usize| fields.get(i).map_or("", |f| f.name.as_str());
         name(a).cmp(name(b))
     });
+    // Two flattened fields of one name would make a reader pick one of them: refused.
+    let name = |i: &usize| fields.get(*i).map_or("", |f| f.name.as_str());
+    if let Some((a, _)) = by_name
+        .iter()
+        .zip(by_name.iter().skip(1))
+        .find(|(a, b)| name(a) == name(b))
+    {
+        return Err(malformed(
+            offset,
+            format!("format `{topic}` flattens to the field `{}` twice", name(a)),
+        ));
+    }
     let layout = Layout {
         size,
         fields,
@@ -855,6 +883,11 @@ fn flatten(
 struct Sub {
     layout: Rc<Layout>,
     ts: FlatField,
+    /// The timestamp of this subscription's last data record.
+    last: Option<u64>,
+    /// Topic and instance, for messages.
+    topic: String,
+    multi_id: u8,
 }
 
 /// The same payload size and the same flattened fields: names, offsets and types, in order.
@@ -1185,13 +1218,22 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                     }
                 }
                 visitor.subscription(msg_id, multi_id, &topic, &layout);
-                subs.insert(msg_id, Sub { layout, ts });
+                subs.insert(
+                    msg_id,
+                    Sub {
+                        layout,
+                        ts,
+                        last: None,
+                        topic: topic.clone(),
+                        multi_id,
+                    },
+                );
             }
             b'R' => {}
             b'D' => {
                 let msg_id = c.u16("data message id")?;
                 let payload = c.rest();
-                match subs.get(&msg_id) {
+                match subs.get_mut(&msg_id) {
                     Some(sub) => {
                         if payload.len() < sub.layout.size {
                             return Err(malformed(
@@ -1207,6 +1249,19 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                             .ts
                             .read_u64(payload)
                             .ok_or_else(|| malformed(start, "data record timestamp"))?;
+                        // The ULog specification: "The timestamp must always be monotonic
+                        // increasing for a message series with the same `msg_id`". PX4 logs
+                        // repeat a timestamp; none goes back.
+                        if let Some(prev) = sub.last.filter(|&p| ts < p) {
+                            return Err(malformed(
+                                start,
+                                format!(
+                                    "data record for `{}` instance {} (message id {msg_id}) has timestamp {ts}, earlier than {prev} in the record before it; the ULog specification requires the timestamps of one subscription to be monotonic increasing",
+                                    sub.topic, sub.multi_id
+                                ),
+                            ));
+                        }
+                        sub.last = Some(ts);
                         if ts > last_ts {
                             last_ts = ts;
                         }
@@ -1531,6 +1586,69 @@ pub(crate) mod tests {
         assert_eq!(c.subs.len(), 2);
         assert_eq!(c.data.len(), 2);
         assert_eq!(c.subs[0].2, c.subs[1].2, "one layout");
+    }
+
+    #[test]
+    fn a_field_name_that_could_stand_for_a_flattened_name_is_refused() {
+        // ULog spec: "`field_name` must consist of the characters in the set `a-zA-Z0-9_`".
+        let refused = |f: &str| {
+            let b = Builder::new(0).flags(&[]).format(f).sub(0, 0, "t");
+            read(&b.bytes[..], &mut Collect::default())
+                .expect_err("refused")
+                .to_string()
+        };
+        // A scalar named like the first element of the array after it.
+        let e = refused("t:uint64_t timestamp;uint32_t c[0];uint32_t[3] c;");
+        assert!(
+            e.contains("field name `c[0]` contains `[`; the ULog specification allows letters, digits and `_` only"),
+            "{e}"
+        );
+        // A name like a nested field's flattened name.
+        let e = refused("t:uint64_t timestamp;uint8_t a.b;");
+        assert!(e.contains("field name `a.b` contains `.`"), "{e}");
+        let e = refused("t:uint64_t timestamp;uint8_t x];");
+        assert!(e.contains("contains `]`"), "{e}");
+        // Padding, which no rule reads, may be named like the specification's example.
+        let b = Builder::new(0)
+            .flags(&[])
+            .format("t:uint64_t timestamp;uint8_t x;uint8_t _padding[3];")
+            .sub(0, 0, "t");
+        read(&b.bytes[..], &mut Collect::default()).unwrap();
+        // Two padding fields that flatten to one name are still refused.
+        let e = refused("t:uint64_t timestamp;uint8_t[2] _padding;uint8_t _padding[0];uint8_t x;");
+        assert!(
+            e.contains("flattens to the field `_padding[0]` twice"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_subscription_whose_timestamp_goes_back_is_refused() {
+        // ULog spec: "The timestamp must always be monotonic increasing for a message series
+        // with the same msg_id." A repeated timestamp, as PX4 logs have, is read.
+        let row = |ts: u64| [&ts.to_le_bytes()[..], &[7]].concat();
+        let log = |times: &[u64]| {
+            let mut b = Builder::new(0)
+                .flags(&[])
+                .format("t:uint64_t timestamp;uint8_t x;")
+                .sub(0, 0, "t")
+                .sub(1, 1, "t");
+            for &ts in times {
+                b = b.data(0, &row(ts));
+            }
+            // Another subscription's timestamps are its own.
+            b.data(1, &row(1))
+        };
+        let mut c = Collect::default();
+        read(&log(&[10, 20, 20, 30]).bytes[..], &mut c).unwrap();
+        assert_eq!(c.data.len(), 5);
+        let e = read(&log(&[10, 20, 19]).bytes[..], &mut Collect::default()).expect_err("refused");
+        assert!(
+            e.to_string().contains(
+                "data record for `t` instance 0 (message id 0) has timestamp 19, earlier than 20 in the record before it"
+            ),
+            "{e}"
+        );
     }
 
     #[test]

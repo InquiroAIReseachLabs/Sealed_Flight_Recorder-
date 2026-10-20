@@ -250,6 +250,53 @@ def resubscribe_identical(control):
     return log
 
 
+def clipping_decoy_field(control):
+    """vehicle_imu_status declares a scalar field named `accel_clipping[0]` before the real
+    array `uint32_t[3] accel_clipping`, so the two flatten to one name; the decoy stays 0 while
+    the real first axis clips 500 times in flight. A reader that takes the first field of a name
+    sees no clipping. The control declares the array alone: X4 fails on the clipping."""
+    log = Log().firmware()
+    log.format("vehicle_status", VS).format("failsafe_flags", FS)
+    decoy = "" if control else "uint32_t accel_clipping[0];"
+    imu = ("vehicle_imu_status:uint64_t timestamp;uint32_t accel_device_id;" + decoy
+           + "uint32_t[3] accel_clipping;float accel_vibration_metric;")
+    log.out += rec("F", imu.encode())
+    log.format("sensor_selection", [("uint64_t", "timestamp"), ("uint32_t", "accel_device_id")])
+    log.param_i("SYS_AUTOSTART", 4001).param_f("MPC_XY_VEL_MAX", 12.0)
+    log.sub(0, 0, "vehicle_status").sub(0, 1, "failsafe_flags")
+    log.sub(0, 2, "vehicle_imu_status").sub(0, 3, "sensor_selection")
+    for i in range(1, 9):
+        ts = i * S
+        log.data(1, {"timestamp": ts, "mode_req_global_position": 1 << 4})
+        log.data(0, vs_row(ts, in_flight(i)))
+        clip = 100 * max(0, min(i, 6) - 1)  # rises while armed, from 2 s to 6 s
+        payload = struct.pack("<QI", ts, 7) + (b"" if control else struct.pack("<I", 0))
+        payload += struct.pack("<3If", clip, 0, 0, 0.5)
+        log.raw("D", struct.pack("<H", 2) + payload)
+        log.data(3, {"timestamp": ts, "accel_device_id": 7})
+    return log
+
+
+def failsafe_backdated(control):
+    """vehicle_status samples one per second, armed from 2 s to 6 s; the sample written after
+    the 4 s one, in failsafe, carries the timestamp 1.5 s, before the ARM, so a reader that
+    places samples by timestamp sees the failsafe while disarmed. The control writes it at
+    4.5 s: failsafe in flight."""
+    log = Log().firmware()
+    log.format("vehicle_status", VS).format("failsafe_flags", FS)
+    log.param_i("SYS_AUTOSTART", 4001).param_f("MPC_XY_VEL_MAX", 12.0)
+    log.sub(0, 0, "vehicle_status").sub(0, 1, "failsafe_flags")
+    for i in range(1, 9):
+        ts = i * S
+        log.data(1, {"timestamp": ts, "mode_req_global_position": 1 << 4})
+        log.data(0, vs_row(ts, in_flight(i)))
+        if i == 4:
+            back = ts + S // 2 if control else S + S // 2
+            log.data(0, vs_row(back, True, failsafe=1))
+            log.data(0, vs_row(ts + S // 2 + 1, True))
+    return log
+
+
 def mode_req_uint64(control):
     """mode_req_global_position declared uint64_t with only bit 36 set: as 32 bits it reads 0,
     so the required flag would look not required."""
@@ -325,6 +372,36 @@ def vtol_mav_type_not_vtol(control):
         r["is_vtol"] = 1 if control else 0
         return r
     return flight(vs_kw=row)
+
+
+def mav_type_24_not_px4_vtol(control):
+    """system_type 24 with is_vtol false on every sample, and the transition fields of an aborted
+    transition. MAVLink counts 24 as a VTOL type; PX4's is_vtol (commander_helper.cpp, every
+    supported tag) counts 19 to 23 only, so the log does not contradict itself and R6 is N/A,
+    naming the type. The control is system_type 22, which PX4 counts: R6 cannot evaluate."""
+    def row(i):
+        r = VTOL_ROW(i)
+        r["is_vtol"] = 0
+        r["system_type"] = 22 if control else 24
+        return r
+    return flight(vs_kw=row)
+
+
+def nav_state_beyond_max(control):
+    """nav_state 31 in flight, NAVIGATION_STATE_MAX at v1.17.0, with global_position_invalid true
+    at 4 s and mode_req_global_position naming AUTO_LOITER (4). No mode requirement names state
+    31, so a reader that looks the flag up for it sees it as not required. The control flies in
+    AUTO_LOITER: the flag is required and R4 fails."""
+    return flight(vs_kw=lambda i: {"nav_state": 4 if control else 31},
+                  fs_kw=lambda i: {"global_position_invalid": 1 if i == 4 else 0})
+
+
+def hazard_whole_flight(control):
+    """failsafe_flags.geofence_breached true on every sample from the ARM through the disarm,
+    in AUTO_LOITER, whose mode requirements do not name it: a reader that fails only flags the
+    mode requires sees a warning. The control sets it on one sample in flight only: a warning
+    there too."""
+    return flight(fs_kw=lambda i: {"geofence_breached": 1 if (in_flight(i) or i == 7) and (not control or i == 4) else 0})
 
 
 def unknown_messages(control):
@@ -474,6 +551,7 @@ RULES = "rules.toml"
 RULES_R7 = "rules_r7_general.toml"
 RULES_R7_ALL = "rules_r7_all.toml"
 RULES_IGNORE_ALL = "rules_ignore_all.toml"
+RULES_X4 = "rules_x4.toml"
 
 RULE_FILES = {
     RULES: '''format = "sfr-rules/1"
@@ -503,6 +581,15 @@ ids = [211]
 
 [authorized_sources]
 sources = [{ system = 1, component = 1 }]
+''',
+    RULES_X4: '''format = "sfr-rules/1"
+
+[required_topics]
+topics = ["vehicle_status", "failsafe_flags"]
+
+[extended.vibration]
+max_accel_vibration_metric = 3.0
+max_accel_clipping = 10
 ''',
     RULES_IGNORE_ALL: '''format = "sfr-rules/1"
 
@@ -607,6 +694,37 @@ CASES = [
       "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}},
      {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
       "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}}),
+    ("failsafe_backdated", "2.4",
+     "a vehicle_status sample in failsafe written in flight with a timestamp before the ARM",
+     failsafe_backdated, RULES, [],
+     {"exit": 3, "status": None, "results": {}},
+     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"}, "found": {"R4": "true in flight 1 time(s)"}}),
+    ("mav_type_24_not_px4_vtol", "2.2",
+     "system_type 24, a MAVLink VTOL type PX4 does not count, with is_vtol false (no R6 FAIL)",
+     mav_type_24_not_px4_vtol, RULES, [],
+     {"exit": 0, "status": "PASS", "results": {"R6": "N/A"},
+      "found": {"R6": "system_type 24 is a MAVLink VTOL MAV_TYPE that PX4's is_vtol does not count"}},
+     {"exit": 1, "status": "FAIL", "results": {"R6": "FAIL"},
+      "found": {"R6": "a VTOL MAV_TYPE, but is_vtol is false on every sample"}}),
+    ("nav_state_beyond_max", "2.5",
+     "nav_state at NAVIGATION_STATE_MAX in flight, with a flag true that AUTO_LOITER requires",
+     nav_state_beyond_max, RULES, [],
+     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
+      "found": {"R4": "cannot evaluate: vehicle_status.nav_state is 31 in flight"}},
+     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
+      "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}}),
+    ("hazard_whole_flight", "2.3",
+     "a hazard flag (geofence_breached) true for the whole flight, not required by the mode",
+     hazard_whole_flight, RULES, [],
+     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
+      "found": {"R4": "hazard failsafe_flags geofence_breached true for the whole flight"}},
+     {"exit": 0, "status": "WARN", "results": {"R4": "WARN"},
+      "found": {"R4": "warning: failsafe_flags geofence_breached true in flight"}}),
+    ("clipping_decoy_field", "2.1",
+     "a scalar field named accel_clipping[0] before the real accel_clipping array",
+     clipping_decoy_field, RULES_X4, [],
+     {"exit": 3, "status": None, "results": {}},
+     {"exit": 1, "status": "FAIL", "results": {"X4": "FAIL"}}),
     ("mode_req_uint64", "1.11", "mode_req_global_position declared uint64_t, bit 36 set",
      mode_req_uint64, RULES, [],
      {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},

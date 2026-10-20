@@ -187,8 +187,19 @@ pub const FAILSAFE_FLAGS_FIELDS: [&str; 1] = ["timestamp"];
 /// The `vehicle_command` fields R7 reads (R1 checks them when R7 is enabled).
 pub const VEHICLE_COMMAND_FIELDS: [&str; 3] = ["command", "source_system", "source_component"];
 
-/// MAVLink MAV_TYPE values of VTOL vehicles (`MAV_TYPE_VTOL_*`, 19 to 25).
-pub const VTOL_MAV_TYPES: std::ops::RangeInclusive<u8> = 19..=25;
+/// The `vehicle_status.system_type` values PX4 counts as VTOL: 19 to 23. Read from PX4's
+/// `src/modules/commander/commander_helper.cpp`, function `is_vtol`, which is true exactly for
+/// `VEHICLE_TYPE_VTOL_TAILSITTER_DUOROTOR` (19), `VEHICLE_TYPE_VTOL_TAILSITTER_QUADROTOR` (20),
+/// `VEHICLE_TYPE_VTOL_TILTROTOR` (21), `VEHICLE_TYPE_VTOL_FIXEDROTOR` (22) and
+/// `VEHICLE_TYPE_VTOL_TAILSITTER` (23), as that file defines them. The function and the defines
+/// are the same at every supported tag, v1.14.0 to v1.17.0 (v1.17.0 is commit
+/// `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`).
+pub const VTOL_MAV_TYPES: std::ops::RangeInclusive<u8> = 19..=23;
+
+/// MAVLink MAV_TYPE values 24 and 25 are VTOL types in MAVLink, but PX4's `is_vtol` does not
+/// count them at any supported tag ([`VTOL_MAV_TYPES`]), so `is_vtol` false beside one of them is
+/// no contradiction: R6 is N/A and says so.
+pub const MAVLINK_ONLY_VTOL_MAV_TYPES: std::ops::RangeInclusive<u8> = 24..=25;
 
 /// The text that says a rule has no armed flight to check.
 pub const NO_ARMED_FLIGHT: &str =
@@ -572,6 +583,56 @@ fn in_flight_sample(armed: &[ArmedInterval], t: u64) -> bool {
 }
 
 /// One failsafe_flags flag that was true in flight.
+/// The hazard-class `failsafe_flags` fields: each reports a failure or a limit breach of the
+/// vehicle itself, where the other flags report that a mode's input is unavailable or a link is
+/// lost. Each name with the PX4 tags whose `msg/FailsafeFlags.msg` declares it as a `bool`, read
+/// at every supported tag (v1.14.0 to v1.17.0). One true on every `failsafe_flags` sample of a
+/// flight fails R4 whatever the mode requires; true on only some samples, it is a warning when
+/// the mode does not require it, as every other flag is.
+pub const HAZARD_FLAGS: [(&str, &str); 12] = [
+    ("fd_critical_failure", "v1.14.0 to v1.17.0"),
+    ("fd_esc_arming_failure", "v1.14.0 to v1.17.0"),
+    ("fd_imbalanced_prop", "v1.14.0 to v1.17.0"),
+    ("fd_motor_failure", "v1.14.0 to v1.17.0"),
+    ("battery_unhealthy", "v1.14.0 to v1.17.0"),
+    ("primary_geofence_breached", "v1.14.0 to v1.14.4"),
+    ("geofence_breached", "v1.15.0 to v1.17.0"),
+    ("mission_failure", "v1.14.0 to v1.17.0"),
+    ("navigator_failure", "v1.16.0 to v1.17.0"),
+    ("vtol_fixed_wing_system_failure", "v1.14.0 to v1.17.0"),
+    ("wind_limit_exceeded", "v1.14.0 to v1.17.0"),
+    ("flight_time_limit_exceeded", "v1.14.0 to v1.17.0"),
+];
+
+/// Hazard-class flags ([`HAZARD_FLAGS`]) true on every `failsafe_flags` sample of a flight (an
+/// armed interval, through the sample that disarms), on any instance: (name, ARM time, samples).
+fn hazard_whole_flight(f: &FlightLog, armed: &[ArmedInterval]) -> Vec<(String, u64, usize)> {
+    let mut out = Vec::new();
+    let all = std::iter::once(&f.failsafe_flags).chain(&f.failsafe_flags_others);
+    for fs in all {
+        let mut rows = fs.rows.clone();
+        rows.sort_by_key(|r| (r.id.ts, r.id.index));
+        for (i, def) in fs.flags.iter().enumerate() {
+            if !HAZARD_FLAGS.iter().any(|(n, _)| *n == def.name) {
+                continue;
+            }
+            for a in armed {
+                let samples: Vec<bool> = rows
+                    .iter()
+                    .filter(|r| r.id.ts >= a.arm && a.disarm.is_none_or(|d| r.id.ts <= d))
+                    .map(|r| r.active.get(i).copied().unwrap_or(false))
+                    .collect();
+                if !samples.is_empty() && samples.iter().all(|&b| b) {
+                    out.push((def.name.clone(), a.arm, samples.len()));
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    out
+}
+
 #[derive(Default)]
 struct FlagSeen {
     /// Samples where the current mode requires it, the first time, and that mode.
@@ -637,9 +698,39 @@ fn flags_in_flight(f: &FlightLog, armed: &[ArmedInterval]) -> BTreeMap<String, F
     out
 }
 
+/// R4 cannot evaluate a flight whose `vehicle_status.nav_state` in flight is at or above
+/// `NAVIGATION_STATE_MAX` of every PX4 tag the log's version selects: no mode requirement names
+/// such a state, so each flag would be read as not required and a required one demoted to a
+/// warning. The highest `NAVIGATION_STATE_MAX` of those tags is the bound.
+fn r4_nav_state_out_of_range(f: &FlightLog, fw: &crate::ingest::Firmware) -> Option<RuleResult> {
+    let releases = crate::px4::releases_for(fw);
+    let max = releases
+        .iter()
+        .filter_map(|r| crate::px4::constant(r, "VehicleStatus", "NAVIGATION_STATE_MAX"))
+        .max()?;
+    let armed = flight_armed_intervals(f);
+    let row = f.vehicle_status.iter().find(|r| {
+        in_flight_sample(&armed, r.id.ts) && r.nav_state.is_some_and(|n| i64::from(n) >= max)
+    })?;
+    Some(fail_unreadable(
+        "R4",
+        R4_NAME,
+        R4_EXPECTED,
+        vec![format!(
+            "vehicle_status.nav_state is {} in flight at boot_us {}, at or above NAVIGATION_STATE_MAX ({max}) of PX4 {}",
+            row.nav_state.unwrap_or(0),
+            row.id.ts,
+            crate::px4::tags_label(&releases)
+        )],
+    ))
+}
+
+const R4_NAME: &str = "no failsafe in flight";
+const R4_EXPECTED: &str = "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), no quadchute (fixed wing straight to multicopter) in flight, and no failsafe_flags flag that the current nav_state requires true in flight; other failsafe_flags flags true in flight are warnings";
+
 fn r4(f: &FlightLog) -> RuleResult {
-    const NAME: &str = "no failsafe in flight";
-    let expected = "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), no quadchute (fixed wing straight to multicopter) in flight, and no failsafe_flags flag that the current nav_state requires true in flight; other failsafe_flags flags true in flight are warnings";
+    const NAME: &str = R4_NAME;
+    let expected = R4_EXPECTED;
     // SPEC B1.6: the quadchute half reads the VTOL state only on a VTOL vehicle (is_vtol true
     // on some sample). No vehicle_status, or no is_vtol field, counts as not VTOL here; R1
     // reports what is missing.
@@ -741,6 +832,16 @@ fn r4(f: &FlightLog) -> RuleResult {
     // SPEC B1.6: every failsafe_flags flag true in flight. One the mode in effect requires
     // fails R4 whether or not PX4 raised vehicle_status.failsafe; any other is a warning.
     let flags = flags_in_flight(f, &armed);
+    let hazards = hazard_whole_flight(f, &armed);
+    for (name, arm, n) in &hazards {
+        detail.push(|| {
+            format!(
+                "failsafe_flags.{name} true for the whole flight armed at boot_us {arm} ({n} sample(s)), a hazard flag"
+            )
+        });
+    }
+    let mut hazard_names: Vec<&str> = hazards.iter().map(|(n, _, _)| n.as_str()).collect();
+    hazard_names.dedup();
     let mut required = Vec::new();
     let mut warned = Vec::new();
     for (name, seen) in &flags {
@@ -783,7 +884,7 @@ fn r4(f: &FlightLog) -> RuleResult {
             warned.join(", ")
         )
     };
-    let failed = failsafes + quadchutes + required.len() > 0;
+    let failed = failsafes + quadchutes + required.len() + hazard_names.len() > 0;
     let detail = detail.finish();
     if !failed {
         let status = if warned.is_empty() {
@@ -808,6 +909,12 @@ fn r4(f: &FlightLog) -> RuleResult {
         found.push_str(&format!(
             ", required failsafe_flags {} true in flight",
             required.join(", ")
+        ));
+    }
+    if !hazard_names.is_empty() {
+        found.push_str(&format!(
+            ", hazard failsafe_flags {} true for the whole flight",
+            hazard_names.join(", ")
         ));
     }
     found.push_str(&warning);
@@ -937,14 +1044,18 @@ fn r6(f: &FlightLog, events: &[Event], vtol: Option<&crate::ingest::VtolType>) -
                 )],
             );
         }
-        return RuleResult::new(
-            "R6",
-            NAME,
-            Status::NotApplicable,
-            expected,
-            "vehicle_status.is_vtol false on every sample",
-            vec![],
-        );
+        let found = match f
+            .vehicle_status
+            .iter()
+            .filter_map(|r| r.system_type)
+            .find(|t| MAVLINK_ONLY_VTOL_MAV_TYPES.contains(t))
+        {
+            Some(t) => format!(
+                "vehicle_status.is_vtol false on every sample; system_type {t} is a MAVLink VTOL MAV_TYPE that PX4's is_vtol does not count (v1.14 to v1.17)"
+            ),
+            None => "vehicle_status.is_vtol false on every sample".to_string(),
+        };
+        return RuleResult::new("R6", NAME, Status::NotApplicable, expected, found, vec![]);
     }
     if let Some(r) = check_vehicle_status(
         "R6",
@@ -1496,7 +1607,7 @@ pub fn evaluate(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Evaluatio
         r1(f, rules),
         r2(ing, baseline),
         r3(ing, rules, baseline),
-        r4(f),
+        r4_nav_state_out_of_range(f, &ing.identity.firmware).unwrap_or_else(|| r4(f)),
         r5(f, &ing.events),
         r6(f, &ing.events, ing.identity.vehicle.vtol_type.as_ref()),
         r7(f, &ing.events, rules),
@@ -2114,6 +2225,190 @@ mod tests {
                 "{err}"
             );
         }
+    }
+
+    #[test]
+    fn r4_cannot_evaluate_a_nav_state_at_or_above_navigation_state_max() {
+        // NAVIGATION_STATE_MAX is 23 at the v1.14 tags and 31 from v1.15.0 (VehicleStatus.msg,
+        // scripts/testdata/px4_tables.json). A nav_state at or above it in flight is FAIL
+        // (cannot evaluate), never a quiet WARN; at or above it only while disarmed, R4 runs.
+        let fields: Vec<String> = VEHICLE_STATUS_FIELDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let fw = |release: u32| crate::ingest::Firmware {
+            release: Some(release),
+            version: None,
+            git: None,
+        };
+        // Armed at boot_us 10 and 20, disarmed at 30 (in flight: the disarming sample), and
+        // disarmed at 40.
+        let flight = |nav: u8, in_flight: bool| {
+            let mut rows = vec![
+                vtol_row(0, 1, false, false, 1),
+                vtol_row(1, 2, false, false, 1),
+                vtol_row(2, 2, false, false, 1),
+                vtol_row(3, 1, false, false, 1),
+                vtol_row(4, 1, false, false, 1),
+            ];
+            rows[if in_flight { 2 } else { 4 }].nav_state = Some(nav);
+            FlightLog {
+                vehicle_status: rows,
+                vehicle_status_fields: fields.clone(),
+                ..FlightLog::default()
+            }
+        };
+        let v1_14_4 = fw(0x010E04FF);
+        let v1_17_0 = fw(0x011100FF);
+        for (f, nav, max, tags) in [
+            (&v1_14_4, 23u8, 23, "v1.14.4"),
+            (&v1_14_4, 40, 23, "v1.14.4"),
+            (&v1_17_0, 31, 31, "v1.17.0"),
+            (&v1_17_0, 200, 31, "v1.17.0"),
+        ] {
+            let r = r4_nav_state_out_of_range(&flight(nav, true), f).expect("cannot evaluate");
+            assert_eq!(r.status, Status::Fail);
+            assert_eq!(
+                r.found,
+                format!(
+                    "cannot evaluate: vehicle_status.nav_state is {nav} in flight at boot_us 20, at or above NAVIGATION_STATE_MAX ({max}) of PX4 {tags}"
+                )
+            );
+        }
+        assert!(r4_nav_state_out_of_range(&flight(22, true), &v1_14_4).is_none());
+        assert!(r4_nav_state_out_of_range(&flight(30, true), &v1_17_0).is_none());
+        // Out of range only on a sample after the disarming one: not in flight.
+        assert!(r4_nav_state_out_of_range(&flight(31, false), &v1_17_0).is_none());
+        // No readable version: every supported tag applies, so the bound is the highest, 31.
+        let none = crate::ingest::Firmware {
+            release: None,
+            version: None,
+            git: None,
+        };
+        assert!(r4_nav_state_out_of_range(&flight(30, true), &none).is_none());
+        assert!(r4_nav_state_out_of_range(&flight(31, true), &none).is_some());
+    }
+
+    #[test]
+    fn every_hazard_flag_is_a_px4_bool_exactly_at_its_stated_tags() {
+        use crate::px4_tables::RELEASES;
+        for (name, tags) in HAZARD_FLAGS {
+            let defining: Vec<&crate::px4_tables::Release> = RELEASES
+                .iter()
+                .filter(|r| !crate::px4::field_types(&[*r], "failsafe_flags", name).is_empty())
+                .collect();
+            assert_eq!(crate::px4::tags_label(&defining), tags, "{name}");
+            for r in defining {
+                assert_eq!(
+                    crate::px4::field_types(&[r], "failsafe_flags", name),
+                    [crate::ulog::Scalar::Bool],
+                    "{name} at {}",
+                    r.tag
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn r4_fails_on_a_hazard_flag_true_for_the_whole_flight() {
+        use crate::ingest::{FailsafeFlags, FailsafeRow, RowId};
+        let fields: Vec<String> = VEHICLE_STATUS_FIELDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // Armed at 10 and 20, disarming at 30; failsafe_flags at 0, 10, 20, 30, 40.
+        let rows = vec![
+            vtol_row(0, 1, false, false, 1),
+            vtol_row(1, 2, false, false, 1),
+            vtol_row(2, 2, false, false, 1),
+            vtol_row(3, 1, false, false, 1),
+            vtol_row(4, 1, false, false, 1),
+        ];
+        let flight = |name: &str, true_at: &[u64]| {
+            let fs = FailsafeFlags {
+                flags: vec![crate::ingest::FlagDef::for_test(name)],
+                rows: (0..5)
+                    .map(|i| FailsafeRow {
+                        id: RowId {
+                            ts: i * 10,
+                            instance: 0,
+                            index: i,
+                        },
+                        active: vec![true_at.contains(&(i * 10))],
+                        mode_req: vec![0],
+                    })
+                    .collect(),
+                ..FailsafeFlags::default()
+            };
+            FlightLog {
+                vehicle_status: rows.clone(),
+                vehicle_status_fields: fields.clone(),
+                failsafe_flags: fs,
+                ..FlightLog::default()
+            }
+        };
+        // True on every sample from the ARM through the disarming one: FAIL.
+        let r = r4(&flight("geofence_breached", &[10, 20, 30]));
+        assert_eq!(r.status, Status::Fail, "{}", r.found);
+        assert!(
+            r.found
+                .contains("hazard failsafe_flags geofence_breached true for the whole flight"),
+            "{}",
+            r.found
+        );
+        // On only part of the flight: a warning, as before.
+        let r = r4(&flight("geofence_breached", &[20]));
+        assert_eq!(r.status, Status::Warn, "{}", r.found);
+        // A flag outside the hazard list true for the whole flight: a warning.
+        let r = r4(&flight("gcs_connection_lost", &[10, 20, 30]));
+        assert_eq!(r.status, Status::Warn, "{}", r.found);
+        // Before the ARM and after the disarm only: nothing.
+        let r = r4(&flight("fd_motor_failure", &[0, 40]));
+        assert_eq!(r.status, Status::Pass, "{}", r.found);
+    }
+
+    #[test]
+    fn r6_counts_vtol_as_px4_is_vtol_does() {
+        // commander_helper.cpp is_vtol, every supported tag: system_type 19 to 23. With is_vtol
+        // false on every sample, 19 to 23 contradict it (FAIL); 24 and 25, MAVLink VTOL types
+        // PX4 does not count, do not (N/A, named).
+        let fields: Vec<String> = VEHICLE_STATUS_FIELDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let flight = |system_type: u8| {
+            let mut rows = vec![
+                vtol_row(0, 2, false, false, 1),
+                vtol_row(1, 1, false, false, 1),
+            ];
+            for r in &mut rows {
+                r.is_vtol = Some(false);
+                r.system_type = Some(system_type);
+            }
+            FlightLog {
+                vehicle_status: rows,
+                vehicle_status_fields: fields.clone(),
+                ..FlightLog::default()
+            }
+        };
+        for t in 19..=23u8 {
+            let r = r6(&flight(t), &[], None);
+            assert_eq!(r.status, Status::Fail, "{t}");
+            assert!(r.found.contains("cannot evaluate"), "{t}: {}", r.found);
+        }
+        for t in [24u8, 25] {
+            let r = r6(&flight(t), &[], None);
+            assert_eq!(r.status, Status::NotApplicable, "{t}: {}", r.found);
+            assert_eq!(
+                r.found,
+                format!(
+                    "vehicle_status.is_vtol false on every sample; system_type {t} is a MAVLink VTOL MAV_TYPE that PX4's is_vtol does not count (v1.14 to v1.17)"
+                )
+            );
+        }
+        let r = r6(&flight(2), &[], None);
+        assert_eq!(r.status, Status::NotApplicable);
+        assert_eq!(r.found, "vehicle_status.is_vtol false on every sample");
     }
 
     #[test]
