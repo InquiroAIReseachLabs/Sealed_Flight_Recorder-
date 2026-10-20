@@ -6,6 +6,13 @@
 //! with exit 4 until they are built. Exit codes follow SPEC B1.4.
 #![forbid(unsafe_code)]
 
+// The dev-helper feature lets a test name the PKCS#11 helper with SFR_PKCS11_HELPER. A release
+// build must never carry it: there the helper is only the one beside the binary.
+#[cfg(all(feature = "dev-helper", not(debug_assertions)))]
+compile_error!(
+    "the dev-helper feature is for test builds only; a release build must not enable it"
+);
+
 use sfr_core::crypto::rustcrypto::{FileKey, RustCrypto};
 use sfr_core::crypto::{CryptoBackend, Custody, Signer};
 use sfr_core::display::{terminal_safe, visible};
@@ -43,9 +50,10 @@ const USAGE: &str = "usage:
   sfr seal <flight.ulg> --rules <rules.toml> --baseline <baseline.params>
            (--key-uri pkcs11:... | --key-uri tpm-sealed:<dir> | --key <sfr.key> --evaluation-only | --dry-run)
            [--out <dir>] [--seal-time <RFC3339>] [--allow-untested-version] [--allow-ignore-all] [--json]
-  sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> ([--crl <crl>]... | --no-crl-check))
+  sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> ([--crl <crl>]... | --no-crl-check)
+             [--max-crl-age <n>[s|m|h|d]] [--allow-partial-chain])
              [--ulog <flight.ulg>] (--report <name.sfr.md> | --no-report) [--allow-evaluation-key]
-             [--require-hardware-key] [--at <RFC3339>] [--json]
+             [--require-hardware-key] [--at <RFC3339> [--allow-past-at]] [--json]
   sfr pubkey --key-uri (pkcs11:... | tpm-sealed:<dir>) [--json]
   sfr --version [--json]";
 
@@ -528,7 +536,7 @@ fn table(
         (
             "blake3",
             format!(
-                "{} (index only, adds no security)",
+                "{} (checked by verify --ulog like SHA-256; adds no security beyond it)",
                 sfr_core::hex(&id.blake3)
             ),
         ),
@@ -907,17 +915,52 @@ enum Trust {
     Anchors {
         anchors: Vec<Vec<u8>>,
         crls: Vec<Vec<u8>>,
-        crl_check: certs::CrlCheck,
+        policy: certs::ChainPolicy,
     },
 }
 
+/// `--max-crl-age`: seconds, or a number with `s`, `m`, `h` or `d`.
+fn parse_duration_seconds(text: &str) -> Result<i64, String> {
+    let (digits, unit) = match text.char_indices().last() {
+        Some((i, c)) if c.is_ascii_alphabetic() => (&text[..i], c),
+        _ => (text, 's'),
+    };
+    let scale = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3600,
+        'd' => 86_400,
+        _ => {
+            return Err(format!(
+                "`{text}` is not a duration (seconds, or a number with s, m, h or d)"
+            ));
+        }
+    };
+    digits
+        .parse::<i64>()
+        .ok()
+        .filter(|n| *n > 0)
+        .and_then(|n| n.checked_mul(scale))
+        .ok_or_else(|| {
+            format!("`{text}` is not a duration (seconds, or a number with s, m, h or d)")
+        })
+}
+
+/// How far before the verifier's clock `--at` may lie without `--allow-past-at`: the clock skew
+/// a seal time is allowed.
+const PAST_AT_SKEW_SECONDS: i64 = 300;
+
 /// The `trust` line of a record whose certificate chain reached an anchor, with a `crl` line for
 /// each CRL used, or the notice that revocation was not checked.
+/// Added to the trust line when the anchor reached is an intermediate CA.
+const PARTIAL_CHAIN_NOTE: &str = "; the anchor is an intermediate CA, accepted with --allow-partial-chain: nothing above it was checked";
+
 fn chain_trust_line(ok: &certs::ChainOk) -> String {
     if !ok.crl_check {
         return format!(
-            "certificate chain to the trust anchor {} at the verification time; revocation NOT CHECKED (--no-crl-check): a revoked certificate would still verify",
-            ok.anchor
+            "certificate chain to the trust anchor {} at the verification time; revocation NOT CHECKED (--no-crl-check): a revoked certificate would still verify{}",
+            ok.anchor,
+            if ok.partial { PARTIAL_CHAIN_NOTE } else { "" }
         );
     }
     let mut t = format!(
@@ -925,6 +968,9 @@ fn chain_trust_line(ok: &certs::ChainOk) -> String {
         ok.anchor,
         ok.crls.len()
     );
+    if ok.partial {
+        t.push_str(PARTIAL_CHAIN_NOTE);
+    }
     for c in &ok.crls {
         t.push_str("\ncrl       ");
         t.push_str(&c.line());
@@ -954,10 +1000,13 @@ fn verify_cmd(
             "--crl",
             "--report",
             "--at",
+            "--max-crl-age",
         ],
         &[
             "--allow-evaluation-key",
             "--require-hardware-key",
+            "--allow-past-at",
+            "--allow-partial-chain",
             "--no-crl-check",
             "--no-report",
             "--json",
@@ -981,18 +1030,30 @@ fn verify_cmd(
     // The verification time: the verifier's clock, or the time given with --at. Certificate
     // validity is judged at this time and never at the record's claimed seal time, and a claimed
     // seal time later than it is refused.
+    let clock = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| fail(exit_code::USAGE, format!("system clock: {e}")))
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))?;
     let (verification_time, time_source) = match a.value("--at") {
         Some(t) => (
             parse_seal_time_seconds(t).map_err(|e| usage(format!("--at: {e}")))?,
             "--at",
         ),
-        None => (
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| fail(exit_code::USAGE, format!("system clock: {e}")))
-                .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))?,
-            "verifier clock",
-        ),
+        None => (clock, "verifier clock"),
+    };
+    // A time in the past judges certificates and CRLs as they were then, not as they are: it
+    // must be asked for, and the output then says so first.
+    let past_at = verification_time < clock.saturating_sub(PAST_AT_SKEW_SECONDS);
+    if past_at && !a.flag("--allow-past-at") {
+        return Err(usage(format!(
+            "--at {} is in the past of the verifier's clock ({}): certificates and CRLs would be judged as they were then, not now. Add --allow-past-at to verify as of that time",
+            format_utc(verification_time),
+            format_utc(clock)
+        )));
+    }
+    let max_crl_age = match a.value("--max-crl-age") {
+        Some(t) => parse_duration_seconds(t).map_err(|e| usage(format!("--max-crl-age: {e}")))?,
+        None => certs::DEFAULT_MAX_CRL_AGE_SECONDS,
     };
     let no_crl_check = a.flag("--no-crl-check");
     // The report to check: --report, or <name>.sfr.md beside <name>.sfr when it exists.
@@ -1019,9 +1080,13 @@ fn verify_cmd(
             ));
         }
         (Some(pub_path), None) => {
-            if !crl_paths.is_empty() || no_crl_check {
+            if !crl_paths.is_empty()
+                || no_crl_check
+                || a.value("--max-crl-age").is_some()
+                || a.flag("--allow-partial-chain")
+            {
                 return Err(usage(
-                    "--crl and --no-crl-check apply only to --trust-anchor",
+                    "--crl, --no-crl-check, --max-crl-age and --allow-partial-chain apply only to --trust-anchor",
                 ));
             }
             Some(Trust::PublicKey(
@@ -1053,17 +1118,25 @@ fn verify_cmd(
             Some(Trust::Anchors {
                 anchors,
                 crls,
-                crl_check: if no_crl_check {
-                    certs::CrlCheck::Off
-                } else {
-                    certs::CrlCheck::Required
+                policy: certs::ChainPolicy {
+                    crl_check: if no_crl_check {
+                        certs::CrlCheck::Off
+                    } else {
+                        certs::CrlCheck::Required
+                    },
+                    max_crl_age,
+                    allow_partial_chain: a.flag("--allow-partial-chain"),
                 },
             })
         }
         (None, None) => {
-            if !crl_paths.is_empty() || no_crl_check {
+            if !crl_paths.is_empty()
+                || no_crl_check
+                || a.value("--max-crl-age").is_some()
+                || a.flag("--allow-partial-chain")
+            {
                 return Err(usage(
-                    "--crl and --no-crl-check apply only to --trust-anchor",
+                    "--crl, --no-crl-check, --max-crl-age and --allow-partial-chain apply only to --trust-anchor",
                 ));
             }
             None
@@ -1129,13 +1202,14 @@ fn verify_cmd(
     };
     // With a trust anchor, a record that verified must also chain to it at the verification
     // time (never at the claimed seal time).
+    let mut valid_now: Option<bool> = None;
     let outcome = match (outcome, &trust) {
         (
             Ok(v),
             Trust::Anchors {
                 anchors,
                 crls,
-                crl_check,
+                policy,
             },
         ) => {
             let chained = claimed
@@ -1146,10 +1220,22 @@ fn verify_cmd(
                     let chain = claimed
                         .as_ref()
                         .map_or(&[][..], |c| c.certificate_chain.as_slice());
-                    certs::check_chain(signer, chain, anchors, crls, verification_time, *crl_check)
+                    certs::check_chain(signer, chain, anchors, crls, verification_time, policy).map(
+                        |ok| {
+                            // As of a past time, also say whether the chain holds now.
+                            let now = past_at.then(|| {
+                                certs::check_chain(signer, chain, anchors, crls, clock, policy)
+                                    .is_ok()
+                            });
+                            (ok, now)
+                        },
+                    )
                 });
             match chained {
-                Ok(ok) => Ok((v, Some(ok))),
+                Ok((ok, now)) => {
+                    valid_now = now;
+                    Ok((v, Some(ok)))
+                }
                 Err(e) => Err(VerifyError::Mismatch(Mismatch {
                     first: format!("certificate chain: {e}"),
                     also: Vec::new(),
@@ -1310,12 +1396,28 @@ fn verify_cmd(
                             Value::str(format_utc(verification_time)),
                         )
                         .field("verification_time_source", Value::str(time_source))
+                        .field("as_of_past_time", Value::Bool(past_at))
+                        .field(
+                            "chain_valid_now",
+                            valid_now.map_or(Value::Null, Value::Bool),
+                        )
                         .field("status", Value::str(v.status.clone()))
                         .field("event_count", Value::count(v.events as u64))
                         .build(),
                 )
             } else {
                 let mut t = String::new();
+                if past_at {
+                    t.push_str(&format!(
+                        "VERIFIED as of {} at the verifier's request (--at, --allow-past-at), not now: {}\n",
+                        format_utc(verification_time),
+                        match valid_now {
+                            Some(false) => "the certificate chain is NOT valid now",
+                            Some(true) => "the certificate chain is also valid now",
+                            None => "no certificate was checked",
+                        }
+                    ));
+                }
                 if v.custody == Custody::FileEvaluation {
                     t.push_str(EVALUATION_LINE);
                     t.push('\n');

@@ -39,6 +39,11 @@
 #                     2025-07-01: with inter_stale.crl, the CRLs current in mid-June 2025
 #   inter_same.crl    CRL issued by inter with the same number as inter.crl (1) and other content
 #   other_root.crl    CRL issued by the unrelated other_root, number 99, listing nothing
+#   inter_delta.crl   CRL issued by inter, number 2, a delta CRL (deltaCRLIndicator): refused
+#   inter_indirect.crl  CRL issued by inter, number 2, indirect (issuingDistributionPoint
+#                     indirectCRL): refused
+#   inter_critical.crl  CRL issued by inter, number 2, with a critical extension sfr does not
+#                     read (1.3.6.1.4.1.32473.1, an example OID, RFC 5612): refused
 set -euo pipefail
 export LC_ALL=C TZ=UTC
 
@@ -132,6 +137,18 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid
 [ crl ]
 authorityKeyIdentifier = keyid
+[ crl_delta ]
+authorityKeyIdentifier = keyid
+2.5.29.27 = critical, ASN1:INTEGER:1
+[ crl_indirect ]
+authorityKeyIdentifier = keyid
+issuingDistributionPoint = critical, @idp_indirect
+[ idp_indirect ]
+fullname = URI:http://example.com/inter.crl
+indirectCRL = TRUE
+[ crl_critical ]
+authorityKeyIdentifier = keyid
+1.3.6.1.4.1.32473.1 = critical, ASN1:NULL
 EOF
   : > "$work/index.txt"
   mkdir -p "$work/new"
@@ -173,12 +190,12 @@ EOF
   mv "$work/index.inter" "$work/index.txt"
   cp "$work/index.txt" "$work/index.with_revoked"
   : > "$work/index.empty"
-  # gencrl <issuer> <crl number, hex> <index file> <lastUpdate> <nextUpdate> <file>
+  # gencrl <issuer> <crl number, hex> <index file> <lastUpdate> <nextUpdate> <file> [<extensions>]
   gencrl() {
     echo "$2" > "$work/crlnumber"
     cp "$3" "$work/index.txt"
     openssl ca -batch -config "$work/ca.cnf" -gencrl -cert "$out/$1.pem" -keyfile "$work/$1.key" \
-      -crlexts crl -crl_lastupdate "$4" -crl_nextupdate "$5" -out "$out/$6" 2> /dev/null
+      -crlexts "${7:-crl}" -crl_lastupdate "$4" -crl_nextupdate "$5" -out "$out/$6" 2> /dev/null
   }
   gencrl inter 01 "$work/index.with_revoked" 20260601000000Z 20460101000000Z inter.crl
   gencrl root 01 "$work/index.empty" 20260601000000Z 20460101000000Z root.crl
@@ -187,6 +204,9 @@ EOF
   gencrl inter 01 "$work/index.empty" 20260601000000Z 20460101000000Z inter_same.crl
   gencrl root 00 "$work/index.empty" 20250601000000Z 20250701000000Z root_2025.crl
   gencrl other_root 63 "$work/index.empty" 20260601000000Z 20460101000000Z other_root.crl
+  gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_delta.crl crl_delta
+  gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_indirect.crl crl_indirect
+  gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_critical.crl crl_critical
 }
 
 case "${1:-}" in

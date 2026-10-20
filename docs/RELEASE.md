@@ -12,7 +12,7 @@ No release has been published. This page describes how one is made and how to ch
 | Signing script | `scripts/release_sign.sh` | Run offline by the release key holder: `keygen`, `sign`, `verify`, and a self-test. |
 | Tests of the above | `scripts/check_release_flow.sh`, `scripts/check_release_hygiene.sh`, `scripts/check_workflows.sh` | The offline signing flow with attacks on it, the hygiene scan, and the rules every workflow keeps (actions pinned by commit, no secret, no signing in CI, only the draft job writes). |
 
-`rust-toolchain.toml` lists no cross targets. The release workflow, the benchmark workflow, the armv7 and sandbox CI jobs, `scripts/build_release.sh` and `scripts/build_engine.sh` each add the target they build with.
+`rust-toolchain.toml` lists no cross targets. The release workflow, the benchmark workflow, the armv7 CI job and `scripts/build_release.sh` each add the target they build with.
 
 Every commit's CI run also builds the release files unsigned (the `sfr-release-unsigned` artifact) and checks them:
 

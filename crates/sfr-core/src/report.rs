@@ -569,7 +569,7 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     item(&mut out, "SHA-256", &code(&s(log, "sha256", "log")?));
     item(
         &mut out,
-        "BLAKE3 (index only, adds no security)",
+        "BLAKE3 (checked by verify --ulog like SHA-256; adds no security beyond it)",
         &code(&s(log, "blake3", "log")?),
     );
     item(
