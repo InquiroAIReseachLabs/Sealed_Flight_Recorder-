@@ -1,0 +1,175 @@
+Lint baseline (docs/review/PLAN.txt, 0.2)
+Commit: ce7a28ea1bfcbe63ff42b99dc8a1f2761485df80
+Tool:   clippy 0.1.97 (2d8144b788 2026-07-07)
+Command: cargo clippy --workspace --all-targets --locked -- -W clippy::indexing_slicing -W clippy::arithmetic_side_effects -W clippy::as_conversions -W clippy::cast_possible_truncation -W clippy::unwrap_used -W clippy::expect_used -W clippy::panic -W clippy::pedantic
+
+A warning is counted once, after the allow attributes already in the source. Production code is
+counted apart from inline test modules (#[cfg(test)]), separate test files (crates/*/tests/, fuzz/) and
+generated code (px4_tables.rs). A warning in a chunk is fixed, or annotated with a one-line reason, when
+the chunk is reviewed. Locations come from rerunning the command above.
+
+== Totals
+production code               517
+inline test modules           117
+separate test files           165
+generated (not in ledger)       9
+
+== Production code, by file
+crates/sfr-core/src/json.rs                           71  arithmetic_side_effects=58, must_use_candidate=9, missing_errors_doc=2, many_single_char_names=1, return_self_not_must_use=1
+crates/sfr-core/src/ulog.rs                           53  arithmetic_side_effects=14, must_use_candidate=12, as_conversions=9, doc_markdown=8, cast_sign_loss=2, needless_continue=2, cast_possible_wrap=1, float_cmp=1, match_same_arms=1, missing_errors_doc=1, single_match_else=1, too_many_lines=1
+crates/sfr-core/src/seal.rs                           52  arithmetic_side_effects=21, must_use_candidate=14, missing_errors_doc=6, as_conversions=5, doc_markdown=2, many_single_char_names=2, redundant_closure_for_method_calls=1, too_many_lines=1
+crates/sfr-core/src/evaluate.rs                       46  arithmetic_side_effects=20, doc_markdown=6, must_use_candidate=5, too_many_lines=4, as_conversions=3, cast_possible_truncation=2, format_push_string=1, needless_pass_by_value=1, redundant_closure_for_method_calls=1, semicolon_if_nothing_returned=1, single_match_else=1, struct_field_names=1
+crates/sfr/src/main.rs                                40  format_push_string=16, as_conversions=9, trivially_copy_pass_by_ref=6, arithmetic_side_effects=2, case_sensitive_file_extension_comparisons=2, redundant_closure_for_method_calls=2, too_many_lines=2, single_match_else=1
+crates/sfr-core/src/ingest.rs                         36  doc_markdown=9, as_conversions=6, must_use_candidate=6, ref_option=4, too_many_lines=3, arithmetic_side_effects=2, cast_possible_truncation=2, missing_errors_doc=2, redundant_closure_for_method_calls=1, semicolon_if_nothing_returned=1
+crates/sfr-core/src/keys.rs                           36  arithmetic_side_effects=13, must_use_candidate=9, doc_markdown=7, missing_errors_doc=3, as_conversions=2, cast_possible_truncation=1, format_push_string=1
+crates/sfr-core/src/events.rs                         35  must_use_candidate=18, doc_markdown=9, arithmetic_side_effects=3, too_many_lines=2, as_conversions=1, missing_errors_doc=1, single_match_else=1
+crates/sfr-core/src/report.rs                         34  must_use_candidate=14, format_push_string=10, doc_markdown=3, arithmetic_side_effects=2, missing_errors_doc=2, assigning_clones=1, redundant_closure_for_method_calls=1, too_many_lines=1
+crates/sfr-core/src/verify.rs                         26  must_use_candidate=11, missing_errors_doc=3, arithmetic_side_effects=2, format_push_string=2, too_many_lines=2, as_conversions=1, doc_markdown=1, match_wildcard_for_single_variants=1, redundant_closure_for_method_calls=1, similar_names=1, single_match_else=1
+crates/sfr-core/src/rules.rs                          18  as_conversions=5, cast_possible_truncation=5, must_use_candidate=4, arithmetic_side_effects=2, missing_errors_doc=1, too_many_lines=1
+crates/sfr-core/src/params.rs                         13  arithmetic_side_effects=5, must_use_candidate=5, missing_errors_doc=2, doc_markdown=1
+crates/sfr-core/src/px4.rs                            11  must_use_candidate=8, indexing_slicing=3
+crates/sfr/src/certs.rs                               11  arithmetic_side_effects=5, doc_markdown=2, too_many_lines=2, as_conversions=1, format_push_string=1
+crates/sfr-core/src/record.rs                          9  must_use_candidate=6, as_conversions=1, doc_markdown=1, redundant_closure_for_method_calls=1
+crates/sfr-core/src/pkcs11_uri.rs                      8  arithmetic_side_effects=4, doc_markdown=2, missing_errors_doc=1, must_use_candidate=1
+crates/sfr-core/src/crypto.rs                          6  must_use_candidate=4, missing_errors_doc=2
+crates/sfr-core/src/display.rs                         5  must_use_candidate=5
+crates/sfr-core/src/lib.rs                             4  doc_markdown=2, arithmetic_side_effects=1, must_use_candidate=1
+crates/sfr-core/src/merkle.rs                          2  arithmetic_side_effects=2
+crates/sfr-pkcs11-helper/src/main.rs                   1  as_conversions=1
+
+== Inline test modules, by file
+crates/sfr-core/src/ingest.rs                         38  indexing_slicing=20, as_conversions=10, cast_possible_truncation=3, doc_markdown=2, redundant_closure_for_method_calls=2, arithmetic_side_effects=1
+crates/sfr-core/src/evaluate.rs                       19  redundant_closure_for_method_calls=10, indexing_slicing=3, doc_markdown=2, unreadable_literal=2, arithmetic_side_effects=1, as_conversions=1
+crates/sfr-core/src/ulog.rs                           16  as_conversions=10, cast_possible_truncation=3, doc_markdown=2, format_collect=1
+crates/sfr-core/src/events.rs                          9  as_conversions=4, doc_markdown=4, cast_possible_truncation=1
+crates/sfr/src/certs.rs                                9  as_conversions=4, cast_possible_truncation=4, arithmetic_side_effects=1
+crates/sfr-core/src/params.rs                          6  redundant_closure_for_method_calls=5, format_push_string=1
+crates/sfr-core/src/seal.rs                            6  indexing_slicing=6
+crates/sfr-core/src/json.rs                            5  indexing_slicing=4, implicit_clone=1
+crates/sfr-core/src/merkle.rs                          3  as_conversions=1, cast_possible_truncation=1, cast_sign_loss=1
+crates/sfr-core/src/display.rs                         2  indexing_slicing=2
+crates/sfr-core/src/report.rs                          2  indexing_slicing=2
+crates/sfr-core/src/crypto.rs                          1  indexing_slicing=1
+crates/sfr-core/src/verify.rs                          1  doc_markdown=1
+
+== Separate test files, by file
+crates/sfr/tests/seal_verify.rs                       57  as_conversions=19, arithmetic_side_effects=16, cast_possible_truncation=10, doc_markdown=5, too_many_lines=5, redundant_closure_for_method_calls=2
+crates/sfr/tests/seal_dry_run.rs                      28  indexing_slicing=22, arithmetic_side_effects=4, as_conversions=1, doc_markdown=1
+crates/sfr-core/tests/canonical.rs                    15  arithmetic_side_effects=4, as_conversions=4, cast_possible_truncation=3, cast_possible_wrap=2, indexing_slicing=2
+crates/sfr/tests/verify_perf.rs                       14  indexing_slicing=6, doc_markdown=3, as_conversions=2, arithmetic_side_effects=1, cast_possible_truncation=1, items_after_statements=1
+crates/sfr/tests/report_facts/mod.rs                  13  arithmetic_side_effects=6, as_conversions=3, doc_markdown=1, many_single_char_names=1, single_match_else=1, too_many_lines=1
+crates/sfr/tests/report_required.rs                    9  indexing_slicing=9
+crates/sfr/tests/certificates.rs                       7  indexing_slicing=2, too_many_lines=2, arithmetic_side_effects=1, as_conversions=1, cast_possible_wrap=1
+crates/sfr/tests/falsepass.rs                          5  indexing_slicing=2, as_conversions=1, cast_possible_wrap=1, doc_markdown=1
+crates/sfr/tests/verify_results.rs                     5  indexing_slicing=3, default_trait_access=1, semicolon_if_nothing_returned=1
+crates/sfr/tests/hardware.rs                           4  doc_markdown=3, too_many_lines=1
+crates/sfr/tests/reference_verifier.rs                 3  doc_markdown=2, unnecessary_debug_formatting=1
+crates/sfr/tests/trust_inputs.rs                       3  items_after_statements=3
+crates/sfr/tests/custody.rs                            1  indexing_slicing=1
+crates/sfr/tests/key_file_and_index.rs                 1  indexing_slicing=1
+
+== Generated code, by file
+crates/sfr-core/src/px4_tables.rs                      9  unreadable_literal=9
+
+== Production code, by lint
+clippy::arithmetic_side_effects                      156
+clippy::must_use_candidate                           132
+clippy::doc_markdown                                  53
+clippy::as_conversions                                44
+clippy::format_push_string                            31
+clippy::missing_errors_doc                            26
+clippy::too_many_lines                                19
+clippy::cast_possible_truncation                      10
+clippy::redundant_closure_for_method_calls             8
+clippy::trivially_copy_pass_by_ref                     6
+clippy::single_match_else                              5
+clippy::ref_option                                     4
+clippy::indexing_slicing                               3
+clippy::many_single_char_names                         3
+clippy::case_sensitive_file_extension_comparisons      2
+clippy::cast_sign_loss                                 2
+clippy::needless_continue                              2
+clippy::semicolon_if_nothing_returned                  2
+clippy::assigning_clones                               1
+clippy::cast_possible_wrap                             1
+clippy::float_cmp                                      1
+clippy::match_same_arms                                1
+clippy::match_wildcard_for_single_variants             1
+clippy::needless_pass_by_value                         1
+clippy::return_self_not_must_use                       1
+clippy::similar_names                                  1
+clippy::struct_field_names                             1
+
+== Production code, by chunk
+C1.1   crates/sfr-core/src/ulog.rs                        1-303      17
+C1.2   crates/sfr-core/src/ulog.rs                      304-602      22
+C1.3   crates/sfr-core/src/ulog.rs                      603-823       6
+C1.4   crates/sfr-core/src/ulog.rs                      824-958       2
+C1.5   crates/sfr-core/src/ulog.rs                      959-1349      6
+C1.6   crates/sfr-core/src/ingest.rs                      1-314      14
+C1.7   crates/sfr-core/src/ingest.rs                    315-608       9
+C1.8   crates/sfr-core/src/ingest.rs                    609-1005      4
+C1.9   crates/sfr-core/src/ingest.rs                   1006-1397      9
+C1.10  crates/sfr-core/src/px4.rs                         1-115      11
+C2.1   crates/sfr-core/src/evaluate.rs                    1-317       8
+C2.2   crates/sfr-core/src/evaluate.rs                  318-574       6
+C2.3   crates/sfr-core/src/evaluate.rs                  575-976      12
+C2.4   crates/sfr-core/src/evaluate.rs                  977-1219      4
+C2.5   crates/sfr-core/src/evaluate.rs                 1220-1453      9
+C2.6   crates/sfr-core/src/evaluate.rs                 1454-1697      7
+C2.7   crates/sfr-core/src/events.rs                      1-309      12
+C2.8   crates/sfr-core/src/events.rs                    310-670      13
+C2.9   crates/sfr-core/src/events.rs                    671-948      10
+C3.1   crates/sfr/src/certs.rs                            1-287       6
+C3.2   crates/sfr/src/certs.rs                          288-660       4
+C3.3   crates/sfr/src/certs.rs                          661-904       0
+C3.4   crates/sfr/src/certs.rs                          905-1163      1
+C3.5   crates/sfr-core/src/crypto.rs                      1-240       6
+C4.1   crates/sfr-core/src/verify.rs                     17-319      14
+C4.2   crates/sfr-core/src/verify.rs                    320-583       5
+C4.3   crates/sfr-core/src/verify.rs                    584-997       3
+C4.4   crates/sfr-core/src/verify.rs                    998-1210      1
+C4.5   crates/sfr-core/src/verify.rs                   1211-1315      3
+C4.6   crates/sfr/src/main.rs                           974-1057      0
+C4.7   crates/sfr/src/main.rs                          1058-1341      6
+C4.8   crates/sfr/src/main.rs                          1342-1622      5
+C4.9   crates/sfr/src/main.rs                          1623-1668      1
+C5.1   crates/sfr-core/src/json.rs                        1-381      29
+C5.2   crates/sfr-core/src/json.rs                      382-723      35
+C5.3   crates/sfr-core/src/json.rs                      724-806       7
+C5.4   crates/sfr-core/src/record.rs                      1-211       9
+C5.5   crates/sfr-core/src/merkle.rs                      1-66        2
+C5.6   crates/sfr-core/src/seal.rs                        1-308      16
+C5.7   crates/sfr-core/src/seal.rs                      309-568      11
+C5.8   crates/sfr-core/src/seal.rs                      569-714      25
+C6.1   crates/sfr-core/src/rules.rs                       1-334       5
+C6.2   crates/sfr-core/src/rules.rs                     335-658       7
+C6.3   crates/sfr-core/src/rules.rs                     659-849       6
+C6.4   crates/sfr-core/src/params.rs                      1-363      13
+C6.5   crates/sfr-core/src/pkcs11_uri.rs                  1-200       8
+C7.1   crates/sfr-core/src/report.rs                      1-361      17
+C7.2   crates/sfr-core/src/report.rs                    362-776      12
+C7.3   crates/sfr-core/src/report.rs                    777-868       5
+C7.4   crates/sfr-core/src/display.rs                     1-89        5
+C8.1   crates/sfr-core/src/keys.rs                        1-210      36
+C8.2   crates/sfr/src/hardware.rs                         1-270       0
+C8.3   crates/sfr/src/hardware.rs                       271-513       0
+C8.4   crates/sfr-pkcs11-helper/src/main.rs               1-251       1
+C8.5   crates/sfr/src/main.rs                             1-252       4
+C8.6   crates/sfr/src/main.rs                           253-505       6
+C8.7   crates/sfr/src/main.rs                           506-612      10
+C8.8   crates/sfr/src/main.rs                           613-973       6
+C8.9   crates/sfr/src/main.rs                          1669-1753      2
+CX.1   crates/sfr-core/src/lib.rs                         1-97        4
+
+== Allow and expect attributes in production code (each hides warnings)
+9 attributes, 0 with a reason = "..."
+crates/sfr-core/src/ingest.rs:197: #[allow(missing_docs)]  (no reason attribute)
+crates/sfr-core/src/ingest.rs:287: #[allow(missing_docs)]  (no reason attribute)
+crates/sfr-core/src/ingest.rs:297: #[allow(missing_docs)]  (no reason attribute)
+crates/sfr-core/src/ingest.rs:308: #[allow(missing_docs)]  (no reason attribute)
+crates/sfr-core/src/ingest.rs:318: #[allow(missing_docs)]  (no reason attribute)
+crates/sfr-core/src/ingest.rs:327: #[allow(missing_docs)]  (no reason attribute)
+crates/sfr-core/src/ingest.rs:335: #[allow(missing_docs)]  (no reason attribute)
+crates/sfr-core/src/ingest.rs:343: #[allow(missing_docs)]  (no reason attribute)
+crates/sfr-core/src/ingest.rs:353: #[allow(missing_docs)]  (no reason attribute)

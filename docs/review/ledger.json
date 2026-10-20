@@ -1,0 +1,5088 @@
+{
+ "commit": "ce7a28ea1bfcbe63ff42b99dc8a1f2761485df80",
+ "limits": {
+  "target": 200,
+  "soft": 300,
+  "max": 400,
+  "long_function": 100
+ },
+ "excluded": [
+  {
+   "file": "crates/sfr-core/src/px4_tables.rs",
+   "reason": "generated data, checked against the PX4 sources by scripts/px4/px4_tables.py (docs/VALIDATION.md)"
+  }
+ ],
+ "groups": [
+  {
+   "id": "G1",
+   "name": "Log parser and ingest",
+   "files": [
+    "crates/sfr-core/src/ulog.rs",
+    "crates/sfr-core/src/ingest.rs",
+    "crates/sfr-core/src/px4.rs"
+   ],
+   "contract_sources": "ULog file-format specification; PX4 message definitions at each supported tag; docs/SPEC.md ingest sections; docs/LIMITS.md"
+  },
+  {
+   "id": "G2",
+   "name": "Rule engine and events",
+   "files": [
+    "crates/sfr-core/src/evaluate.rs",
+    "crates/sfr-core/src/events.rs"
+   ],
+   "contract_sources": "docs/RULES.md; PX4 sources named in docs/VALIDATION.md"
+  },
+  {
+   "id": "G3",
+   "name": "Certificates and signatures",
+   "files": [
+    "crates/sfr/src/certs.rs",
+    "crates/sfr-core/src/crypto.rs"
+   ],
+   "contract_sources": "RFC 5280; docs/THREAT_MODEL.md; library documentation for the pinned versions"
+  },
+  {
+   "id": "G4",
+   "name": "Verification",
+   "files": [
+    "crates/sfr-core/src/verify.rs",
+    "crates/sfr/src/main.rs"
+   ],
+   "contract_sources": "docs/SPEC.md verify sections; docs/RECORD_FORMAT.md"
+  },
+  {
+   "id": "G5",
+   "name": "Sealed form",
+   "files": [
+    "crates/sfr-core/src/json.rs",
+    "crates/sfr-core/src/record.rs",
+    "crates/sfr-core/src/merkle.rs",
+    "crates/sfr-core/src/seal.rs"
+   ],
+   "contract_sources": "RFC 8785 subset as written in docs/SPEC.md; RFC 6962 and its replacement RFC 9162 for the tree"
+  },
+  {
+   "id": "G6",
+   "name": "Configuration",
+   "files": [
+    "crates/sfr-core/src/rules.rs",
+    "crates/sfr-core/src/params.rs",
+    "crates/sfr-core/src/pkcs11_uri.rs"
+   ],
+   "contract_sources": "docs/RULES.md; RFC 7512 for PKCS#11 URIs"
+  },
+  {
+   "id": "G7",
+   "name": "Output",
+   "files": [
+    "crates/sfr-core/src/report.rs",
+    "crates/sfr-core/src/display.rs"
+   ],
+   "contract_sources": "docs/SPEC.md report sections"
+  },
+  {
+   "id": "G8",
+   "name": "Keys, hardware, CLI",
+   "files": [
+    "crates/sfr-core/src/keys.rs",
+    "crates/sfr/src/hardware.rs",
+    "crates/sfr-pkcs11-helper/src/main.rs",
+    "crates/sfr/src/main.rs"
+   ],
+   "contract_sources": "docs/INTEGRATION_NOTES.md; docs/THREAT_MODEL.md"
+  },
+  {
+   "id": "GX",
+   "name": "Cross-cutting",
+   "files": [
+    "crates/sfr-core/src/lib.rs"
+   ],
+   "contract_sources": "docs/"
+  }
+ ],
+ "production_sha256": {
+  "crates/sfr-core/src/crypto.rs": "5de562b02d2a9b14c389a4c3a735ac9a0c446e36f3b4d5e12385d5ec7f603dd8",
+  "crates/sfr-core/src/display.rs": "21f1384699975b52101d92ac81c797d3a7502048779747767808129ccc3b33a3",
+  "crates/sfr-core/src/evaluate.rs": "21c345e30d21609804aab1145847aef180a71489fdfa9e32d445009db13774bb",
+  "crates/sfr-core/src/events.rs": "505567f16208f82d6796943a775aaeba6753e1d61409fe3f44288fc2af3ac49f",
+  "crates/sfr-core/src/ingest.rs": "25cbefb78f6487f905bf6aa743d73df97d1657f3c5bb2688fee59f883e41298e",
+  "crates/sfr-core/src/json.rs": "8352a2d5f48e5713ebfa6f17833268f51c1ba7f256efc2ad582d0d2cc07a5eee",
+  "crates/sfr-core/src/keys.rs": "e311901c0a9f49ee8c46550cb3a3112fcc6f69b02eb84a7ccaf56b9fa2e674b7",
+  "crates/sfr-core/src/lib.rs": "369340dcee548cfcb9ce16471a02e10629a922d635a1c709064faf2c12699a6b",
+  "crates/sfr-core/src/merkle.rs": "5fe18ed6c88d604118d4fdea37e5cb337518c10c8c897b6574c6b23048434f08",
+  "crates/sfr-core/src/params.rs": "ca2b9790dc036a6f3331e423946e1441329f5f9cd89b1421e9e7620ea3c42a78",
+  "crates/sfr-core/src/pkcs11_uri.rs": "00668492d7f4b52c74619d5d5cca59e244e8b3d239cf7805a1a4f65a3b80f062",
+  "crates/sfr-core/src/px4.rs": "7f3ad6f80be292a531d1a00a230f8cd772c3b382a92e2059ae6b9a0432416c80",
+  "crates/sfr-core/src/record.rs": "3a6f17e470567ace1f77803e1c84ab43105e95711da185f7c97f734a1fb5cdc7",
+  "crates/sfr-core/src/report.rs": "d3136735d83b310e6e03978567b78c5374efdaa187b87046464f3a5ab8633266",
+  "crates/sfr-core/src/rules.rs": "8b113eae6e2df29cbba86fd0a8e5433f600e71da0c5895c780e03b286c3e9668",
+  "crates/sfr-core/src/seal.rs": "131745076832e91d000d3c514d60c0bc6799fd35883452da6625a940bc2de867",
+  "crates/sfr-core/src/ulog.rs": "a9822d9af96248ed388133a71c0e8e12d69311feafb8208ebafac862c90f0cf5",
+  "crates/sfr-core/src/verify.rs": "7e7babb2570ee161a0904ceda494b70274519676ab7f79ba40db5798dd973446",
+  "crates/sfr-pkcs11-helper/src/main.rs": "c038465dc8cc3b38b1e2a3302e6e650195d0a083d09430ab4f4c3850e2b14d15",
+  "crates/sfr/src/certs.rs": "2fe838f8ec93d4a07e981f1285ab5470be4e7b6956e986de695af35af7d65303",
+  "crates/sfr/src/hardware.rs": "188549a2b7f46a7992bd384fdf3281cf7a6a541f23b135ff10426f53ea5c72f2",
+  "crates/sfr/src/main.rs": "fde1f96611e0153343ea8a4f862b9ada582950a63e5297e5c61f04327fba18ed"
+ },
+ "chunks": [
+  {
+   "group": "G1",
+   "file": "crates/sfr-core/src/ulog.rs",
+   "start": 1,
+   "end": 303,
+   "code_lines": 204,
+   "first": "use std::collections::BTreeMap",
+   "last": "impl PartialEq for ParamValue::eq",
+   "inside": [],
+   "fns": [
+    {
+     "name": "impl fmt::Display for UlogError::fmt",
+     "start": 67,
+     "end": 78,
+     "code_lines": 12,
+     "branches": 4
+    },
+    {
+     "name": "malformed",
+     "start": 83,
+     "end": 88,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "impl Scalar::parse",
+     "start": 120,
+     "end": 136,
+     "code_lines": 17,
+     "branches": 13
+    },
+    {
+     "name": "impl Scalar::name",
+     "start": 139,
+     "end": 154,
+     "code_lines": 16,
+     "branches": 12
+    },
+    {
+     "name": "impl Scalar::size",
+     "start": 157,
+     "end": 164,
+     "code_lines": 8,
+     "branches": 4
+    },
+    {
+     "name": "le",
+     "start": 192,
+     "end": 194,
+     "code_lines": 3,
+     "branches": 2
+    },
+    {
+     "name": "impl FlatField::read_u64",
+     "start": 198,
+     "end": 208,
+     "code_lines": 11,
+     "branches": 9
+    },
+    {
+     "name": "impl FlatField::read_i64",
+     "start": 211,
+     "end": 219,
+     "code_lines": 9,
+     "branches": 9
+    },
+    {
+     "name": "impl FlatField::read_u32",
+     "start": 222,
+     "end": 227,
+     "code_lines": 6,
+     "branches": 3
+    },
+    {
+     "name": "impl FlatField::read_f32",
+     "start": 230,
+     "end": 235,
+     "code_lines": 6,
+     "branches": 3
+    },
+    {
+     "name": "impl FlatField::read_bool",
+     "start": 238,
+     "end": 243,
+     "code_lines": 6,
+     "branches": 3
+    },
+    {
+     "name": "impl Layout::field",
+     "start": 262,
+     "end": 269,
+     "code_lines": 8,
+     "branches": 0
+    },
+    {
+     "name": "impl Layout::name_bytes",
+     "start": 272,
+     "end": 274,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl ParamValue::same_as",
+     "start": 290,
+     "end": 296,
+     "code_lines": 7,
+     "branches": 5
+    },
+    {
+     "name": "impl PartialEq for ParamValue::eq",
+     "start": 300,
+     "end": 302,
+     "code_lines": 3,
+     "branches": 0
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 67,
+   "id": "C1.1",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 17,
+    "coverage": {
+     "lines_total": 105,
+     "lines_hit": 84,
+     "branches_total": 4,
+     "branches_hit": 4
+    }
+   }
+  },
+  {
+   "group": "G1",
+   "file": "crates/sfr-core/src/ulog.rs",
+   "start": 304,
+   "end": 602,
+   "code_lines": 235,
+   "first": "impl impl Eq for ParamValue",
+   "last": "impl Cur<'a>::rest",
+   "inside": [],
+   "fns": [
+    {
+     "name": "impl ParamValue::from_typed",
+     "start": 310,
+     "end": 321,
+     "code_lines": 12,
+     "branches": 9
+    },
+    {
+     "name": "impl fmt::Display for ParamValue::fmt",
+     "start": 326,
+     "end": 335,
+     "code_lines": 10,
+     "branches": 6
+    },
+    {
+     "name": "f32_shortest",
+     "start": 344,
+     "end": 389,
+     "code_lines": 43,
+     "branches": 12
+    },
+    {
+     "name": "positional",
+     "start": 391,
+     "end": 407,
+     "code_lines": 17,
+     "branches": 4
+    },
+    {
+     "name": "Visitor::header",
+     "start": 431,
+     "end": 431,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "Visitor::info",
+     "start": 433,
+     "end": 433,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "Visitor::format_definition",
+     "start": 436,
+     "end": 436,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "Visitor::parameter",
+     "start": 438,
+     "end": 445,
+     "code_lines": 8,
+     "branches": 0
+    },
+    {
+     "name": "Visitor::subscription",
+     "start": 448,
+     "end": 448,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "Visitor::data",
+     "start": 450,
+     "end": 450,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "Visitor::logging",
+     "start": 452,
+     "end": 452,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "Visitor::dropout",
+     "start": 454,
+     "end": 454,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "impl Truncation::line",
+     "start": 491,
+     "end": 496,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "impl Src<R>::fill",
+     "start": 511,
+     "end": 532,
+     "code_lines": 22,
+     "branches": 9
+    },
+    {
+     "name": "impl Src<R>::skip_to",
+     "start": 535,
+     "end": 551,
+     "code_lines": 17,
+     "branches": 7
+    },
+    {
+     "name": "impl Cur<'a>::new",
+     "start": 562,
+     "end": 564,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Cur<'a>::take",
+     "start": 565,
+     "end": 576,
+     "code_lines": 12,
+     "branches": 2
+    },
+    {
+     "name": "impl Cur<'a>::u8",
+     "start": 577,
+     "end": 582,
+     "code_lines": 6,
+     "branches": 1
+    },
+    {
+     "name": "impl Cur<'a>::u16",
+     "start": 583,
+     "end": 589,
+     "code_lines": 7,
+     "branches": 2
+    },
+    {
+     "name": "impl Cur<'a>::u64",
+     "start": 590,
+     "end": 596,
+     "code_lines": 7,
+     "branches": 2
+    },
+    {
+     "name": "impl Cur<'a>::rest",
+     "start": 597,
+     "end": 601,
+     "code_lines": 5,
+     "branches": 0
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 54,
+   "id": "C1.2",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 22,
+    "coverage": {
+     "lines_total": 156,
+     "lines_hit": 127,
+     "branches_total": 46,
+     "branches_hit": 36
+    }
+   }
+  },
+  {
+   "group": "G1",
+   "file": "crates/sfr-core/src/ulog.rs",
+   "start": 603,
+   "end": 823,
+   "code_lines": 204,
+   "first": "ascii",
+   "last": "impl Flattener<'_>::walk",
+   "inside": [],
+   "fns": [
+    {
+     "name": "ascii",
+     "start": 604,
+     "end": 606,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "parse_type",
+     "start": 609,
+     "end": 646,
+     "code_lines": 36,
+     "branches": 11
+    },
+    {
+     "name": "parse_format",
+     "start": 648,
+     "end": 714,
+     "code_lines": 61,
+     "branches": 12
+    },
+    {
+     "name": "impl Flattener<'_>::walk",
+     "start": 724,
+     "end": 822,
+     "code_lines": 97,
+     "branches": 14
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 37,
+   "id": "C1.3",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 6,
+    "coverage": {
+     "lines_total": 179,
+     "lines_hit": 149,
+     "branches_total": 38,
+     "branches_hit": 31
+    }
+   }
+  },
+  {
+   "group": "G1",
+   "file": "crates/sfr-core/src/ulog.rs",
+   "start": 824,
+   "end": 958,
+   "code_lines": 115,
+   "first": "flatten",
+   "last": "ended_mid_record",
+   "inside": [],
+   "fns": [
+    {
+     "name": "flatten",
+     "start": 825,
+     "end": 894,
+     "code_lines": 67,
+     "branches": 10
+    },
+    {
+     "name": "same_layout",
+     "start": 907,
+     "end": 909,
+     "code_lines": 3,
+     "branches": 1
+    },
+    {
+     "name": "skip_to_offset",
+     "start": 913,
+     "end": 932,
+     "code_lines": 19,
+     "branches": 3
+    },
+    {
+     "name": "ended_mid_record",
+     "start": 940,
+     "end": 958,
+     "code_lines": 19,
+     "branches": 1
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 15,
+   "id": "C1.4",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 2,
+    "coverage": {
+     "lines_total": 101,
+     "lines_hit": 96,
+     "branches_total": 18,
+     "branches_hit": 13
+    }
+   }
+  },
+  {
+   "group": "G1",
+   "file": "crates/sfr-core/src/ulog.rs",
+   "start": 959,
+   "end": 1349,
+   "code_lines": 369,
+   "first": "read",
+   "last": "record_name",
+   "inside": [],
+   "fns": [
+    {
+     "name": "read",
+     "start": 961,
+     "end": 1330,
+     "code_lines": 351,
+     "branches": 102
+    },
+    {
+     "name": "record_name",
+     "start": 1332,
+     "end": 1349,
+     "code_lines": 18,
+     "branches": 14
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 116,
+   "id": "C1.5",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 6,
+    "coverage": {
+     "lines_total": 310,
+     "lines_hit": 283,
+     "branches_total": 50,
+     "branches_hit": 44
+    }
+   }
+  },
+  {
+   "group": "G1",
+   "file": "crates/sfr-core/src/ingest.rs",
+   "start": 1,
+   "end": 314,
+   "code_lines": 204,
+   "first": "use crate::crypto::{ CryptoBackend, Sha256Stream }",
+   "last": "struct GpsRow",
+   "inside": [],
+   "fns": [
+    {
+     "name": "impl std::fmt::Display for IngestError::fmt",
+     "start": 31,
+     "end": 37,
+     "code_lines": 7,
+     "branches": 3
+    },
+    {
+     "name": "impl Firmware::series",
+     "start": 55,
+     "end": 58,
+     "code_lines": 4,
+     "branches": 1
+    },
+    {
+     "name": "version_string",
+     "start": 62,
+     "end": 75,
+     "code_lines": 14,
+     "branches": 6
+    },
+    {
+     "name": "impl VtolType::from_params",
+     "start": 99,
+     "end": 115,
+     "code_lines": 17,
+     "branches": 6
+    },
+    {
+     "name": "impl LogIdentity::untested_ulog_version",
+     "start": 169,
+     "end": 171,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl std::fmt::Display for TypeMismatch::fmt",
+     "start": 241,
+     "end": 255,
+     "code_lines": 15,
+     "branches": 1
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 17,
+   "id": "C1.6",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 14,
+    "coverage": {
+     "lines_total": 48,
+     "lines_hit": 46,
+     "branches_total": 4,
+     "branches_hit": 4
+    }
+   }
+  },
+  {
+   "group": "G1",
+   "file": "crates/sfr-core/src/ingest.rs",
+   "start": 315,
+   "end": 608,
+   "code_lines": 203,
+   "first": "struct BatteryRow",
+   "last": "get_u8",
+   "inside": [],
+   "fns": [
+    {
+     "name": "impl FlightLog::vehicle_status_instances",
+     "start": 452,
+     "end": 456,
+     "code_lines": 5,
+     "branches": 0
+    },
+    {
+     "name": "impl FlightLog::mismatches",
+     "start": 460,
+     "end": 468,
+     "code_lines": 9,
+     "branches": 2
+    },
+    {
+     "name": "FlightLogIngestor::format",
+     "start": 489,
+     "end": 489,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "FlightLogIngestor::ingest_sealing",
+     "start": 491,
+     "end": 497,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "FlightLogIngestor::ingest",
+     "start": 499,
+     "end": 506,
+     "code_lines": 8,
+     "branches": 0
+    },
+    {
+     "name": "impl Read for Hashing<'_>::read",
+     "start": 521,
+     "end": 529,
+     "code_lines": 9,
+     "branches": 2
+    },
+    {
+     "name": "impl FlightLogIngestor for Px4Ingestor::format",
+     "start": 533,
+     "end": 535,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl FlightLogIngestor for Px4Ingestor::ingest_sealing",
+     "start": 537,
+     "end": 545,
+     "code_lines": 9,
+     "branches": 0
+    },
+    {
+     "name": "ingest_px4",
+     "start": 550,
+     "end": 589,
+     "code_lines": 38,
+     "branches": 4
+    },
+    {
+     "name": "field",
+     "start": 594,
+     "end": 596,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "small_uint",
+     "start": 600,
+     "end": 602,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "get_u8",
+     "start": 604,
+     "end": 608,
+     "code_lines": 5,
+     "branches": 0
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 8,
+   "id": "C1.7",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 9,
+    "coverage": {
+     "lines_total": 86,
+     "lines_hit": 81,
+     "branches_total": 6,
+     "branches_hit": 5
+    }
+   }
+  },
+  {
+   "group": "G1",
+   "file": "crates/sfr-core/src/ingest.rs",
+   "start": 609,
+   "end": 1005,
+   "code_lines": 347,
+   "first": "get_u64",
+   "last": "impl Visitor for Collector<'_>::subscription",
+   "inside": [],
+   "fns": [
+    {
+     "name": "get_u64",
+     "start": 610,
+     "end": 612,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "get_bool",
+     "start": 614,
+     "end": 616,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "get_f32",
+     "start": 618,
+     "end": 620,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "rule_reads",
+     "start": 653,
+     "end": 658,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "pinned",
+     "start": 662,
+     "end": 668,
+     "code_lines": 7,
+     "branches": 3
+    },
+    {
+     "name": "failsafe_schema",
+     "start": 688,
+     "end": 708,
+     "code_lines": 21,
+     "branches": 6
+    },
+    {
+     "name": "impl Visitor for Collector<'_>::header",
+     "start": 828,
+     "end": 830,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Visitor for Collector<'_>::format_definition",
+     "start": 832,
+     "end": 838,
+     "code_lines": 7,
+     "branches": 1
+    },
+    {
+     "name": "impl Visitor for Collector<'_>::info",
+     "start": 840,
+     "end": 856,
+     "code_lines": 17,
+     "branches": 5
+    },
+    {
+     "name": "impl Visitor for Collector<'_>::parameter",
+     "start": 858,
+     "end": 886,
+     "code_lines": 29,
+     "branches": 4
+    },
+    {
+     "name": "impl Visitor for Collector<'_>::subscription",
+     "start": 888,
+     "end": 1005,
+     "code_lines": 115,
+     "branches": 17
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 38,
+   "id": "C1.8",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 4,
+    "coverage": {
+     "lines_total": 190,
+     "lines_hit": 187,
+     "branches_total": 32,
+     "branches_hit": 25
+    }
+   }
+  },
+  {
+   "group": "G1",
+   "file": "crates/sfr-core/src/ingest.rs",
+   "start": 1006,
+   "end": 1397,
+   "code_lines": 372,
+   "first": "impl Visitor for Collector<'_>::data",
+   "last": "impl Collector<'_>::finish",
+   "inside": [
+    "impl Visitor for Collector<'_>"
+   ],
+   "fns": [
+    {
+     "name": "impl Visitor for Collector<'_>::data",
+     "start": 1007,
+     "end": 1194,
+     "code_lines": 184,
+     "branches": 26
+    },
+    {
+     "name": "impl Visitor for Collector<'_>::logging",
+     "start": 1196,
+     "end": 1208,
+     "code_lines": 12,
+     "branches": 1
+    },
+    {
+     "name": "impl Visitor for Collector<'_>::dropout",
+     "start": 1210,
+     "end": 1218,
+     "code_lines": 9,
+     "branches": 0
+    },
+    {
+     "name": "impl Collector<'_>::finish",
+     "start": 1222,
+     "end": 1396,
+     "code_lines": 164,
+     "branches": 16
+    }
+   ],
+   "split": null,
+   "fns_over_100": 2,
+   "branches": 43,
+   "id": "C1.9",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 9,
+    "coverage": {
+     "lines_total": 311,
+     "lines_hit": 305,
+     "branches_total": 46,
+     "branches_hit": 41
+    }
+   }
+  },
+  {
+   "group": "G1",
+   "file": "crates/sfr-core/src/px4.rs",
+   "start": 1,
+   "end": 115,
+   "code_lines": 92,
+   "first": "use crate::ingest::Firmware",
+   "last": "mode_requirement",
+   "inside": [],
+   "fns": [
+    {
+     "name": "releases_for",
+     "start": 11,
+     "end": 28,
+     "code_lines": 18,
+     "branches": 4
+    },
+    {
+     "name": "tags_label",
+     "start": 31,
+     "end": 37,
+     "code_lines": 7,
+     "branches": 3
+    },
+    {
+     "name": "msg",
+     "start": 40,
+     "end": 46,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "field_types",
+     "start": 50,
+     "end": 61,
+     "code_lines": 12,
+     "branches": 4
+    },
+    {
+     "name": "any_field_types",
+     "start": 64,
+     "end": 66,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "constant",
+     "start": 69,
+     "end": 77,
+     "code_lines": 9,
+     "branches": 0
+    },
+    {
+     "name": "constant_name",
+     "start": 81,
+     "end": 106,
+     "code_lines": 26,
+     "branches": 8
+    },
+    {
+     "name": "mode_requirement",
+     "start": 109,
+     "end": 115,
+     "code_lines": 7,
+     "branches": 0
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 19,
+   "id": "C1.10",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 11,
+    "coverage": {
+     "lines_total": 82,
+     "lines_hit": 79,
+     "branches_total": 18,
+     "branches_hit": 15
+    }
+   }
+  },
+  {
+   "group": "G2",
+   "file": "crates/sfr-core/src/evaluate.rs",
+   "start": 1,
+   "end": 317,
+   "code_lines": 245,
+   "first": "use crate::events::{ ArmedInterval, Event, EventKind, VtolState, armed_sample, attribute_failsafe, flag_at, flight_armed_intervals, vtol_state, }",
+   "last": "r2",
+   "inside": [],
+   "fns": [
+    {
+     "name": "impl Status::as_str",
+     "start": 34,
+     "end": 41,
+     "code_lines": 8,
+     "branches": 4
+    },
+    {
+     "name": "impl Status::parse",
+     "start": 44,
+     "end": 52,
+     "code_lines": 9,
+     "branches": 5
+    },
+    {
+     "name": "impl Overall::as_str",
+     "start": 71,
+     "end": 78,
+     "code_lines": 8,
+     "branches": 4
+    },
+    {
+     "name": "impl Overall::of",
+     "start": 83,
+     "end": 102,
+     "code_lines": 20,
+     "branches": 9
+    },
+    {
+     "name": "impl RuleResult::new",
+     "start": 126,
+     "end": 142,
+     "code_lines": 17,
+     "branches": 0
+    },
+    {
+     "name": "impl RuleResult::to_json",
+     "start": 145,
+     "end": 157,
+     "code_lines": 13,
+     "branches": 0
+    },
+    {
+     "name": "r1",
+     "start": 208,
+     "end": 260,
+     "code_lines": 53,
+     "branches": 11
+    },
+    {
+     "name": "baseline_source",
+     "start": 263,
+     "end": 268,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "r2",
+     "start": 270,
+     "end": 317,
+     "code_lines": 48,
+     "branches": 14
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 49,
+   "id": "C2.1",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 8,
+    "coverage": {
+     "lines_total": 153,
+     "lines_hit": 150,
+     "branches_total": 26,
+     "branches_hit": 24
+    }
+   }
+  },
+  {
+   "group": "G2",
+   "file": "crates/sfr-core/src/evaluate.rs",
+   "start": 318,
+   "end": 574,
+   "code_lines": 229,
+   "first": "struct Difference",
+   "last": "impl Lines::finish",
+   "inside": [],
+   "fns": [
+    {
+     "name": "r3",
+     "start": 330,
+     "end": 465,
+     "code_lines": 134,
+     "branches": 22
+    },
+    {
+     "name": "missing_fields",
+     "start": 467,
+     "end": 476,
+     "code_lines": 10,
+     "branches": 1
+    },
+    {
+     "name": "fail_missing",
+     "start": 478,
+     "end": 493,
+     "code_lines": 16,
+     "branches": 0
+    },
+    {
+     "name": "fail_unreadable",
+     "start": 496,
+     "end": 510,
+     "code_lines": 15,
+     "branches": 0
+    },
+    {
+     "name": "check_vehicle_status",
+     "start": 513,
+     "end": 529,
+     "code_lines": 17,
+     "branches": 2
+    },
+    {
+     "name": "impl Lines::new",
+     "start": 546,
+     "end": 548,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Lines::with_rest",
+     "start": 550,
+     "end": 556,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "impl Lines::push",
+     "start": 559,
+     "end": 564,
+     "code_lines": 6,
+     "branches": 1
+    },
+    {
+     "name": "impl Lines::finish",
+     "start": 566,
+     "end": 573,
+     "code_lines": 8,
+     "branches": 1
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 27,
+   "id": "C2.2",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 6,
+    "coverage": {
+     "lines_total": 193,
+     "lines_hit": 185,
+     "branches_total": 34,
+     "branches_hit": 29
+    }
+   }
+  },
+  {
+   "group": "G2",
+   "file": "crates/sfr-core/src/evaluate.rs",
+   "start": 575,
+   "end": 976,
+   "code_lines": 350,
+   "first": "in_flight_sample",
+   "last": "r4",
+   "inside": [],
+   "fns": [
+    {
+     "name": "in_flight_sample",
+     "start": 578,
+     "end": 583,
+     "code_lines": 6,
+     "branches": 1
+    },
+    {
+     "name": "failsafe_flags_gaps",
+     "start": 619,
+     "end": 640,
+     "code_lines": 22,
+     "branches": 6
+    },
+    {
+     "name": "hazard_whole_flight",
+     "start": 644,
+     "end": 668,
+     "code_lines": 25,
+     "branches": 8
+    },
+    {
+     "name": "flags_in_flight",
+     "start": 682,
+     "end": 732,
+     "code_lines": 50,
+     "branches": 7
+    },
+    {
+     "name": "r4_nav_state_out_of_range",
+     "start": 738,
+     "end": 759,
+     "code_lines": 22,
+     "branches": 3
+    },
+    {
+     "name": "r4",
+     "start": 764,
+     "end": 976,
+     "code_lines": 201,
+     "branches": 37
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 62,
+   "id": "C2.3",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 12,
+    "coverage": {
+     "lines_total": 287,
+     "lines_hit": 285,
+     "branches_total": 84,
+     "branches_hit": 79
+    }
+   }
+  },
+  {
+   "group": "G2",
+   "file": "crates/sfr-core/src/evaluate.rs",
+   "start": 977,
+   "end": 1219,
+   "code_lines": 224,
+   "first": "instance_note",
+   "last": "need_armed",
+   "inside": [],
+   "fns": [
+    {
+     "name": "instance_note",
+     "start": 979,
+     "end": 985,
+     "code_lines": 7,
+     "branches": 1
+    },
+    {
+     "name": "ends_mid_record",
+     "start": 989,
+     "end": 993,
+     "code_lines": 5,
+     "branches": 0
+    },
+    {
+     "name": "r5",
+     "start": 995,
+     "end": 1070,
+     "code_lines": 73,
+     "branches": 12
+    },
+    {
+     "name": "r6",
+     "start": 1073,
+     "end": 1175,
+     "code_lines": 101,
+     "branches": 16
+    },
+    {
+     "name": "in_armed",
+     "start": 1177,
+     "end": 1179,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "armed_index",
+     "start": 1182,
+     "end": 1186,
+     "code_lines": 5,
+     "branches": 1
+    },
+    {
+     "name": "need_armed",
+     "start": 1190,
+     "end": 1219,
+     "code_lines": 30,
+     "branches": 3
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 33,
+   "id": "C2.4",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 4,
+    "coverage": {
+     "lines_total": 187,
+     "lines_hit": 176,
+     "branches_total": 38,
+     "branches_hit": 31
+    }
+   }
+  },
+  {
+   "group": "G2",
+   "file": "crates/sfr-core/src/evaluate.rs",
+   "start": 1220,
+   "end": 1453,
+   "code_lines": 224,
+   "first": "r7",
+   "last": "x2",
+   "inside": [],
+   "fns": [
+    {
+     "name": "r7",
+     "start": 1224,
+     "end": 1335,
+     "code_lines": 111,
+     "branches": 11
+    },
+    {
+     "name": "x1",
+     "start": 1337,
+     "end": 1394,
+     "code_lines": 55,
+     "branches": 11
+    },
+    {
+     "name": "x2",
+     "start": 1396,
+     "end": 1453,
+     "code_lines": 58,
+     "branches": 12
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 34,
+   "id": "C2.5",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 9,
+    "coverage": {
+     "lines_total": 181,
+     "lines_hit": 155,
+     "branches_total": 48,
+     "branches_hit": 37
+    }
+   }
+  },
+  {
+   "group": "G2",
+   "file": "crates/sfr-core/src/evaluate.rs",
+   "start": 1454,
+   "end": 1697,
+   "code_lines": 234,
+   "first": "x3",
+   "last": "evaluate",
+   "inside": [],
+   "fns": [
+    {
+     "name": "x3",
+     "start": 1455,
+     "end": 1522,
+     "code_lines": 67,
+     "branches": 9
+    },
+    {
+     "name": "x4",
+     "start": 1524,
+     "end": 1630,
+     "code_lines": 103,
+     "branches": 14
+    },
+    {
+     "name": "x5",
+     "start": 1632,
+     "end": 1654,
+     "code_lines": 23,
+     "branches": 1
+    },
+    {
+     "name": "evaluate",
+     "start": 1657,
+     "end": 1697,
+     "code_lines": 41,
+     "branches": 9
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 33,
+   "id": "C2.6",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 7,
+    "coverage": {
+     "lines_total": 209,
+     "lines_hit": 176,
+     "branches_total": 56,
+     "branches_hit": 44
+    }
+   }
+  },
+  {
+   "group": "G2",
+   "file": "crates/sfr-core/src/events.rs",
+   "start": 1,
+   "end": 309,
+   "code_lines": 207,
+   "first": "use crate::ingest::{ AckRow, CommandRow, Config, FailsafeFlags, FailsafeRow, Firmware, FlightLog, VehicleStatusRow, }",
+   "last": "flight_armed_intervals",
+   "inside": [],
+   "fns": [
+    {
+     "name": "too_many_events",
+     "start": 28,
+     "end": 30,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Direction::as_str",
+     "start": 43,
+     "end": 48,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "impl CommandResult::name",
+     "start": 62,
+     "end": 76,
+     "code_lines": 15,
+     "branches": 10
+    },
+    {
+     "name": "impl EventKind::name",
+     "start": 170,
+     "end": 186,
+     "code_lines": 17,
+     "branches": 13
+    },
+    {
+     "name": "impl ArmedInterval::contains_sample",
+     "start": 223,
+     "end": 225,
+     "code_lines": 3,
+     "branches": 1
+    },
+    {
+     "name": "impl ArmedInterval::contains_record",
+     "start": 230,
+     "end": 233,
+     "code_lines": 4,
+     "branches": 3
+    },
+    {
+     "name": "armed_sample",
+     "start": 238,
+     "end": 243,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "in_flight_record",
+     "start": 247,
+     "end": 252,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "armed_intervals",
+     "start": 256,
+     "end": 285,
+     "code_lines": 30,
+     "branches": 6
+    },
+    {
+     "name": "flight_armed_intervals",
+     "start": 289,
+     "end": 309,
+     "code_lines": 21,
+     "branches": 6
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 41,
+   "id": "C2.7",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 12,
+    "coverage": {
+     "lines_total": 98,
+     "lines_hit": 92,
+     "branches_total": 14,
+     "branches_hit": 14
+    }
+   }
+  },
+  {
+   "group": "G2",
+   "file": "crates/sfr-core/src/events.rs",
+   "start": 310,
+   "end": 670,
+   "code_lines": 311,
+   "first": "reason_name",
+   "last": "instance_events",
+   "inside": [],
+   "fns": [
+    {
+     "name": "reason_name",
+     "start": 317,
+     "end": 338,
+     "code_lines": 22,
+     "branches": 19
+    },
+    {
+     "name": "supported_series",
+     "start": 340,
+     "end": 343,
+     "code_lines": 4,
+     "branches": 1
+    },
+    {
+     "name": "tested_firmware",
+     "start": 346,
+     "end": 348,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "nav_state_name",
+     "start": 353,
+     "end": 361,
+     "code_lines": 9,
+     "branches": 1
+    },
+    {
+     "name": "vtol_state",
+     "start": 382,
+     "end": 397,
+     "code_lines": 16,
+     "branches": 8
+    },
+    {
+     "name": "flags_at",
+     "start": 400,
+     "end": 403,
+     "code_lines": 4,
+     "branches": 0
+    },
+    {
+     "name": "flag_at",
+     "start": 407,
+     "end": 410,
+     "code_lines": 4,
+     "branches": 1
+    },
+    {
+     "name": "attribute_failsafe",
+     "start": 414,
+     "end": 448,
+     "code_lines": 35,
+     "branches": 6
+    },
+    {
+     "name": "sorted_flag_rows",
+     "start": 450,
+     "end": 452,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "sorted_by_time",
+     "start": 457,
+     "end": 465,
+     "code_lines": 9,
+     "branches": 1
+    },
+    {
+     "name": "impl Builder::push",
+     "start": 473,
+     "end": 496,
+     "code_lines": 24,
+     "branches": 1
+    },
+    {
+     "name": "vehicle_status_events",
+     "start": 499,
+     "end": 503,
+     "code_lines": 5,
+     "branches": 1
+    },
+    {
+     "name": "flags_for_instance",
+     "start": 507,
+     "end": 513,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "instance_events",
+     "start": 515,
+     "end": 670,
+     "code_lines": 152,
+     "branches": 27
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 66,
+   "id": "C2.8",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 13,
+    "coverage": {
+     "lines_total": 264,
+     "lines_hit": 250,
+     "branches_total": 50,
+     "branches_hit": 47
+    }
+   }
+  },
+  {
+   "group": "G2",
+   "file": "crates/sfr-core/src/events.rs",
+   "start": 671,
+   "end": 948,
+   "code_lines": 257,
+   "first": "pair_commands",
+   "last": "event_json",
+   "inside": [],
+   "fns": [
+    {
+     "name": "pair_commands",
+     "start": 679,
+     "end": 732,
+     "code_lines": 54,
+     "branches": 10
+    },
+    {
+     "name": "utc_offset",
+     "start": 736,
+     "end": 743,
+     "code_lines": 8,
+     "branches": 1
+    },
+    {
+     "name": "build",
+     "start": 746,
+     "end": 854,
+     "code_lines": 105,
+     "branches": 12
+    },
+    {
+     "name": "opt_u8",
+     "start": 856,
+     "end": 858,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "event_json",
+     "start": 862,
+     "end": 948,
+     "code_lines": 87,
+     "branches": 13
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 36,
+   "id": "C2.9",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 10,
+    "coverage": {
+     "lines_total": 204,
+     "lines_hit": 198,
+     "branches_total": 26,
+     "branches_hit": 21
+    }
+   }
+  },
+  {
+   "group": "G3",
+   "file": "crates/sfr/src/certs.rs",
+   "start": 1,
+   "end": 287,
+   "code_lines": 213,
+   "first": "use rustls_pki_types::{ AlgorithmIdentifier, CertificateDer, InvalidSignature, SignatureVerificationAlgorithm, UnixTime, alg_id, }",
+   "last": "oid_text",
+   "inside": [],
+   "fns": [
+    {
+     "name": "element",
+     "start": 61,
+     "end": 79,
+     "code_lines": 19,
+     "branches": 7
+    },
+    {
+     "name": "extension_value",
+     "start": 83,
+     "end": 110,
+     "code_lines": 26,
+     "branches": 11
+    },
+    {
+     "name": "extended_key_usages",
+     "start": 114,
+     "end": 130,
+     "code_lines": 17,
+     "branches": 6
+    },
+    {
+     "name": "check_digital_signature",
+     "start": 134,
+     "end": 150,
+     "code_lines": 16,
+     "branches": 5
+    },
+    {
+     "name": "check_signer_purpose",
+     "start": 160,
+     "end": 193,
+     "code_lines": 34,
+     "branches": 8
+    },
+    {
+     "name": "extensions",
+     "start": 208,
+     "end": 224,
+     "code_lines": 17,
+     "branches": 5
+    },
+    {
+     "name": "whole_element",
+     "start": 227,
+     "end": 231,
+     "code_lines": 5,
+     "branches": 3
+    },
+    {
+     "name": "der_time",
+     "start": 235,
+     "end": 264,
+     "code_lines": 30,
+     "branches": 11
+    },
+    {
+     "name": "oid_text",
+     "start": 267,
+     "end": 287,
+     "code_lines": 20,
+     "branches": 3
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 59,
+   "id": "C3.1",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 6,
+    "coverage": {
+     "lines_total": 160,
+     "lines_hit": 148,
+     "branches_total": 50,
+     "branches_hit": 42
+    }
+   }
+  },
+  {
+   "group": "G3",
+   "file": "crates/sfr/src/certs.rs",
+   "start": 288,
+   "end": 660,
+   "code_lines": 325,
+   "first": "ascii_safe",
+   "last": "parse_crl",
+   "inside": [],
+   "fns": [
+    {
+     "name": "ascii_safe",
+     "start": 290,
+     "end": 300,
+     "code_lines": 11,
+     "branches": 3
+    },
+    {
+     "name": "name_text",
+     "start": 304,
+     "end": 334,
+     "code_lines": 31,
+     "branches": 15
+    },
+    {
+     "name": "certificate_validity",
+     "start": 340,
+     "end": 356,
+     "code_lines": 16,
+     "branches": 11
+    },
+    {
+     "name": "check_anchor",
+     "start": 362,
+     "end": 439,
+     "code_lines": 76,
+     "branches": 15
+    },
+    {
+     "name": "certificate_names",
+     "start": 442,
+     "end": 455,
+     "code_lines": 13,
+     "branches": 9
+    },
+    {
+     "name": "impl CrlInfo::issuer_text",
+     "start": 474,
+     "end": 476,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl CrlInfo::number_text",
+     "start": 479,
+     "end": 500,
+     "code_lines": 21,
+     "branches": 4
+    },
+    {
+     "name": "impl CrlInfo::this_update_text",
+     "start": 503,
+     "end": 505,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl CrlInfo::next_update_text",
+     "start": 508,
+     "end": 510,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "parse_crl",
+     "start": 515,
+     "end": 660,
+     "code_lines": 137,
+     "branches": 55
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 112,
+   "id": "C3.2",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 4,
+    "coverage": {
+     "lines_total": 278,
+     "lines_hit": 230,
+     "branches_total": 86,
+     "branches_hit": 62
+    }
+   }
+  },
+  {
+   "group": "G3",
+   "file": "crates/sfr/src/certs.rs",
+   "start": 661,
+   "end": 904,
+   "code_lines": 202,
+   "first": "current_crls",
+   "last": "struct ChainPolicy",
+   "inside": [],
+   "fns": [
+    {
+     "name": "current_crls",
+     "start": 666,
+     "end": 692,
+     "code_lines": 24,
+     "branches": 6
+    },
+    {
+     "name": "impl SignatureVerificationAlgorithm for Ed25519::verify_signature",
+     "start": 699,
+     "end": 716,
+     "code_lines": 18,
+     "branches": 2
+    },
+    {
+     "name": "impl SignatureVerificationAlgorithm for Ed25519::public_key_alg_id",
+     "start": 717,
+     "end": 719,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl SignatureVerificationAlgorithm for Ed25519::signature_alg_id",
+     "start": 720,
+     "end": 722,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "read_certificates",
+     "start": 728,
+     "end": 736,
+     "code_lines": 9,
+     "branches": 3
+    },
+    {
+     "name": "read_crl",
+     "start": 739,
+     "end": 754,
+     "code_lines": 16,
+     "branches": 5
+    },
+    {
+     "name": "certificate_key",
+     "start": 757,
+     "end": 765,
+     "code_lines": 8,
+     "branches": 1
+    },
+    {
+     "name": "certificate_fingerprint",
+     "start": 768,
+     "end": 770,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "why",
+     "start": 773,
+     "end": 862,
+     "code_lines": 90,
+     "branches": 34
+    },
+    {
+     "name": "check_anchor_der",
+     "start": 866,
+     "end": 870,
+     "code_lines": 5,
+     "branches": 0
+    },
+    {
+     "name": "check_crl_der",
+     "start": 874,
+     "end": 879,
+     "code_lines": 6,
+     "branches": 1
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 52,
+   "id": "C3.3",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 0,
+    "coverage": {
+     "lines_total": 125,
+     "lines_hit": 109,
+     "branches_total": 16,
+     "branches_hit": 10
+    }
+   }
+  },
+  {
+   "group": "G3",
+   "file": "crates/sfr/src/certs.rs",
+   "start": 905,
+   "end": 1163,
+   "code_lines": 213,
+   "first": "struct CrlUsed",
+   "last": "no_crl_message",
+   "inside": [],
+   "fns": [
+    {
+     "name": "impl CrlUsed::of",
+     "start": 922,
+     "end": 930,
+     "code_lines": 9,
+     "branches": 0
+    },
+    {
+     "name": "impl CrlUsed::line",
+     "start": 933,
+     "end": 938,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "check_chain",
+     "start": 966,
+     "end": 1130,
+     "code_lines": 154,
+     "branches": 29
+    },
+    {
+     "name": "no_crl_message",
+     "start": 1139,
+     "end": 1163,
+     "code_lines": 25,
+     "branches": 2
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 31,
+   "id": "C3.4",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 1,
+    "coverage": {
+     "lines_total": 166,
+     "lines_hit": 158,
+     "branches_total": 30,
+     "branches_hit": 25
+    }
+   }
+  },
+  {
+   "group": "G3",
+   "file": "crates/sfr-core/src/crypto.rs",
+   "start": 1,
+   "end": 240,
+   "code_lines": 174,
+   "first": "use std::fmt",
+   "last": "impl impl Signer for FileKey",
+   "inside": [],
+   "fns": [
+    {
+     "name": "Sha256Stream::update",
+     "start": 13,
+     "end": 13,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "Sha256Stream::finish",
+     "start": 15,
+     "end": 15,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "CryptoBackend::crates",
+     "start": 48,
+     "end": 48,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "CryptoBackend::sha256_stream",
+     "start": 50,
+     "end": 50,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "CryptoBackend::ed25519_verify",
+     "start": 52,
+     "end": 52,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "CryptoBackend::sha256",
+     "start": 54,
+     "end": 56,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "CryptoBackend::sha256_concat",
+     "start": 58,
+     "end": 64,
+     "code_lines": 7,
+     "branches": 1
+    },
+    {
+     "name": "impl Custody::as_str",
+     "start": 80,
+     "end": 86,
+     "code_lines": 7,
+     "branches": 3
+    },
+    {
+     "name": "impl Custody::parse",
+     "start": 89,
+     "end": 96,
+     "code_lines": 8,
+     "branches": 4
+    },
+    {
+     "name": "impl fmt::Display for SignError::fmt",
+     "start": 104,
+     "end": 106,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "Signer::public_key",
+     "start": 114,
+     "end": 114,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "Signer::custody",
+     "start": 116,
+     "end": 116,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "Signer::label",
+     "start": 118,
+     "end": 118,
+     "code_lines": 1,
+     "branches": 0
+    },
+    {
+     "name": "Signer::sign",
+     "start": 120,
+     "end": 120,
+     "code_lines": 1,
+     "branches": 0
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 8,
+   "id": "C3.5",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 6,
+    "coverage": {
+     "lines_total": 96,
+     "lines_hit": 84,
+     "branches_total": 4,
+     "branches_hit": 3
+    }
+   }
+  },
+  {
+   "group": "G4",
+   "file": "crates/sfr-core/src/verify.rs",
+   "start": 17,
+   "end": 319,
+   "code_lines": 202,
+   "first": "use crate::crypto::{ CryptoBackend, Custody, Sha256Stream }",
+   "last": "failed_text",
+   "inside": [],
+   "fns": [
+    {
+     "name": "check_record_size",
+     "start": 91,
+     "end": 101,
+     "code_lines": 11,
+     "branches": 1
+    },
+    {
+     "name": "integrity_line",
+     "start": 104,
+     "end": 109,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "rule_checks_line",
+     "start": 113,
+     "end": 126,
+     "code_lines": 14,
+     "branches": 3
+    },
+    {
+     "name": "report_line",
+     "start": 140,
+     "end": 145,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "verified_text",
+     "start": 165,
+     "end": 186,
+     "code_lines": 22,
+     "branches": 0
+    },
+    {
+     "name": "time_line",
+     "start": 194,
+     "end": 204,
+     "code_lines": 11,
+     "branches": 1
+    },
+    {
+     "name": "impl Attestation::is_attested",
+     "start": 223,
+     "end": 225,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "custody_text",
+     "start": 230,
+     "end": 237,
+     "code_lines": 8,
+     "branches": 2
+    },
+    {
+     "name": "custody_policy",
+     "start": 251,
+     "end": 278,
+     "code_lines": 28,
+     "branches": 5
+    },
+    {
+     "name": "is_refusal",
+     "start": 286,
+     "end": 288,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "failed_line",
+     "start": 292,
+     "end": 297,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "failed_text",
+     "start": 302,
+     "end": 319,
+     "code_lines": 18,
+     "branches": 3
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 19,
+   "id": "C4.1",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 14,
+    "coverage": {
+     "lines_total": 117,
+     "lines_hit": 116,
+     "branches_total": 26,
+     "branches_hit": 25
+    }
+   }
+  },
+  {
+   "group": "G4",
+   "file": "crates/sfr-core/src/verify.rs",
+   "start": 320,
+   "end": 583,
+   "code_lines": 220,
+   "first": "claimed_lines",
+   "last": "results_problems",
+   "inside": [],
+   "fns": [
+    {
+     "name": "claimed_lines",
+     "start": 323,
+     "end": 332,
+     "code_lines": 10,
+     "branches": 0
+    },
+    {
+     "name": "claimed_seal",
+     "start": 350,
+     "end": 376,
+     "code_lines": 27,
+     "branches": 11
+    },
+    {
+     "name": "claimed_key_fingerprint",
+     "start": 380,
+     "end": 382,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "known_schema",
+     "start": 388,
+     "end": 392,
+     "code_lines": 5,
+     "branches": 0
+    },
+    {
+     "name": "schema_5_members",
+     "start": 399,
+     "end": 476,
+     "code_lines": 78,
+     "branches": 23
+    },
+    {
+     "name": "rule_id_key",
+     "start": 479,
+     "end": 487,
+     "code_lines": 9,
+     "branches": 4
+    },
+    {
+     "name": "fail",
+     "start": 489,
+     "end": 495,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "obj",
+     "start": 499,
+     "end": 504,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "string",
+     "start": 506,
+     "end": 511,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "array",
+     "start": 513,
+     "end": 518,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "results_problems",
+     "start": 536,
+     "end": 583,
+     "code_lines": 48,
+     "branches": 13
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 57,
+   "id": "C4.2",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 5,
+    "coverage": {
+     "lines_total": 173,
+     "lines_hit": 161,
+     "branches_total": 44,
+     "branches_hit": 36
+    }
+   }
+  },
+  {
+   "group": "G4",
+   "file": "crates/sfr-core/src/verify.rs",
+   "start": 584,
+   "end": 997,
+   "code_lines": 377,
+   "first": "member",
+   "last": "standalone",
+   "inside": [],
+   "fns": [
+    {
+     "name": "member",
+     "start": 585,
+     "end": 588,
+     "code_lines": 4,
+     "branches": 0
+    },
+    {
+     "name": "standalone",
+     "start": 590,
+     "end": 997,
+     "code_lines": 373,
+     "branches": 107
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 107,
+   "id": "C4.3",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 3,
+    "coverage": {
+     "lines_total": 319,
+     "lines_hit": 280,
+     "branches_total": 72,
+     "branches_hit": 56
+    }
+   }
+  },
+  {
+   "group": "G4",
+   "file": "crates/sfr-core/src/verify.rs",
+   "start": 998,
+   "end": 1210,
+   "code_lines": 200,
+   "first": "struct Tee",
+   "last": "compare",
+   "inside": [],
+   "fns": [
+    {
+     "name": "impl Read for Tee<'_>::read",
+     "start": 1006,
+     "end": 1012,
+     "code_lines": 7,
+     "branches": 2
+    },
+    {
+     "name": "baseline_from_record",
+     "start": 1015,
+     "end": 1043,
+     "code_lines": 29,
+     "branches": 10
+    },
+    {
+     "name": "first_field_difference",
+     "start": 1046,
+     "end": 1063,
+     "code_lines": 18,
+     "branches": 4
+    },
+    {
+     "name": "compare",
+     "start": 1066,
+     "end": 1210,
+     "code_lines": 140,
+     "branches": 38
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 54,
+   "id": "C4.4",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 1,
+    "coverage": {
+     "lines_total": 172,
+     "lines_hit": 147,
+     "branches_total": 28,
+     "branches_hit": 23
+    }
+   }
+  },
+  {
+   "group": "G4",
+   "file": "crates/sfr-core/src/verify.rs",
+   "start": 1211,
+   "end": 1315,
+   "code_lines": 99,
+   "first": "verify",
+   "last": "verify_parsed",
+   "inside": [],
+   "fns": [
+    {
+     "name": "verify",
+     "start": 1213,
+     "end": 1228,
+     "code_lines": 16,
+     "branches": 3
+    },
+    {
+     "name": "verify_parsed",
+     "start": 1231,
+     "end": 1315,
+     "code_lines": 83,
+     "branches": 15
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 18,
+   "id": "C4.5",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 3,
+    "coverage": {
+     "lines_total": 85,
+     "lines_hit": 78,
+     "branches_total": 6,
+     "branches_hit": 4
+    }
+   }
+  },
+  {
+   "group": "G4",
+   "file": "crates/sfr/src/main.rs",
+   "start": 974,
+   "end": 1057,
+   "code_lines": 63,
+   "first": "enum Trust",
+   "last": "attestation_of",
+   "inside": [],
+   "fns": [
+    {
+     "name": "parse_duration_seconds",
+     "start": 992,
+     "end": 1016,
+     "code_lines": 25,
+     "branches": 8
+    },
+    {
+     "name": "chain_trust_line",
+     "start": 1027,
+     "end": 1049,
+     "code_lines": 23,
+     "branches": 3
+    },
+    {
+     "name": "attestation_of",
+     "start": 1053,
+     "end": 1057,
+     "code_lines": 5,
+     "branches": 0
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 11,
+   "id": "C4.6",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 0,
+    "coverage": {
+     "lines_total": 44,
+     "lines_hit": 34,
+     "branches_total": 8,
+     "branches_hit": 6
+    }
+   }
+  },
+  {
+   "group": "G4",
+   "file": "crates/sfr/src/main.rs",
+   "start": 1058,
+   "end": 1341,
+   "code_lines": 262,
+   "first": "verify_cmd (part 1)",
+   "last": "verify_cmd (part 1)",
+   "inside": [],
+   "fns": [
+    {
+     "name": "verify_cmd",
+     "start": 1059,
+     "end": 1622,
+     "code_lines": 531,
+     "branches": 100
+    }
+   ],
+   "split": {
+    "function": "verify_cmd",
+    "part": 1,
+    "of": 2,
+    "cut_line": null,
+    "cut_text": null
+   },
+   "fns_over_100": 1,
+   "branches": 100,
+   "id": "C4.7",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 6,
+    "coverage": {
+     "lines_total": 202,
+     "lines_hit": 194,
+     "branches_total": 46,
+     "branches_hit": 39
+    }
+   }
+  },
+  {
+   "group": "G4",
+   "file": "crates/sfr/src/main.rs",
+   "start": 1342,
+   "end": 1622,
+   "code_lines": 269,
+   "first": "verify_cmd (part 2)",
+   "last": "verify_cmd (part 2)",
+   "inside": [],
+   "fns": [],
+   "split": {
+    "function": "verify_cmd",
+    "part": 2,
+    "of": 2,
+    "cut_line": 1342,
+    "cut_text": "let policy = CustodyPolicy {"
+   },
+   "fns_over_100": 0,
+   "branches": 0,
+   "id": "C4.8",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 5,
+    "coverage": {
+     "lines_total": 184,
+     "lines_hit": 179,
+     "branches_total": 36,
+     "branches_hit": 34
+    }
+   }
+  },
+  {
+   "group": "G4",
+   "file": "crates/sfr/src/main.rs",
+   "start": 1623,
+   "end": 1668,
+   "code_lines": 42,
+   "first": "not_checked",
+   "last": "not_checked",
+   "inside": [],
+   "fns": [
+    {
+     "name": "not_checked",
+     "start": 1627,
+     "end": 1668,
+     "code_lines": 42,
+     "branches": 3
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 3,
+   "id": "C4.9",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 1,
+    "coverage": {
+     "lines_total": 34,
+     "lines_hit": 33,
+     "branches_total": 4,
+     "branches_hit": 3
+    }
+   }
+  },
+  {
+   "group": "G5",
+   "file": "crates/sfr-core/src/json.rs",
+   "start": 1,
+   "end": 381,
+   "code_lines": 310,
+   "first": "use std::collections::BTreeMap",
+   "last": "impl Parser<'_>::integer",
+   "inside": [],
+   "fns": [
+    {
+     "name": "impl Value::int",
+     "start": 34,
+     "end": 40,
+     "code_lines": 7,
+     "branches": 1
+    },
+    {
+     "name": "impl Value::count",
+     "start": 43,
+     "end": 48,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "impl Value::u64_str",
+     "start": 51,
+     "end": 53,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Value::str",
+     "start": 56,
+     "end": 58,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Value::opt_str",
+     "start": 61,
+     "end": 63,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Obj::new",
+     "start": 72,
+     "end": 74,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Obj::field",
+     "start": 77,
+     "end": 80,
+     "code_lines": 4,
+     "branches": 0
+    },
+    {
+     "name": "impl Obj::set",
+     "start": 83,
+     "end": 85,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Obj::build",
+     "start": 88,
+     "end": 90,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "sorted_utf16",
+     "start": 93,
+     "end": 99,
+     "code_lines": 5,
+     "branches": 0
+    },
+    {
+     "name": "write_string",
+     "start": 105,
+     "end": 129,
+     "code_lines": 25,
+     "branches": 16
+    },
+    {
+     "name": "write_canonical",
+     "start": 131,
+     "end": 133,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "write_value",
+     "start": 135,
+     "end": 167,
+     "code_lines": 33,
+     "branches": 11
+    },
+    {
+     "name": "indent",
+     "start": 169,
+     "end": 174,
+     "code_lines": 6,
+     "branches": 1
+    },
+    {
+     "name": "write_pretty",
+     "start": 176,
+     "end": 206,
+     "code_lines": 31,
+     "branches": 9
+    },
+    {
+     "name": "canonical",
+     "start": 209,
+     "end": 213,
+     "code_lines": 5,
+     "branches": 0
+    },
+    {
+     "name": "pretty",
+     "start": 218,
+     "end": 223,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "impl std::fmt::Display for ParseError::fmt",
+     "start": 238,
+     "end": 240,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Parser<'_>::err",
+     "start": 251,
+     "end": 256,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "impl Parser<'_>::peek",
+     "start": 258,
+     "end": 260,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Parser<'_>::ws",
+     "start": 262,
+     "end": 266,
+     "code_lines": 5,
+     "branches": 1
+    },
+    {
+     "name": "impl Parser<'_>::expect",
+     "start": 268,
+     "end": 275,
+     "code_lines": 8,
+     "branches": 1
+    },
+    {
+     "name": "impl Parser<'_>::value",
+     "start": 277,
+     "end": 347,
+     "code_lines": 71,
+     "branches": 25
+    },
+    {
+     "name": "impl Parser<'_>::integer",
+     "start": 349,
+     "end": 381,
+     "code_lines": 33,
+     "branches": 10
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 77,
+   "id": "C5.1",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 29,
+    "coverage": {
+     "lines_total": 234,
+     "lines_hit": 233,
+     "branches_total": 46,
+     "branches_hit": 45
+    }
+   }
+  },
+  {
+   "group": "G5",
+   "file": "crates/sfr-core/src/json.rs",
+   "start": 382,
+   "end": 723,
+   "code_lines": 307,
+   "first": "impl Parser<'_>::hex4",
+   "last": "impl Scanner<'_>::array",
+   "inside": [
+    "impl Parser<'_>"
+   ],
+   "fns": [
+    {
+     "name": "impl Parser<'_>::hex4",
+     "start": 383,
+     "end": 396,
+     "code_lines": 14,
+     "branches": 5
+    },
+    {
+     "name": "impl Parser<'_>::string",
+     "start": 398,
+     "end": 466,
+     "code_lines": 69,
+     "branches": 28
+    },
+    {
+     "name": "parse",
+     "start": 471,
+     "end": 479,
+     "code_lines": 9,
+     "branches": 2
+    },
+    {
+     "name": "scan_canonical",
+     "start": 500,
+     "end": 514,
+     "code_lines": 15,
+     "branches": 3
+    },
+    {
+     "name": "impl Scanner<'_>::err",
+     "start": 530,
+     "end": 535,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "impl Scanner<'_>::peek",
+     "start": 537,
+     "end": 539,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Scanner<'_>::eat",
+     "start": 541,
+     "end": 548,
+     "code_lines": 8,
+     "branches": 1
+    },
+    {
+     "name": "impl Scanner<'_>::value",
+     "start": 550,
+     "end": 565,
+     "code_lines": 16,
+     "branches": 11
+    },
+    {
+     "name": "impl Scanner<'_>::literal",
+     "start": 567,
+     "end": 574,
+     "code_lines": 8,
+     "branches": 1
+    },
+    {
+     "name": "impl Scanner<'_>::integer",
+     "start": 576,
+     "end": 603,
+     "code_lines": 28,
+     "branches": 8
+    },
+    {
+     "name": "impl Scanner<'_>::string",
+     "start": 606,
+     "end": 679,
+     "code_lines": 71,
+     "branches": 18
+    },
+    {
+     "name": "impl Scanner<'_>::key_text",
+     "start": 681,
+     "end": 694,
+     "code_lines": 14,
+     "branches": 3
+    },
+    {
+     "name": "impl Scanner<'_>::array",
+     "start": 696,
+     "end": 723,
+     "code_lines": 28,
+     "branches": 7
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 87,
+   "id": "C5.2",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 35,
+    "coverage": {
+     "lines_total": 235,
+     "lines_hit": 226,
+     "branches_total": 64,
+     "branches_hit": 61
+    }
+   }
+  },
+  {
+   "group": "G5",
+   "file": "crates/sfr-core/src/json.rs",
+   "start": 724,
+   "end": 806,
+   "code_lines": 78,
+   "first": "impl Scanner<'_>::object",
+   "last": "first_non_canonical_offset",
+   "inside": [
+    "impl Scanner<'_>"
+   ],
+   "fns": [
+    {
+     "name": "impl Scanner<'_>::object",
+     "start": 725,
+     "end": 789,
+     "code_lines": 64,
+     "branches": 25
+    },
+    {
+     "name": "first_non_canonical_offset",
+     "start": 794,
+     "end": 806,
+     "code_lines": 13,
+     "branches": 1
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 26,
+   "id": "C5.3",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 7,
+    "coverage": {
+     "lines_total": 65,
+     "lines_hit": 65,
+     "branches_total": 30,
+     "branches_hit": 30
+    }
+   }
+  },
+  {
+   "group": "G5",
+   "file": "crates/sfr-core/src/record.rs",
+   "start": 1,
+   "end": 211,
+   "code_lines": 185,
+   "first": "use crate::evaluate::Evaluation",
+   "last": "dry_run_json",
+   "inside": [],
+   "fns": [
+    {
+     "name": "schema_for",
+     "start": 15,
+     "end": 21,
+     "code_lines": 7,
+     "branches": 2
+    },
+    {
+     "name": "truncated_json",
+     "start": 24,
+     "end": 31,
+     "code_lines": 8,
+     "branches": 0
+    },
+    {
+     "name": "log_json",
+     "start": 35,
+     "end": 97,
+     "code_lines": 63,
+     "branches": 1
+    },
+    {
+     "name": "param_map",
+     "start": 99,
+     "end": 104,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "config_json",
+     "start": 108,
+     "end": 123,
+     "code_lines": 16,
+     "branches": 0
+    },
+    {
+     "name": "sealed_topic_json",
+     "start": 126,
+     "end": 142,
+     "code_lines": 17,
+     "branches": 0
+    },
+    {
+     "name": "sealed_topics_json",
+     "start": 145,
+     "end": 147,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "events_json",
+     "start": 150,
+     "end": 158,
+     "code_lines": 9,
+     "branches": 0
+    },
+    {
+     "name": "baseline_json",
+     "start": 161,
+     "end": 180,
+     "code_lines": 20,
+     "branches": 0
+    },
+    {
+     "name": "dry_run_json",
+     "start": 184,
+     "end": 211,
+     "code_lines": 28,
+     "branches": 0
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 3,
+   "id": "C5.4",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 9,
+    "coverage": {
+     "lines_total": 139,
+     "lines_hit": 139,
+     "branches_total": 6,
+     "branches_hit": 6
+    }
+   }
+  },
+  {
+   "group": "G5",
+   "file": "crates/sfr-core/src/merkle.rs",
+   "start": 1,
+   "end": 66,
+   "code_lines": 46,
+   "first": "use crate::crypto::CryptoBackend",
+   "last": "root",
+   "inside": [],
+   "fns": [
+    {
+     "name": "leaf_hash",
+     "start": 13,
+     "end": 15,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "tagged_leaf_hash",
+     "start": 20,
+     "end": 22,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "node_hash",
+     "start": 24,
+     "end": 30,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "tagged_leaf_hashes",
+     "start": 34,
+     "end": 49,
+     "code_lines": 16,
+     "branches": 0
+    },
+    {
+     "name": "root",
+     "start": 53,
+     "end": 66,
+     "code_lines": 14,
+     "branches": 6
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 6,
+   "id": "C5.5",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 2,
+    "coverage": {
+     "lines_total": 38,
+     "lines_hit": 38,
+     "branches_total": 2,
+     "branches_hit": 2
+    }
+   }
+  },
+  {
+   "group": "G5",
+   "file": "crates/sfr-core/src/seal.rs",
+   "start": 1,
+   "end": 308,
+   "code_lines": 234,
+   "first": "use crate::crypto::{ CrateVersion, CryptoBackend, Signer }",
+   "last": "leaves",
+   "inside": [],
+   "fns": [
+    {
+     "name": "this_tool",
+     "start": 56,
+     "end": 62,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "impl fmt::Display for SealError::fmt",
+     "start": 69,
+     "end": 71,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Section::tag",
+     "start": 112,
+     "end": 123,
+     "code_lines": 12,
+     "branches": 8
+    },
+    {
+     "name": "impl Section::name",
+     "start": 126,
+     "end": 137,
+     "code_lines": 12,
+     "branches": 8
+    },
+    {
+     "name": "impl Section::index",
+     "start": 139,
+     "end": 141,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl TreeShape::new",
+     "start": 154,
+     "end": 156,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl TreeShape::of_counts",
+     "start": 160,
+     "end": 171,
+     "code_lines": 12,
+     "branches": 0
+    },
+    {
+     "name": "impl TreeShape::count",
+     "start": 174,
+     "end": 176,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl TreeShape::leaf_count",
+     "start": 179,
+     "end": 181,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl TreeShape::to_json",
+     "start": 184,
+     "end": 190,
+     "code_lines": 7,
+     "branches": 1
+    },
+    {
+     "name": "impl TreeShape::payload_bytes",
+     "start": 193,
+     "end": 199,
+     "code_lines": 7,
+     "branches": 1
+    },
+    {
+     "name": "impl LeafKind::section",
+     "start": 225,
+     "end": 236,
+     "code_lines": 12,
+     "branches": 8
+    },
+    {
+     "name": "impl fmt::Display for LeafKind::fmt",
+     "start": 240,
+     "end": 251,
+     "code_lines": 12,
+     "branches": 8
+    },
+    {
+     "name": "leaves",
+     "start": 255,
+     "end": 308,
+     "code_lines": 54,
+     "branches": 22
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 56,
+   "id": "C5.6",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 16,
+    "coverage": {
+     "lines_total": 129,
+     "lines_hit": 107,
+     "branches_total": 6,
+     "branches_hit": 3
+    }
+   }
+  },
+  {
+   "group": "G5",
+   "file": "crates/sfr-core/src/seal.rs",
+   "start": 309,
+   "end": 568,
+   "code_lines": 219,
+   "first": "merkle_root",
+   "last": "seal",
+   "inside": [],
+   "fns": [
+    {
+     "name": "merkle_root",
+     "start": 311,
+     "end": 329,
+     "code_lines": 19,
+     "branches": 3
+    },
+    {
+     "name": "signed_payload",
+     "start": 332,
+     "end": 339,
+     "code_lines": 8,
+     "branches": 0
+    },
+    {
+     "name": "crates_json",
+     "start": 342,
+     "end": 354,
+     "code_lines": 13,
+     "branches": 0
+    },
+    {
+     "name": "untested_version_messages",
+     "start": 383,
+     "end": 402,
+     "code_lines": 20,
+     "branches": 0
+    },
+    {
+     "name": "untested_ulog_version_messages",
+     "start": 407,
+     "end": 422,
+     "code_lines": 16,
+     "branches": 0
+    },
+    {
+     "name": "seal",
+     "start": 439,
+     "end": 568,
+     "code_lines": 127,
+     "branches": 6
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 9,
+   "id": "C5.7",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 11,
+    "coverage": {
+     "lines_total": 184,
+     "lines_hit": 173,
+     "branches_total": 10,
+     "branches_hit": 7
+    }
+   }
+  },
+  {
+   "group": "G5",
+   "file": "crates/sfr-core/src/seal.rs",
+   "start": 569,
+   "end": 714,
+   "code_lines": 124,
+   "first": "days_from_civil",
+   "last": "check_seal_time",
+   "inside": [],
+   "fns": [
+    {
+     "name": "days_from_civil",
+     "start": 571,
+     "end": 579,
+     "code_lines": 9,
+     "branches": 1
+    },
+    {
+     "name": "civil_from_days",
+     "start": 582,
+     "end": 593,
+     "code_lines": 12,
+     "branches": 2
+    },
+    {
+     "name": "format_utc",
+     "start": 596,
+     "end": 606,
+     "code_lines": 11,
+     "branches": 0
+    },
+    {
+     "name": "parse_seal_time",
+     "start": 610,
+     "end": 612,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "parse_seal_time_seconds",
+     "start": 616,
+     "end": 690,
+     "code_lines": 75,
+     "branches": 36
+    },
+    {
+     "name": "check_seal_time",
+     "start": 702,
+     "end": 714,
+     "code_lines": 13,
+     "branches": 2
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 41,
+   "id": "C5.8",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 25,
+    "coverage": {
+     "lines_total": 109,
+     "lines_hit": 106,
+     "branches_total": 52,
+     "branches_hit": 40
+    }
+   }
+  },
+  {
+   "group": "G6",
+   "file": "crates/sfr-core/src/rules.rs",
+   "start": 1,
+   "end": 334,
+   "code_lines": 210,
+   "first": "use crate::params::Pattern",
+   "last": "as_str_list",
+   "inside": [],
+   "fns": [
+    {
+     "name": "impl Category::as_str",
+     "start": 130,
+     "end": 135,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "impl Rules::r1_topics",
+     "start": 182,
+     "end": 196,
+     "code_lines": 15,
+     "branches": 2
+    },
+    {
+     "name": "impl Rules::category",
+     "start": 199,
+     "end": 205,
+     "code_lines": 7,
+     "branches": 1
+    },
+    {
+     "name": "impl Rules::ignores_everything",
+     "start": 209,
+     "end": 211,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Rules::ignore_has_star_only",
+     "start": 214,
+     "end": 218,
+     "code_lines": 5,
+     "branches": 0
+    },
+    {
+     "name": "impl Rules::ignores",
+     "start": 221,
+     "end": 223,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl fmt::Display for RulesError::fmt",
+     "start": 238,
+     "end": 244,
+     "code_lines": 7,
+     "branches": 1
+    },
+    {
+     "name": "impl Ctx<'_>::line",
+     "start": 254,
+     "end": 258,
+     "code_lines": 5,
+     "branches": 0
+    },
+    {
+     "name": "impl Ctx<'_>::err",
+     "start": 260,
+     "end": 266,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "check_keys",
+     "start": 271,
+     "end": 288,
+     "code_lines": 18,
+     "branches": 3
+    },
+    {
+     "name": "get",
+     "start": 290,
+     "end": 295,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "as_table",
+     "start": 297,
+     "end": 306,
+     "code_lines": 10,
+     "branches": 2
+    },
+    {
+     "name": "as_str",
+     "start": 308,
+     "end": 317,
+     "code_lines": 10,
+     "branches": 2
+    },
+    {
+     "name": "as_str_list",
+     "start": 319,
+     "end": 334,
+     "code_lines": 16,
+     "branches": 1
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 14,
+   "id": "C6.1",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 5,
+    "coverage": {
+     "lines_total": 103,
+     "lines_hit": 92,
+     "branches_total": 12,
+     "branches_hit": 11
+    }
+   }
+  },
+  {
+   "group": "G6",
+   "file": "crates/sfr-core/src/rules.rs",
+   "start": 335,
+   "end": 658,
+   "code_lines": 308,
+   "first": "as_uint",
+   "last": "parse_rules",
+   "inside": [],
+   "fns": [
+    {
+     "name": "as_uint",
+     "start": 336,
+     "end": 354,
+     "code_lines": 19,
+     "branches": 1
+    },
+    {
+     "name": "as_threshold",
+     "start": 356,
+     "end": 377,
+     "code_lines": 22,
+     "branches": 8
+    },
+    {
+     "name": "require",
+     "start": 379,
+     "end": 387,
+     "code_lines": 9,
+     "branches": 0
+    },
+    {
+     "name": "valid_topic",
+     "start": 389,
+     "end": 394,
+     "code_lines": 6,
+     "branches": 4
+    },
+    {
+     "name": "parse_rules",
+     "start": 397,
+     "end": 658,
+     "code_lines": 252,
+     "branches": 64
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 77,
+   "id": "C6.2",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 7,
+    "coverage": {
+     "lines_total": 294,
+     "lines_hit": 288,
+     "branches_total": 52,
+     "branches_hit": 46
+    }
+   }
+  },
+  {
+   "group": "G6",
+   "file": "crates/sfr-core/src/rules.rs",
+   "start": 659,
+   "end": 849,
+   "code_lines": 183,
+   "first": "valid_param_name",
+   "last": "parse_authorized_sources",
+   "inside": [],
+   "fns": [
+    {
+     "name": "valid_param_name",
+     "start": 661,
+     "end": 663,
+     "code_lines": 3,
+     "branches": 3
+    },
+    {
+     "name": "single_list",
+     "start": 666,
+     "end": 678,
+     "code_lines": 13,
+     "branches": 3
+    },
+    {
+     "name": "parse_watched",
+     "start": 680,
+     "end": 718,
+     "code_lines": 39,
+     "branches": 8
+    },
+    {
+     "name": "parse_sealed_topics",
+     "start": 720,
+     "end": 747,
+     "code_lines": 28,
+     "branches": 7
+    },
+    {
+     "name": "parse_payload_commands",
+     "start": 749,
+     "end": 776,
+     "code_lines": 28,
+     "branches": 7
+    },
+    {
+     "name": "parse_authorized_sources",
+     "start": 778,
+     "end": 849,
+     "code_lines": 72,
+     "branches": 21
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 49,
+   "id": "C6.3",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 6,
+    "coverage": {
+     "lines_total": 166,
+     "lines_hit": 146,
+     "branches_total": 44,
+     "branches_hit": 37
+    }
+   }
+  },
+  {
+   "group": "G6",
+   "file": "crates/sfr-core/src/params.rs",
+   "start": 1,
+   "end": 363,
+   "code_lines": 299,
+   "first": "use crate::ulog::ParamValue",
+   "last": "impl Pattern::matches",
+   "inside": [],
+   "fns": [
+    {
+     "name": "impl fmt::Display for FirmwareSpec::fmt",
+     "start": 29,
+     "end": 34,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "impl fmt::Display for BaselineError::fmt",
+     "start": 59,
+     "end": 65,
+     "code_lines": 7,
+     "branches": 1
+    },
+    {
+     "name": "err",
+     "start": 70,
+     "end": 75,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "valid_param_name",
+     "start": 78,
+     "end": 82,
+     "code_lines": 5,
+     "branches": 3
+    },
+    {
+     "name": "impl FirmwareSpec::parse",
+     "start": 87,
+     "end": 89,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "parse_firmware",
+     "start": 92,
+     "end": 129,
+     "code_lines": 38,
+     "branches": 9
+    },
+    {
+     "name": "parse_baseline",
+     "start": 132,
+     "end": 231,
+     "code_lines": 97,
+     "branches": 20
+    },
+    {
+     "name": "impl Pattern::new",
+     "start": 247,
+     "end": 257,
+     "code_lines": 11,
+     "branches": 5
+    },
+    {
+     "name": "impl Pattern::cover_every_name",
+     "start": 265,
+     "end": 332,
+     "code_lines": 66,
+     "branches": 19
+    },
+    {
+     "name": "impl Pattern::matches_everything",
+     "start": 335,
+     "end": 337,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Pattern::as_str",
+     "start": 340,
+     "end": 342,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Pattern::matches",
+     "start": 345,
+     "end": 362,
+     "code_lines": 18,
+     "branches": 7
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 66,
+   "id": "C6.4",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 13,
+    "coverage": {
+     "lines_total": 230,
+     "lines_hit": 217,
+     "branches_total": 84,
+     "branches_hit": 73
+    }
+   }
+  },
+  {
+   "group": "G6",
+   "file": "crates/sfr-core/src/pkcs11_uri.rs",
+   "start": 1,
+   "end": 200,
+   "code_lines": 157,
+   "first": "use std::fmt",
+   "last": "impl Pkcs11Uri::label",
+   "inside": [],
+   "fns": [
+    {
+     "name": "impl fmt::Display for UriError::fmt",
+     "start": 54,
+     "end": 56,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "err",
+     "start": 61,
+     "end": 63,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "decode",
+     "start": 66,
+     "end": 85,
+     "code_lines": 20,
+     "branches": 3
+    },
+    {
+     "name": "text",
+     "start": 87,
+     "end": 90,
+     "code_lines": 4,
+     "branches": 1
+    },
+    {
+     "name": "impl Pkcs11Uri::parse",
+     "start": 94,
+     "end": 189,
+     "code_lines": 95,
+     "branches": 41
+    },
+    {
+     "name": "impl Pkcs11Uri::label",
+     "start": 193,
+     "end": 199,
+     "code_lines": 7,
+     "branches": 3
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 48,
+   "id": "C6.5",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 8,
+    "coverage": {
+     "lines_total": 106,
+     "lines_hit": 94,
+     "branches_total": 18,
+     "branches_hit": 18
+    }
+   }
+  },
+  {
+   "group": "G7",
+   "file": "crates/sfr-core/src/report.rs",
+   "start": 1,
+   "end": 361,
+   "code_lines": 260,
+   "first": "use crate::json::Value",
+   "last": "check",
+   "inside": [],
+   "fns": [
+    {
+     "name": "untested_ulog_version_line",
+     "start": 34,
+     "end": 40,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "truncated_line",
+     "start": 44,
+     "end": 52,
+     "code_lines": 9,
+     "branches": 0
+    },
+    {
+     "name": "truncated_line_of",
+     "start": 55,
+     "end": 71,
+     "code_lines": 17,
+     "branches": 6
+    },
+    {
+     "name": "ignore_all_line",
+     "start": 85,
+     "end": 100,
+     "code_lines": 16,
+     "branches": 9
+    },
+    {
+     "name": "skipped_line",
+     "start": 121,
+     "end": 132,
+     "code_lines": 12,
+     "branches": 0
+    },
+    {
+     "name": "skipped_line_of",
+     "start": 135,
+     "end": 149,
+     "code_lines": 15,
+     "branches": 6
+    },
+    {
+     "name": "impl std::fmt::Display for ReportError::fmt",
+     "start": 160,
+     "end": 162,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "obj",
+     "start": 169,
+     "end": 174,
+     "code_lines": 6,
+     "branches": 2
+    },
+    {
+     "name": "get",
+     "start": 176,
+     "end": 179,
+     "code_lines": 4,
+     "branches": 0
+    },
+    {
+     "name": "arr",
+     "start": 181,
+     "end": 186,
+     "code_lines": 6,
+     "branches": 3
+    },
+    {
+     "name": "sub",
+     "start": 188,
+     "end": 190,
+     "code_lines": 3,
+     "branches": 1
+    },
+    {
+     "name": "text",
+     "start": 193,
+     "end": 201,
+     "code_lines": 9,
+     "branches": 5
+    },
+    {
+     "name": "s",
+     "start": 203,
+     "end": 205,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "escape",
+     "start": 211,
+     "end": 229,
+     "code_lines": 19,
+     "branches": 6
+    },
+    {
+     "name": "code",
+     "start": 232,
+     "end": 238,
+     "code_lines": 7,
+     "branches": 3
+    },
+    {
+     "name": "seconds",
+     "start": 241,
+     "end": 247,
+     "code_lines": 7,
+     "branches": 2
+    },
+    {
+     "name": "event_detail",
+     "start": 258,
+     "end": 264,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "split_r3_line",
+     "start": 269,
+     "end": 273,
+     "code_lines": 5,
+     "branches": 2
+    },
+    {
+     "name": "record_file_name",
+     "start": 276,
+     "end": 282,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "row",
+     "start": 284,
+     "end": 292,
+     "code_lines": 9,
+     "branches": 1
+    },
+    {
+     "name": "header",
+     "start": 294,
+     "end": 304,
+     "code_lines": 11,
+     "branches": 1
+    },
+    {
+     "name": "item",
+     "start": 306,
+     "end": 308,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "check",
+     "start": 313,
+     "end": 361,
+     "code_lines": 49,
+     "branches": 10
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 57,
+   "id": "C7.1",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 17,
+    "coverage": {
+     "lines_total": 187,
+     "lines_hit": 148,
+     "branches_total": 22,
+     "branches_hit": 20
+    }
+   }
+  },
+  {
+   "group": "G7",
+   "file": "crates/sfr-core/src/report.rs",
+   "start": 362,
+   "end": 776,
+   "code_lines": 387,
+   "first": "render",
+   "last": "render",
+   "inside": [],
+   "fns": [
+    {
+     "name": "render",
+     "start": 364,
+     "end": 776,
+     "code_lines": 387,
+     "branches": 95
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 95,
+   "id": "C7.2",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 12,
+    "coverage": {
+     "lines_total": 311,
+     "lines_hit": 302,
+     "branches_total": 44,
+     "branches_hit": 37
+    }
+   }
+  },
+  {
+   "group": "G7",
+   "file": "crates/sfr-core/src/report.rs",
+   "start": 777,
+   "end": 868,
+   "code_lines": 67,
+   "first": "const VARIABLE_FORM_NOTE",
+   "last": "watched_mark",
+   "inside": [],
+   "fns": [
+    {
+     "name": "as_operand",
+     "start": 785,
+     "end": 791,
+     "code_lines": 7,
+     "branches": 1
+    },
+    {
+     "name": "shell_word",
+     "start": 801,
+     "end": 821,
+     "code_lines": 21,
+     "branches": 8
+    },
+    {
+     "name": "posix_assignment",
+     "start": 826,
+     "end": 836,
+     "code_lines": 11,
+     "branches": 3
+    },
+    {
+     "name": "powershell_assignment",
+     "start": 839,
+     "end": 848,
+     "code_lines": 10,
+     "branches": 0
+    },
+    {
+     "name": "longest_backtick_run",
+     "start": 850,
+     "end": 852,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "watched_mark",
+     "start": 857,
+     "end": 868,
+     "code_lines": 12,
+     "branches": 2
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 14,
+   "id": "C7.3",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 5,
+    "coverage": {
+     "lines_total": 51,
+     "lines_hit": 51,
+     "branches_total": 26,
+     "branches_hit": 26
+    }
+   }
+  },
+  {
+   "group": "G7",
+   "file": "crates/sfr-core/src/display.rs",
+   "start": 1,
+   "end": 89,
+   "code_lines": 57,
+   "first": "const FORMAT_CHARACTERS",
+   "last": "terminal_safe",
+   "inside": [],
+   "fns": [
+    {
+     "name": "is_format_character",
+     "start": 42,
+     "end": 47,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "is_hidden",
+     "start": 52,
+     "end": 54,
+     "code_lines": 3,
+     "branches": 1
+    },
+    {
+     "name": "marker",
+     "start": 57,
+     "end": 59,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "visible",
+     "start": 63,
+     "end": 73,
+     "code_lines": 11,
+     "branches": 2
+    },
+    {
+     "name": "terminal_safe",
+     "start": 79,
+     "end": 89,
+     "code_lines": 11,
+     "branches": 3
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 6,
+   "id": "C7.4",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 5,
+    "coverage": {
+     "lines_total": 28,
+     "lines_hit": 28,
+     "branches_total": 12,
+     "branches_hit": 12
+    }
+   }
+  },
+  {
+   "group": "G8",
+   "file": "crates/sfr-core/src/keys.rs",
+   "start": 1,
+   "end": 210,
+   "code_lines": 164,
+   "first": "use crate::crypto::CryptoBackend",
+   "last": "hex_decode",
+   "inside": [],
+   "fns": [
+    {
+     "name": "base64_encode",
+     "start": 33,
+     "end": 52,
+     "code_lines": 20,
+     "branches": 3
+    },
+    {
+     "name": "base64_decode",
+     "start": 55,
+     "end": 83,
+     "code_lines": 29,
+     "branches": 15
+    },
+    {
+     "name": "pem_encode",
+     "start": 86,
+     "end": 95,
+     "code_lines": 10,
+     "branches": 1
+    },
+    {
+     "name": "pem_decode",
+     "start": 98,
+     "end": 113,
+     "code_lines": 16,
+     "branches": 2
+    },
+    {
+     "name": "pem_decode_all",
+     "start": 117,
+     "end": 132,
+     "code_lines": 16,
+     "branches": 3
+    },
+    {
+     "name": "ed25519_spki_der",
+     "start": 135,
+     "end": 139,
+     "code_lines": 5,
+     "branches": 0
+    },
+    {
+     "name": "ed25519_from_spki_der",
+     "start": 142,
+     "end": 145,
+     "code_lines": 4,
+     "branches": 1
+    },
+    {
+     "name": "ed25519_pkcs8_v1_der",
+     "start": 148,
+     "end": 153,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "ed25519_seed_from_pkcs8_der",
+     "start": 160,
+     "end": 171,
+     "code_lines": 12,
+     "branches": 7
+    },
+    {
+     "name": "public_key_pem",
+     "start": 174,
+     "end": 176,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "parse_public_key_pem",
+     "start": 179,
+     "end": 182,
+     "code_lines": 4,
+     "branches": 1
+    },
+    {
+     "name": "fingerprint",
+     "start": 185,
+     "end": 190,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "hex_decode",
+     "start": 193,
+     "end": 210,
+     "code_lines": 18,
+     "branches": 9
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 42,
+   "id": "C8.1",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 36,
+    "coverage": {
+     "lines_total": 134,
+     "lines_hit": 131,
+     "branches_total": 26,
+     "branches_hit": 22
+    }
+   }
+  },
+  {
+   "group": "G8",
+   "file": "crates/sfr/src/hardware.rs",
+   "start": 1,
+   "end": 270,
+   "code_lines": 212,
+   "first": "use sfr_core::crypto::rustcrypto::FileKey",
+   "last": "impl Drop for Scratch::drop",
+   "inside": [],
+   "fns": [
+    {
+     "name": "run",
+     "start": 33,
+     "end": 77,
+     "code_lines": 44,
+     "branches": 8
+    },
+    {
+     "name": "decode_hex",
+     "start": 79,
+     "end": 86,
+     "code_lines": 8,
+     "branches": 2
+    },
+    {
+     "name": "helper_path",
+     "start": 103,
+     "end": 127,
+     "code_lines": 25,
+     "branches": 4
+    },
+    {
+     "name": "impl Pkcs11Key::open",
+     "start": 131,
+     "end": 141,
+     "code_lines": 11,
+     "branches": 4
+    },
+    {
+     "name": "impl Signer for Pkcs11Key::public_key",
+     "start": 145,
+     "end": 147,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Signer for Pkcs11Key::custody",
+     "start": 148,
+     "end": 150,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Signer for Pkcs11Key::label",
+     "start": 151,
+     "end": 153,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Signer for Pkcs11Key::sign",
+     "start": 154,
+     "end": 157,
+     "code_lines": 4,
+     "branches": 1
+    },
+    {
+     "name": "root_owned_and_closed",
+     "start": 172,
+     "end": 196,
+     "code_lines": 25,
+     "branches": 7
+    },
+    {
+     "name": "tpm2",
+     "start": 203,
+     "end": 237,
+     "code_lines": 34,
+     "branches": 6
+    },
+    {
+     "name": "impl Scratch::new",
+     "start": 244,
+     "end": 259,
+     "code_lines": 16,
+     "branches": 2
+    },
+    {
+     "name": "impl Scratch::path",
+     "start": 260,
+     "end": 262,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Drop for Scratch::drop",
+     "start": 266,
+     "end": 269,
+     "code_lines": 3,
+     "branches": 0
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 34,
+   "id": "C8.2",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 0,
+    "coverage": {
+     "lines_total": 158,
+     "lines_hit": 90,
+     "branches_total": 28,
+     "branches_hit": 15
+    }
+   }
+  },
+  {
+   "group": "G8",
+   "file": "crates/sfr/src/hardware.rs",
+   "start": 271,
+   "end": 513,
+   "code_lines": 221,
+   "first": "check_handle",
+   "last": "tpm_key",
+   "inside": [],
+   "fns": [
+    {
+     "name": "check_handle",
+     "start": 273,
+     "end": 284,
+     "code_lines": 12,
+     "branches": 2
+    },
+    {
+     "name": "check_pcrs",
+     "start": 287,
+     "end": 302,
+     "code_lines": 16,
+     "branches": 3
+    },
+    {
+     "name": "impl TpmSettings::text",
+     "start": 311,
+     "end": 317,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "impl TpmSettings::parse",
+     "start": 318,
+     "end": 334,
+     "code_lines": 17,
+     "branches": 8
+    },
+    {
+     "name": "tpm_keygen",
+     "start": 340,
+     "end": 446,
+     "code_lines": 101,
+     "branches": 20
+    },
+    {
+     "name": "unseal",
+     "start": 449,
+     "end": 482,
+     "code_lines": 34,
+     "branches": 6
+    },
+    {
+     "name": "tpm_key",
+     "start": 486,
+     "end": 513,
+     "code_lines": 28,
+     "branches": 7
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 46,
+   "id": "C8.3",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 0,
+    "coverage": {
+     "lines_total": 197,
+     "lines_hit": 98,
+     "branches_total": 26,
+     "branches_hit": 14
+    }
+   }
+  },
+  {
+   "group": "G8",
+   "file": "crates/sfr-pkcs11-helper/src/main.rs",
+   "start": 1,
+   "end": 251,
+   "code_lines": 214,
+   "first": "use cryptoki::context::{ CInitializeArgs, CInitializeFlags, Pkcs11 }",
+   "last": "ed25519_point",
+   "inside": [],
+   "fns": [
+    {
+     "name": "main",
+     "start": 40,
+     "end": 56,
+     "code_lines": 16,
+     "branches": 4
+    },
+    {
+     "name": "run",
+     "start": 58,
+     "end": 122,
+     "code_lines": 64,
+     "branches": 21
+    },
+    {
+     "name": "read_pin",
+     "start": 124,
+     "end": 141,
+     "code_lines": 18,
+     "branches": 6
+    },
+    {
+     "name": "find_slot",
+     "start": 144,
+     "end": 176,
+     "code_lines": 33,
+     "branches": 11
+    },
+    {
+     "name": "one_object",
+     "start": 179,
+     "end": 212,
+     "code_lines": 34,
+     "branches": 7
+    },
+    {
+     "name": "public_key",
+     "start": 215,
+     "end": 240,
+     "code_lines": 26,
+     "branches": 10
+    },
+    {
+     "name": "ed25519_point",
+     "start": 244,
+     "end": 251,
+     "code_lines": 8,
+     "branches": 5
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 64,
+   "id": "C8.4",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 1,
+    "coverage": {
+     "lines_total": 168,
+     "lines_hit": 16,
+     "branches_total": 38,
+     "branches_hit": 7
+    }
+   }
+  },
+  {
+   "group": "G8",
+   "file": "crates/sfr/src/main.rs",
+   "start": 1,
+   "end": 252,
+   "code_lines": 200,
+   "first": "macro compile_error",
+   "last": "file_name",
+   "inside": [],
+   "fns": [
+    {
+     "name": "shown",
+     "start": 62,
+     "end": 64,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "with_slashes",
+     "start": 67,
+     "end": 69,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "fail",
+     "start": 82,
+     "end": 87,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "usage",
+     "start": 89,
+     "end": 91,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Args::parse",
+     "start": 101,
+     "end": 126,
+     "code_lines": 26,
+     "branches": 7
+    },
+    {
+     "name": "impl Args::value",
+     "start": 128,
+     "end": 133,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "impl Args::values",
+     "start": 136,
+     "end": 142,
+     "code_lines": 7,
+     "branches": 0
+    },
+    {
+     "name": "impl Args::flag",
+     "start": 144,
+     "end": 146,
+     "code_lines": 3,
+     "branches": 0
+    },
+    {
+     "name": "impl Args::one_positional",
+     "start": 148,
+     "end": 154,
+     "code_lines": 7,
+     "branches": 3
+    },
+    {
+     "name": "read_capped",
+     "start": 158,
+     "end": 166,
+     "code_lines": 9,
+     "branches": 2
+    },
+    {
+     "name": "read_bytes",
+     "start": 169,
+     "end": 181,
+     "code_lines": 13,
+     "branches": 2
+    },
+    {
+     "name": "read_text",
+     "start": 185,
+     "end": 196,
+     "code_lines": 12,
+     "branches": 1
+    },
+    {
+     "name": "write_out",
+     "start": 202,
+     "end": 207,
+     "code_lines": 6,
+     "branches": 0
+    },
+    {
+     "name": "hardware_key",
+     "start": 211,
+     "end": 226,
+     "code_lines": 16,
+     "branches": 3
+    },
+    {
+     "name": "key_file_mode_warning",
+     "start": 231,
+     "end": 246,
+     "code_lines": 16,
+     "branches": 2
+    },
+    {
+     "name": "file_name",
+     "start": 248,
+     "end": 252,
+     "code_lines": 5,
+     "branches": 0
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 20,
+   "id": "C8.5",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 4,
+    "coverage": {
+     "lines_total": 126,
+     "lines_hit": 113,
+     "branches_total": 22,
+     "branches_hit": 21
+    }
+   }
+  },
+  {
+   "group": "G8",
+   "file": "crates/sfr/src/main.rs",
+   "start": 253,
+   "end": 505,
+   "code_lines": 232,
+   "first": "crates_line",
+   "last": "transition_tuning",
+   "inside": [],
+   "fns": [
+    {
+     "name": "crates_line",
+     "start": 255,
+     "end": 262,
+     "code_lines": 8,
+     "branches": 0
+    },
+    {
+     "name": "keygen",
+     "start": 267,
+     "end": 369,
+     "code_lines": 102,
+     "branches": 19
+    },
+    {
+     "name": "keygen_tpm",
+     "start": 373,
+     "end": 421,
+     "code_lines": 49,
+     "branches": 4
+    },
+    {
+     "name": "pubkey_cmd",
+     "start": 426,
+     "end": 460,
+     "code_lines": 35,
+     "branches": 6
+    },
+    {
+     "name": "transition_tuning",
+     "start": 467,
+     "end": 505,
+     "code_lines": 38,
+     "branches": 3
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 32,
+   "id": "C8.6",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 6,
+    "coverage": {
+     "lines_total": 207,
+     "lines_hit": 122,
+     "branches_total": 32,
+     "branches_hit": 22
+    }
+   }
+  },
+  {
+   "group": "G8",
+   "file": "crates/sfr/src/main.rs",
+   "start": 506,
+   "end": 612,
+   "code_lines": 101,
+   "first": "table",
+   "last": "windows_reserved_name",
+   "inside": [],
+   "fns": [
+    {
+     "name": "table",
+     "start": 507,
+     "end": 591,
+     "code_lines": 85,
+     "branches": 13
+    },
+    {
+     "name": "windows_reserved_name",
+     "start": 597,
+     "end": 612,
+     "code_lines": 16,
+     "branches": 4
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 17,
+   "id": "C8.7",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 10,
+    "coverage": {
+     "lines_total": 97,
+     "lines_hit": 94,
+     "branches_total": 16,
+     "branches_hit": 15
+    }
+   }
+  },
+  {
+   "group": "G8",
+   "file": "crates/sfr/src/main.rs",
+   "start": 613,
+   "end": 973,
+   "code_lines": 340,
+   "first": "seal_cmd",
+   "last": "seal_cmd",
+   "inside": [],
+   "fns": [
+    {
+     "name": "seal_cmd",
+     "start": 614,
+     "end": 973,
+     "code_lines": 340,
+     "branches": 73
+    }
+   ],
+   "split": null,
+   "fns_over_100": 1,
+   "branches": 73,
+   "id": "C8.8",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 6,
+    "coverage": {
+     "lines_total": 303,
+     "lines_hit": 252,
+     "branches_total": 60,
+     "branches_hit": 55
+    }
+   }
+  },
+  {
+   "group": "G8",
+   "file": "crates/sfr/src/main.rs",
+   "start": 1669,
+   "end": 1753,
+   "code_lines": 75,
+   "first": "version",
+   "last": "exit_with",
+   "inside": [],
+   "fns": [
+    {
+     "name": "version",
+     "start": 1672,
+     "end": 1698,
+     "code_lines": 27,
+     "branches": 3
+    },
+    {
+     "name": "run",
+     "start": 1700,
+     "end": 1717,
+     "code_lines": 18,
+     "branches": 9
+    },
+    {
+     "name": "main",
+     "start": 1719,
+     "end": 1747,
+     "code_lines": 27,
+     "branches": 4
+    },
+    {
+     "name": "exit_with",
+     "start": 1750,
+     "end": 1753,
+     "code_lines": 3,
+     "branches": 0
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 16,
+   "id": "C8.9",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 2,
+    "coverage": {
+     "lines_total": 62,
+     "lines_hit": 36,
+     "branches_total": 4,
+     "branches_hit": 2
+    }
+   }
+  },
+  {
+   "group": "GX",
+   "file": "crates/sfr-core/src/lib.rs",
+   "start": 1,
+   "end": 97,
+   "code_lines": 47,
+   "first": "mod crypto",
+   "last": "const USAGE",
+   "inside": [],
+   "fns": [
+    {
+     "name": "hex",
+     "start": 29,
+     "end": 36,
+     "code_lines": 8,
+     "branches": 1
+    },
+    {
+     "name": "limit_exceeded",
+     "start": 39,
+     "end": 41,
+     "code_lines": 3,
+     "branches": 0
+    }
+   ],
+   "split": null,
+   "fns_over_100": 0,
+   "branches": 1,
+   "id": "CX.1",
+   "status": "todo",
+   "passes": [],
+   "fix_prs": [],
+   "metrics": {
+    "lint": 4,
+    "coverage": {
+     "lines_total": 9,
+     "lines_hit": 9,
+     "branches_total": 0,
+     "branches_hit": 0
+    }
+   }
+  }
+ ]
+}

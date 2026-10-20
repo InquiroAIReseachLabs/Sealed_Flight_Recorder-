@@ -1,7 +1,8 @@
 # Sealed Flight Record workspace (SPEC B1.2).
 # One engine (sfr-core), a thin command line wrapper (sfr), and the PKCS#11
 # signing helper, which runs as its own process (SPEC B1.2).
-# fuzz/ is a separate cargo-fuzz package; it is excluded from the workspace on purpose.
+# fuzz/ is a separate cargo-fuzz package, and tools/review_metrics a standalone review tool; both are
+# excluded from the workspace on purpose.
 [workspace]
 resolver = "3"
 members = [
@@ -9,7 +10,7 @@ members = [
   "crates/sfr",
   "crates/sfr-pkcs11-helper",
 ]
-exclude = ["fuzz"]
+exclude = ["fuzz", "tools/review_metrics"]
 
 [workspace.package]
 version = "0.1.0"
@@ -39,10 +40,13 @@ toml = { version = "=0.9.12", default-features = false, features = ["parse", "st
 # sfr verify --trust-anchor only (SPEC B1.3): X.509 path validation, extended key usage and CRLs.
 # No crypto backend feature: sfr supplies Ed25519 from ed25519-dalek, so the one crypto stack
 # (SPEC B1.10 Crypto) holds and neither ring nor aws-lc enters the build.
-rustls-webpki = { version = "=0.103.15", default-features = false, features = ["alloc"] }
+rustls-webpki = { version = "=0.103.16", default-features = false, features = ["alloc"] }
 rustls-pki-types = { version = "=1.15.1", default-features = false, features = ["alloc"] }
 # sfr-pkcs11-helper only: a separate, dynamically linked process (SPEC B1.2).
 cryptoki = { version = "=0.12.1" }
+# Property tests (docs/review/PLAN.md, 0.5): dev-dependency of the test targets only, never part
+# of a shipped binary. Without the fork and timeout features, so no child processes are started.
+proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
 
 # Workspace-wide lints. Each crate also carries #![forbid(unsafe_code)] at its root
 # so the gate is visible in the source file itself (SPEC B1.10, "No unsafe").
