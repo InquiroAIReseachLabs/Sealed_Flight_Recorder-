@@ -112,7 +112,8 @@ cert_for() { # name pubkey.pem
 openssl x509 -in $pki/inter.pem -noout -enddate | sed 's/^/inter /'
 echo "-- certificates (issued by the test CA to the PUBLIC keys of the token key and of the TPM key):"
 s1=$(cert_for tokencert $W/pkcs11.pub); s2=$(cert_for tpmcert $W/tpmkey/sfr.pub); echo "serials: $s1 $s2"
-gencrl() { echo "$2" > $pki/crlnumber; cp "$3" $pki/index.txt; q openssl ca -batch -config $pki/ca.cnf -gencrl -cert $pki/$1.pem -keyfile $pki/$1.key -crlexts crl -crl_lastupdate 20260601000000Z -crl_nextupdate 20460101000000Z -out $pki/$4.pem; openssl crl -in $pki/$4.pem -outform DER -out $pki/$4.crl 2>/dev/null; }
+# The CRLs are issued now: verify refuses a CRL older than --max-crl-age (7 days by default).
+gencrl() { echo "$2" > $pki/crlnumber; cp "$3" $pki/index.txt; q openssl ca -batch -config $pki/ca.cnf -gencrl -cert $pki/$1.pem -keyfile $pki/$1.key -crlexts crl -crl_nextupdate 20460101000000Z -out $pki/$4.pem; openssl crl -in $pki/$4.pem -outform DER -out $pki/$4.crl 2>/dev/null; }
 : > $pki/index.empty
 gencrl root 01 $pki/index.empty root_crl; gencrl inter 01 $pki/index.empty inter_clean
 # revoke the token certificate: put it in the index as revoked (serial, as the CA database records it)
