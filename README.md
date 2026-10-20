@@ -13,7 +13,7 @@ This is an evaluation release, provided without warranty, and in development: th
 - **Who signed needs the signer's public key.** The record names its signing key only by fingerprint. `sfr verify` checks the signature against the public key you give it with `--pubkey`, or against the key in the record's signer certificate when that certificate chains to a trust anchor you give it with `--trust-anchor`. Revocation is checked too: give a CRL for every issuer in the chain with `--crl` (repeat it; the order does not matter, and for each issuer the CRL with the highest CRL number is the one used). A missing CRL, or one past its `nextUpdate` by the verifier's clock, fails verification; `--no-crl-check` skips revocation, prints a warning, and says so in the output. It tells you who signed only if you got that key or anchor through a channel you trust. A key that arrives with the record proves nothing about who signed it. Given neither, `sfr verify` checks nothing: it prints `Integrity: NOT CHECKED (no trusted key given)` and exits 4. Every verify prints the key fingerprint and the custody the record declares, and says whether anything attests that custody. The custody is a word the sealer wrote into the record, so it prints as `custody   unattested (declared pkcs11-token)` unless the signer's certificate chains to a trust anchor you supplied, and then as `attested by certificate chain to the trust anchor ...`. An attestation is only as good as that anchor's practice: `sfr` cannot see whether the CA issued the certificate only for a key held in hardware, so supply an anchor whose issuing policy you trust for that. `--require-hardware-key` means attested by such a chain, not declared; with `--pubkey` it always refuses.
 - **The seal time is a claim.** `seal time` is the sealing machine's clock, or the time given with `--seal-time`, and `sfr verify` labels it claimed. It is signed, so it cannot change after sealing, but nothing checks that it was right, so it decides nothing about a certificate. With `--trust-anchor`, `sfr verify` checks every certificate at the verifier's own clock, or at the time you give with `--at <RFC3339>`, and prints which time it used. A claimed seal time later than that time (by more than 5 minutes of clock skew) fails verification: a record cannot be sealed in the verifier's future.
 - **An evaluation key is refused unless you allow it.** A record that declares custody `file-evaluation` (the quickstart's keys) does not verify as `Integrity: VERIFIED`: `sfr verify` prints `Integrity: REFUSED`, under the EVALUATION KEY banner, and exits 1, although its signature is good. `--allow-evaluation-key` accepts it for evaluation, and the banner stays. A key declared as hardware could still be a file: see custody above.
-- **PX4 versions.** `sfr` is tested on logs from PX4 v1.14.4 and v1.17.0 (`testdata/sitl/`); v1.15 and v1.16 are decoded from the PX4 source's message definitions, but no log from them is in the tests. `seal` refuses a log from a version outside v1.14 to v1.17, or one whose version it cannot read, and writes nothing, unless given `--allow-untested-version`. With it, `seal` prints a warning, leaves the version-dependent names in the events empty, and records the flag in the signed record (`seal.allow_untested_version`, schema 2), and the report says so. No such log is tested.
+- **PX4 versions.** `sfr` is tested on logs from PX4 v1.14.4 and v1.17.0 (`testdata/sitl/`); v1.15 and v1.16 are decoded from the PX4 source's message definitions, but no log from them is in the tests. `seal` refuses a log from a version outside v1.14 to v1.17, or one whose version it cannot read, and writes nothing, unless given `--allow-untested-version`. With it, `seal` prints a warning, leaves the version-dependent names in the events empty, and records the flag in the signed record (`seal.allow_untested_version`), and the report says so. No such log is tested.
 
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) gives the details and the attacks that are and are not detected.
 
@@ -127,8 +127,8 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    report    examples/reports/vtol_transition.sfr.md matches the record
    trust     the public key given with --pubkey (trusted as far as its source is)
    custody   unattested (declared file-evaluation)
-   key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51
-   merkle    aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b (34 leaves)
+   key       sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be
+   merkle    745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430 (34 leaves)
    crypto    blake3 1.8.7, ed25519-dalek 3.0.0, sha2 0.11.1 (crate versions)
    seal time 2026-10-18T15:00:00Z (claimed by the sealer, not proven)
    events    22
@@ -146,9 +146,9 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
 
    ```text doc-output
    EVALUATION KEY: not for operational use
-   Integrity: FAILED: Merkle root mismatch: a leaf changed after sealing (recorded aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b, computed 2b8540bbc7f6df08b064c848a32d70fdb7fa6b3348df17da3bb7acac509bc50f)
+   Integrity: FAILED: Merkle root mismatch: a leaf changed after sealing (recorded 745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430, computed 7c8b315562e5c20e420dd3ac1efc0ee03dd3776c68ba77f6bd2a05f9a5ba0392)
    Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
-   key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51 (named by the record, not proven)
+   key       sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be (named by the record, not proven)
    custody   unattested (declared file-evaluation)
    exit 1
    ```
@@ -163,9 +163,9 @@ You need git, a C compiler and linker (`cc`; on Debian or Ubuntu, `build-essenti
    ```text doc-output
    EVALUATION KEY: not for operational use
    Integrity: FAILED: event seq 1 (COMMAND) field `command`: sealed 311, found 211
-     also: Merkle root mismatch: a leaf changed after sealing (recorded aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b, computed 2b8540bbc7f6df08b064c848a32d70fdb7fa6b3348df17da3bb7acac509bc50f)
+     also: Merkle root mismatch: a leaf changed after sealing (recorded 745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430, computed 7c8b315562e5c20e420dd3ac1efc0ee03dd3776c68ba77f6bd2a05f9a5ba0392)
    Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
-   key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51 (named by the record, not proven)
+   key       sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be (named by the record, not proven)
    custody   unattested (declared file-evaluation)
    exit 1
    ```

@@ -3,9 +3,11 @@
 //! The record is a JSON object stored as its RFC 8785 canonical bytes. Its leaves, in this
 //! fixed order, are: the seal context (`schema_version`, `tool`, `seal`), `log`, `config`,
 //! `baseline`, `rules`, each result in rule-id order, each sealed topic digest in topic and
-//! instance order, each event in sequence order. The signed
-//! payload is ASCII `SFR-RECORD-V1`, 0x00, `schema_version` as 4-byte big-endian, and the
-//! Merkle root; the signature is Ed25519 over it.
+//! instance order, each event in sequence order. Each leaf is hashed with a one-byte tag for
+//! its [`Section`], so it belongs to that section and no other. The signed payload is ASCII
+//! `SFR-RECORD-V1`, 0x00, `schema_version` as 4-byte big-endian, the tree size and the eight
+//! per-section leaf counts ([`TreeShape`]) as 8-byte big-endian, and the Merkle root; the
+//! signature is Ed25519 over it.
 
 use crate::crypto::{CrateVersion, CryptoBackend, Signer};
 use crate::evaluate::{Evaluation, Status};
@@ -20,7 +22,7 @@ use crate::{SCHEMA_VERSION, SIGNED_PAYLOAD_PREFIX, TOOL_NAME, hex};
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Top-level fields of a schema 1 record, in no particular order.
+/// Top-level fields of a record, in no particular order.
 pub const RECORD_FIELDS: [&str; 13] = [
     "schema_version",
     "tool",
@@ -69,6 +71,132 @@ impl fmt::Display for SealError {
 
 impl std::error::Error for SealError {}
 
+/// The section of a record a Merkle leaf belongs to. The tag byte of each is hashed into its
+/// leaves (SPEC B1.7), so a leaf moved to another section changes the root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    /// `schema_version`, `tool`, `seal`: tag 0x01, one leaf.
+    SealContext,
+    /// `log`: tag 0x02, one leaf.
+    Log,
+    /// `config`: tag 0x03, one leaf.
+    Config,
+    /// `baseline`: tag 0x04, one leaf.
+    Baseline,
+    /// `rules`: tag 0x05, one leaf.
+    Rules,
+    /// `results`: tag 0x06, one leaf per result.
+    Result,
+    /// `sealed_topics`: tag 0x07, one leaf per sealed topic digest.
+    SealedTopic,
+    /// `events`: tag 0x08, one leaf per event.
+    Event,
+}
+
+impl Section {
+    /// Every section, in leaf order.
+    pub const ALL: [Section; 8] = [
+        Section::SealContext,
+        Section::Log,
+        Section::Config,
+        Section::Baseline,
+        Section::Rules,
+        Section::Result,
+        Section::SealedTopic,
+        Section::Event,
+    ];
+
+    /// The tag byte hashed in front of each leaf of this section.
+    pub const fn tag(self) -> u8 {
+        match self {
+            Section::SealContext => 0x01,
+            Section::Log => 0x02,
+            Section::Config => 0x03,
+            Section::Baseline => 0x04,
+            Section::Rules => 0x05,
+            Section::Result => 0x06,
+            Section::SealedTopic => 0x07,
+            Section::Event => 0x08,
+        }
+    }
+
+    /// The name of the section in `merkle.sections`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Section::SealContext => "seal_context",
+            Section::Log => "log",
+            Section::Config => "config",
+            Section::Baseline => "baseline",
+            Section::Rules => "rules",
+            Section::Result => "results",
+            Section::SealedTopic => "sealed_topics",
+            Section::Event => "events",
+        }
+    }
+
+    const fn index(self) -> usize {
+        self.tag() as usize - 1
+    }
+}
+
+/// How many leaves each section of a record holds, in [`Section::ALL`] order. The signature
+/// covers it (with the total), so a leaf cannot be dropped, added, or moved between sections
+/// without the signature failing, whatever the tree hashes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeShape {
+    counts: [u64; 8],
+}
+
+impl TreeShape {
+    /// A shape with the given leaf count for each section.
+    pub fn new(counts: [u64; 8]) -> TreeShape {
+        TreeShape { counts }
+    }
+
+    /// The shape of a record whose three variable sections hold these numbers of leaves: the
+    /// five single-leaf sections hold one each.
+    pub fn of_counts(results: usize, sealed_topics: usize, events: usize) -> TreeShape {
+        TreeShape::new([
+            1,
+            1,
+            1,
+            1,
+            1,
+            results as u64,
+            sealed_topics as u64,
+            events as u64,
+        ])
+    }
+
+    /// The number of leaves of a section.
+    pub fn count(&self, section: Section) -> u64 {
+        self.counts.get(section.index()).copied().unwrap_or(0)
+    }
+
+    /// The tree size: the total number of leaves.
+    pub fn leaf_count(&self) -> u64 {
+        self.counts.iter().sum()
+    }
+
+    /// `merkle.sections`: each section's name and leaf count.
+    pub fn to_json(&self) -> Value {
+        let mut o = Obj::new();
+        for s in Section::ALL {
+            o = o.field(s.name(), Value::count(self.count(s)));
+        }
+        o.build()
+    }
+
+    /// The bytes of the signed payload after the schema version: the tree size, then each count.
+    fn payload_bytes(&self) -> Vec<u8> {
+        let mut out = self.leaf_count().to_be_bytes().to_vec();
+        for c in self.counts {
+            out.extend_from_slice(&c.to_be_bytes());
+        }
+        out
+    }
+}
+
 /// What a leaf holds, for naming a mismatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LeafKind {
@@ -88,6 +216,22 @@ pub enum LeafKind {
     SealedTopic(String, i64),
     /// An event, with its sequence number.
     Event(u64),
+}
+
+impl LeafKind {
+    /// The section this leaf is hashed into.
+    pub fn section(&self) -> Section {
+        match self {
+            LeafKind::SealContext => Section::SealContext,
+            LeafKind::Log => Section::Log,
+            LeafKind::Config => Section::Config,
+            LeafKind::Baseline => Section::Baseline,
+            LeafKind::Rules => Section::Rules,
+            LeafKind::Result(_) => Section::Result,
+            LeafKind::SealedTopic(..) => Section::SealedTopic,
+            LeafKind::Event(_) => Section::Event,
+        }
+    }
 }
 
 impl fmt::Display for LeafKind {
@@ -161,25 +305,33 @@ pub fn leaves(record: &BTreeMap<String, Value>) -> Result<Vec<(LeafKind, Value)>
     Ok(out)
 }
 
-/// The Merkle root over a record's leaves, and the leaf count.
+/// The Merkle root over a record's leaves, and the shape of the tree.
 pub fn merkle_root(
     crypto: &dyn CryptoBackend,
     record: &BTreeMap<String, Value>,
-) -> Result<([u8; 32], usize), String> {
+) -> Result<([u8; 32], TreeShape), String> {
     let leaves = leaves(record)?;
+    let mut counts = [0u64; 8];
     let hashes: Vec<[u8; 32]> = leaves
         .iter()
-        .map(|(_, v)| merkle::leaf_hash(crypto, canonical(v).as_bytes()))
+        .map(|(kind, v)| {
+            let section = kind.section();
+            if let Some(c) = counts.get_mut(section.index()) {
+                *c += 1;
+            }
+            merkle::tagged_leaf_hash(crypto, section.tag(), canonical(v).as_bytes())
+        })
         .collect();
     let root = merkle::root(crypto, &hashes).ok_or_else(|| "a record has no leaves".to_string())?;
-    Ok((root, hashes.len()))
+    Ok((root, TreeShape::new(counts)))
 }
 
 /// The bytes the signature covers.
-pub fn signed_payload(schema_version: u32, root: &[u8; 32]) -> Vec<u8> {
+pub fn signed_payload(schema_version: u32, shape: &TreeShape, root: &[u8; 32]) -> Vec<u8> {
     let mut p = SIGNED_PAYLOAD_PREFIX.to_vec();
     p.push(0x00);
     p.extend_from_slice(&schema_version.to_be_bytes());
+    p.extend_from_slice(&shape.payload_bytes());
     p.extend_from_slice(root);
     p
 }
@@ -212,7 +364,7 @@ pub struct SealParams {
     pub certificate_chain: Vec<Vec<u8>>,
     /// True when the log's PX4 version is one `sfr` is not tested on (or cannot read) and it was
     /// sealed only because of `seal --allow-untested-version`. Recorded as
-    /// `seal.allow_untested_version` (schema 2).
+    /// `seal.allow_untested_version`.
     pub allow_untested_version: bool,
 }
 
@@ -291,8 +443,6 @@ pub fn seal(
             .field("key_fingerprint", Value::str(fp.clone()))
             .field("key_label", Value::str(signer.label()))
             .field("key_custody", Value::str(signer.custody().as_str()))
-            // Always null: sfr records nothing about a token's certification.
-            .field("token_cmvp_certificate", Value::Null)
             .field("crypto_crates", crates_json(crypto.crates()))
             .field(
                 "signer_certificate",
@@ -343,8 +493,8 @@ pub fn seal(
     };
     record.insert("status".to_string(), Value::str(status));
 
-    let (root, leaf_count) = merkle_root(crypto, &record).map_err(SealError)?;
-    let payload = signed_payload(SCHEMA_VERSION, &root);
+    let (root, shape) = merkle_root(crypto, &record).map_err(SealError)?;
+    let payload = signed_payload(SCHEMA_VERSION, &shape, &root);
     let signature = signer
         .sign(&payload)
         .map_err(|e| SealError(format!("signing failed: {e}")))?;
@@ -358,8 +508,9 @@ pub fn seal(
         "merkle".to_string(),
         Obj::new()
             .field("algorithm", Value::str(merkle::ALGORITHM))
-            .field("leaf_count", Value::count(leaf_count as u64))
+            .field("leaf_count", Value::count(shape.leaf_count()))
             .field("root", Value::str(hex(&root)))
+            .field("sections", shape.to_json())
             .build(),
     );
     record.insert(
@@ -374,7 +525,7 @@ pub fn seal(
         bytes,
         root,
         fingerprint: fp,
-        leaf_count,
+        leaf_count: usize::try_from(shape.leaf_count()).unwrap_or(usize::MAX),
     })
 }
 
@@ -528,6 +679,7 @@ pub fn check_seal_time(claimed: &str, verification_time: i64) -> Result<i64, Str
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::crypto::test_backend::TestBackend;
 
     #[test]
     fn a_claimed_seal_time_may_not_lie_in_the_verifiers_future() {
@@ -592,10 +744,49 @@ mod tests {
     }
 
     #[test]
+    fn the_same_bytes_hash_differently_in_every_section() {
+        let mut seen = std::collections::BTreeSet::new();
+        for section in Section::ALL {
+            let h = merkle::tagged_leaf_hash(&TestBackend, section.tag(), b"{\"id\":\"R1\"}");
+            assert!(seen.insert(h), "{section:?} hashes like another section");
+        }
+        assert!(
+            !seen.contains(&merkle::leaf_hash(&TestBackend, b"{\"id\":\"R1\"}")),
+            "a tagged leaf never hashes like an untagged one"
+        );
+        let tags: Vec<u8> = Section::ALL.iter().map(|s| s.tag()).collect();
+        assert_eq!(tags, [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn the_payload_differs_when_only_the_split_between_sections_differs() {
+        let a = signed_payload(3, &TreeShape::of_counts(3, 0, 10), &[7; 32]);
+        let b = signed_payload(3, &TreeShape::of_counts(2, 1, 10), &[7; 32]);
+        assert_eq!(
+            TreeShape::of_counts(3, 0, 10).leaf_count(),
+            TreeShape::of_counts(2, 1, 10).leaf_count()
+        );
+        assert_ne!(a, b);
+    }
+
+    #[test]
     fn signed_payload_layout() {
-        let p = signed_payload(1, &[0xab; 32]);
+        let shape = TreeShape::of_counts(3, 0, 10);
+        let p = signed_payload(3, &shape, &[0xab; 32]);
         assert_eq!(&p[..13], b"SFR-RECORD-V1");
-        assert_eq!(&p[13..18], &[0, 0, 0, 0, 1]);
-        assert_eq!(&p[18..], &[0xab; 32]);
+        assert_eq!(p[13], 0, "the separator byte");
+        assert_eq!(&p[14..18], &[0, 0, 0, 3], "the schema version");
+        assert_eq!(&p[18..26], &18u64.to_be_bytes(), "the tree size");
+        let counts: Vec<u64> = p[26..90]
+            .chunks(8)
+            .map(|c| u64::from_be_bytes(c.try_into().unwrap()))
+            .collect();
+        assert_eq!(
+            counts,
+            [1, 1, 1, 1, 1, 3, 0, 10],
+            "the eight section counts"
+        );
+        assert_eq!(&p[90..], &[0xab; 32]);
+        assert_eq!(p.len(), 122);
     }
 }

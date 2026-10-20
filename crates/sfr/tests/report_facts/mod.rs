@@ -287,7 +287,7 @@ pub fn check(record: &Value, md: &str) {
     );
     l.expect("");
     l.expect(&format!(
-        "**Status: {}**. Sealed (time claimed by the sealer) {} by {} {}, v1.0 evaluation release. This report is generated from the record {} alone.",
+        "**Status: {}**. Sealed (time claimed by the sealer) {} by {} {} (evaluation release). This report is generated from the record {} alone.",
         ev(f(r, "status")),
         ev(f(seal, "time_utc")),
         ev(f(tool, "name")),
