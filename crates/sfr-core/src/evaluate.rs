@@ -2071,34 +2071,49 @@ mod tests {
             (named, r7(&ing.flight, &ing.events, &rules))
         };
 
-        // A first subscription without source_component and without data, then the format
-        // redefined and a second subscription with data: nothing is missing, R7 passes.
+        // One subscription with every field and data: nothing is missing, R7 passes.
         let (named, r7) = run(Builder::new(0)
             .flags(&[])
-            .format(short)
-            .sub(0, 1, "vehicle_command")
             .format(full)
-            .sub(1, 2, "vehicle_command")
-            .data(2, &row_full));
+            .sub(0, 1, "vehicle_command")
+            .data(1, &row_full));
         assert!(named.is_empty(), "{named:?}");
         assert_eq!(r7.status, Status::Pass, "{}", r7.found);
-
-        // The other order: a subscription with data has every field, a later one with data
-        // lacks source_component. R1 names it and R7 cannot evaluate.
+        // A format without source_component: R1 names it and R7 cannot evaluate.
         let (named, r7) = run(Builder::new(0)
             .flags(&[])
-            .format(full)
-            .sub(0, 1, "vehicle_command")
-            .data(1, &row_full)
             .format(short)
-            .sub(1, 2, "vehicle_command")
-            .data(2, &row_short));
+            .sub(0, 1, "vehicle_command")
+            .data(1, &row_short));
         assert_eq!(named, ["missing vehicle_command.source_component"]);
         assert_eq!(r7.status, Status::Fail);
         assert_eq!(
             r7.found,
             "cannot evaluate: missing vehicle_command.source_component"
         );
+        // A format redefined after the first subscription, in either order, is refused: the
+        // ULog specification allows format records in the definitions section only.
+        for (first, second, row) in [(short, full, &row_full), (full, short, &row_short)] {
+            let log = Builder::new(0)
+                .flags(&[])
+                .format(first)
+                .sub(0, 1, "vehicle_command")
+                .format(second)
+                .sub(1, 2, "vehicle_command")
+                .data(2, row);
+            let err = Px4Ingestor
+                .ingest(
+                    "x.ulg",
+                    &mut &log.bytes[..],
+                    &crate::crypto::test_backend::TestBackend,
+                )
+                .expect_err("refused");
+            assert!(
+                err.to_string()
+                    .contains("format record for `vehicle_command` after the definitions section"),
+                "{err}"
+            );
+        }
     }
 
     #[test]

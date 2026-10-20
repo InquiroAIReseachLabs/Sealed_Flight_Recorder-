@@ -50,6 +50,7 @@ class _TracingMessageData(ULog._MessageData):
             if msg_id in subscriptions:
                 ulog_object._sfr_lit_ts = self.timestamp
                 ulog_object._sfr_data_count += 1
+                ulog_object._sfr_ordinals.setdefault(msg_id, []).append(ulog_object._sfr_data_count)
                 sub = subscriptions[msg_id]
                 if sub.message_name == 'vehicle_status':
                     ulog_object._sfr_vs_ordinals.setdefault(sub.multi_id, []).append(
@@ -67,6 +68,7 @@ class TracingULog(ULog):
         self._sfr_lit_ts = None          # timestamp of the last valid 'D' so far
         self._sfr_data_count = 0
         self._sfr_vs_ordinals = {}       # vehicle_status multi_id -> data-record ordinal of each row
+        self._sfr_ordinals = {}          # msg_id -> data-record ordinal of each of its rows
         self._sfr_seen_add = False       # an 'A' record has been seen
         self._sfr_def_param_types = {}   # name -> key type, definitions-section 'P'
         self._sfr_def_param_count = 0    # number of definitions-section 'P'
@@ -245,6 +247,28 @@ def warn(debug, *a):
 # --------------------------------------------------------------------------
 
 
+def merge_resubscriptions(ulog):
+    """pyulog keeps one dataset per subscription (msg_id). A topic instance subscribed again
+    with the same layout is one instance, as sfr reads it: its datasets are merged, rows in file
+    order. One subscribed again with a different layout is refused, as sfr refuses it."""
+    groups = {}
+    for d in ulog.data_list:
+        groups.setdefault((d.name, d.multi_id), []).append(d)
+    for (name, multi_id), ds in groups.items():
+        if len(ds) < 2:
+            continue
+        layout = [(f.field_name, f.type_str) for f in ds[0].field_data]
+        if any([(f.field_name, f.type_str) for f in d.field_data] != layout for d in ds[1:]):
+            raise SystemExit("oracle.py: %s instance %d subscribed again with a different layout;"
+                             " refused" % (name, multi_id))
+        ords = np.concatenate([np.array(ulog._sfr_ordinals.get(d.msg_id, []), dtype=np.int64)
+                               for d in ds])
+        order = np.argsort(ords, kind='stable')
+        first = ds[0]
+        first.data = {k: np.concatenate([d.data[k] for d in ds])[order] for k in first.data}
+        ulog._data_list = [d for d in ulog.data_list if not any(d is x for x in ds[1:])]
+
+
 def topic_instances(ulog, name, debug):
     insts = sorted([d for d in ulog.data_list if d.name == name], key=lambda d: d.multi_id)
     ids = [d.multi_id for d in insts]
@@ -385,7 +409,8 @@ def timestamp_offset(topic, formats):
 
 
 def data_section_formats(path):
-    """The number of 'F' records after the first 'A', read as sealed_topic_digests reads records."""
+    """The number of 'F' records after the first 'A' or 'L' (the end of the definitions section),
+    read as sealed_topic_digests reads records."""
     with open(path, 'rb') as f:
         buf = f.read()
     n = len(buf)
@@ -405,7 +430,7 @@ def data_section_formats(path):
         if first and typ == ord('B') and size >= 40 and buf[pos + 3 + 8] & 1:
             appended = [o for o in struct.unpack_from('<3Q', buf, pos + 3 + 16) if o != 0]
         first = False
-        if typ == ord('A'):
+        if typ in (ord('A'), ord('L')):
             in_data = True
         elif typ == ord('F') and in_data:
             count += 1
@@ -528,16 +553,19 @@ def run(path, rules, required, ptime, param_index, debug):
         u = TracingULog(path)
     info = u.msg_info_dict
     warn(debug, "file_corruption", u.file_corruption, "data records", u._sfr_data_count)
-    # pyulog ignores a format record in the data section and reads later subscriptions with the
-    # earlier format, where sfr uses the new one; it drops the data after a record it cannot
-    # parse. Such a log is outside this oracle's scope; no golden log has either.
+    # pyulog drops the data after a record it cannot parse. Such a log is outside this oracle's
+    # scope; no golden log has one.
     if u.file_corruption:
         print("oracle.py: pyulog reports file corruption in %s; this output is not a reference"
               % path, file=sys.stderr)
+    # The ULog specification allows format records in the definitions section only, which ends
+    # at the first subscription or logged string; sfr refuses a log with one after it, and so
+    # does this oracle (pyulog would ignore it and read later subscriptions with the old format).
     redefined = data_section_formats(path)
     if redefined:
-        print("oracle.py: %s has %d format record(s) in the data section, which pyulog ignores;"
-              " this output is not a reference" % (path, redefined), file=sys.stderr)
+        raise SystemExit("oracle.py: %s has %d format record(s) after the definitions section;"
+                         " refused" % (path, redefined))
+    merge_resubscriptions(u)
     warn(debug, "data-section P before first A:", u._sfr_p_before_add)
 
     # ---- config and firmware

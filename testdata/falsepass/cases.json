@@ -122,14 +122,9 @@
     "baseline": "resubscribe_retyped.params",
     "case": "resubscribe_retyped",
     "expect": {
-      "exit": 1,
-      "found": {
-        "R4": "vehicle_status.failsafe is uint8_t in the log; PX4 defines bool"
-      },
-      "results": {
-        "R4": "FAIL"
-      },
-      "status": "FAIL"
+      "exit": 3,
+      "results": {},
+      "status": null
     },
     "item": "1.1",
     "kind": "attack",
@@ -142,14 +137,9 @@
     "baseline": "resubscribe_retyped_control.params",
     "case": "resubscribe_retyped_control",
     "expect": {
-      "exit": 1,
-      "found": {
-        "R4": "true in flight 1 time(s)"
-      },
-      "results": {
-        "R4": "FAIL"
-      },
-      "status": "FAIL"
+      "exit": 3,
+      "results": {},
+      "status": null
     },
     "item": "1.1",
     "kind": "control",
@@ -522,6 +512,116 @@
     "options": [],
     "rules": "rules.toml",
     "what": "control for unknown_messages"
+  },
+  {
+    "baseline": "format_redefined_drops_flag.params",
+    "case": "format_redefined_drops_flag",
+    "expect": {
+      "exit": 3,
+      "results": {},
+      "status": null
+    },
+    "item": "1.12",
+    "kind": "attack",
+    "log": "format_redefined_drops_flag.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "failsafe_flags redefined after its first subscription without a required flag"
+  },
+  {
+    "baseline": "format_redefined_drops_flag_control.params",
+    "case": "format_redefined_drops_flag_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "required failsafe_flags global_position_invalid true in flight"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.12",
+    "kind": "control",
+    "log": "format_redefined_drops_flag_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for format_redefined_drops_flag"
+  },
+  {
+    "baseline": "format_redefined_renames_flag.params",
+    "case": "format_redefined_renames_flag",
+    "expect": {
+      "exit": 3,
+      "results": {},
+      "status": null
+    },
+    "item": "1.12",
+    "kind": "attack",
+    "log": "format_redefined_renames_flag.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "failsafe_flags redefined after its first subscription with a required flag renamed"
+  },
+  {
+    "baseline": "format_redefined_renames_flag_control.params",
+    "case": "format_redefined_renames_flag_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "required failsafe_flags global_position_invalid true in flight"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.12",
+    "kind": "control",
+    "log": "format_redefined_renames_flag_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for format_redefined_renames_flag"
+  },
+  {
+    "baseline": "resubscribe_identical.params",
+    "case": "resubscribe_identical",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "required failsafe_flags global_position_invalid true in flight"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.12",
+    "kind": "attack",
+    "log": "resubscribe_identical.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "failsafe_flags instance 0 subscribed twice with the same format (accepted)"
+  },
+  {
+    "baseline": "resubscribe_identical_control.params",
+    "case": "resubscribe_identical_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "required failsafe_flags global_position_invalid true in flight"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "1.12",
+    "kind": "control",
+    "log": "resubscribe_identical_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for resubscribe_identical"
   },
   {
     "baseline": "mode_req_uint64.params",

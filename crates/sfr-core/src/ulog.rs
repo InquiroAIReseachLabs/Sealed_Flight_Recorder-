@@ -857,6 +857,11 @@ struct Sub {
     ts: FlatField,
 }
 
+/// The same payload size and the same flattened fields: names, offsets and types, in order.
+fn same_layout(a: &Layout, b: &Layout) -> bool {
+    a.size == b.size && a.fields == b.fields
+}
+
 /// Skips to an appended-data offset. A file that ends first is truncated: without this check
 /// the reader would retry the same skip forever.
 fn skip_to_offset<R: Read>(
@@ -946,6 +951,13 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
     let mut pending: Vec<u64> = Vec::new();
     let mut first = true;
     let mut in_definitions = true;
+    // The ULog specification ends the definitions section "before the start of the first
+    // Subscription Message or Logging message, whichever comes first", and lists the format
+    // message among the definitions section's types only; the data section's list has none.
+    let mut definitions_ended = false;
+    // The layout of each (topic, multi_id) at its first subscription: a later subscription of the
+    // same instance must have the same one.
+    let mut instance_layouts: BTreeMap<(String, u8), Rc<Layout>> = BTreeMap::new();
     let mut last_ts = header.timestamp;
     let mut body: Vec<u8> = Vec::with_capacity(4096);
     let mut field_budget = MAX_TOTAL_FIELDS;
@@ -1019,6 +1031,14 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
             }
             b'F' => {
                 let (name, defs) = parse_format(&body, start)?;
+                if definitions_ended {
+                    return Err(malformed(
+                        start,
+                        format!(
+                            "format record for `{name}` after the definitions section: the ULog specification allows format records in the definitions section only, which ends at the first subscription or logged string"
+                        ),
+                    ));
+                }
                 visitor.format_definition(&name, &body);
                 // A format with no fields still costs a definition.
                 format_fields = format_fields.saturating_add(defs.len().max(1));
@@ -1088,6 +1108,7 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
             }
             b'A' => {
                 in_definitions = false;
+                definitions_ended = true;
                 let multi_id = c.u8("subscription multi id")?;
                 let msg_id = c.u16("subscription message id")?;
                 let topic = ascii(c.rest(), start, "subscription name")?.to_string();
@@ -1147,6 +1168,22 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                 let ts = layout.field("timestamp").cloned().ok_or_else(|| {
                     malformed(start, format!("format `{topic}` has no timestamp"))
                 })?;
+                // A second subscription of an instance reads its data with the layout it was
+                // first subscribed with, or not at all.
+                match instance_layouts.get(&(topic.clone(), multi_id)) {
+                    Some(first) if !same_layout(first, &layout) => {
+                        return Err(malformed(
+                            start,
+                            format!(
+                                "`{topic}` instance {multi_id} subscribed again with a different layout from its first subscription"
+                            ),
+                        ));
+                    }
+                    Some(_) => {}
+                    None => {
+                        instance_layouts.insert((topic.clone(), multi_id), Rc::clone(&layout));
+                    }
+                }
                 visitor.subscription(msg_id, multi_id, &topic, &layout);
                 subs.insert(msg_id, Sub { layout, ts });
             }
@@ -1179,6 +1216,7 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                 }
             }
             b'L' => {
+                definitions_ended = true;
                 let level = c.u8("log level")?;
                 let ts = c.u64("log timestamp")?;
                 visitor.logging(level, None, ts, c.rest());
@@ -1436,6 +1474,63 @@ pub(crate) mod tests {
                 trailing_bytes: (3 + size / 2) as u64
             })
         );
+    }
+
+    #[test]
+    fn a_format_record_after_the_definitions_section_is_refused() {
+        // ULog spec: the definitions section "ends before the start of the first Subscription
+        // Message or Logging message", and the format message is a definitions section type only.
+        let t = "t:uint64_t timestamp;uint8_t x;";
+        let row = [&1u64.to_le_bytes()[..], &[7]].concat();
+        let defs = || Builder::new(0).flags(&[]).format(t);
+        // After a subscription, identical or not.
+        for again in [t, "t:uint64_t timestamp;uint16_t x;"] {
+            let b = defs().sub(0, 0, "t").data(0, &row).format(again);
+            let e = read(&b.bytes[..], &mut Collect::default()).expect_err("refused");
+            assert!(
+                e.to_string()
+                    .contains("format record for `t` after the definitions section"),
+                "{e}"
+            );
+        }
+        // After a logged string, before any subscription.
+        let mut log = vec![6u8];
+        log.extend_from_slice(&5u64.to_le_bytes());
+        log.extend_from_slice(b"hello");
+        let b = defs().rec(b'L', &log).format("u:uint64_t timestamp;");
+        let e = read(&b.bytes[..], &mut Collect::default()).expect_err("refused");
+        assert!(
+            e.to_string().contains("after the definitions section"),
+            "{e}"
+        );
+        // Formats before the first subscription, in any number, are read.
+        let b = defs()
+            .format("u:uint64_t timestamp;")
+            .sub(0, 0, "t")
+            .data(0, &row);
+        let mut c = Collect::default();
+        read(&b.bytes[..], &mut c).unwrap();
+        assert_eq!(c.data.len(), 1);
+    }
+
+    #[test]
+    fn an_instance_subscribed_again_with_the_same_format_is_read() {
+        // A second subscription of (t, 0) with no new format: both message ids are read with
+        // the one layout.
+        let t = "t:uint64_t timestamp;uint8_t x;";
+        let row = |ts: u64| [&ts.to_le_bytes()[..], &[7]].concat();
+        let b = Builder::new(0)
+            .flags(&[])
+            .format(t)
+            .sub(0, 0, "t")
+            .data(0, &row(1))
+            .sub(0, 1, "t")
+            .data(1, &row(2));
+        let mut c = Collect::default();
+        read(&b.bytes[..], &mut c).unwrap();
+        assert_eq!(c.subs.len(), 2);
+        assert_eq!(c.data.len(), 2);
+        assert_eq!(c.subs[0].2, c.subs[1].2, "one layout");
     }
 
     #[test]

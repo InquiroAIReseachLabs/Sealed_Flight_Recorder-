@@ -32,7 +32,7 @@ A message for a name, version or length rule ends with a parenthesis that states
 | Format name, field name, field type name | 255 bytes | Bounds the text each definition holds. | `ulog.rs` `parse_format` |
 | Subscriptions | 4,096 | Far above any golden log. | `ulog.rs` `MAX_SUBSCRIPTIONS` |
 | Flattened fields across all subscriptions | 1,000,000, counted per subscription | Bounds the work per subscription. Subscriptions of one format share its layout, so memory does not grow with this count. | `ulog.rs` `MAX_TOTAL_FIELDS` |
-| Flattened field names, summed once per distinct subscribed format | 16 MiB | Bounds the text the shared layouts hold. A format redefined by a later format record is a distinct format. | `ulog.rs` `MAX_FLATTENED_NAME_BYTES` |
+| Flattened field names, summed once per distinct subscribed format | 16 MiB | Bounds the text the shared layouts hold. Format records are read in the definitions section only; a later one is refused. | `ulog.rs` `MAX_FLATTENED_NAME_BYTES` |
 | Flattened field name (with nested prefixes and `[i]` index), subscription name | 255 bytes | Bounds the text kept per field and subscription. | `ulog.rs` `MAX_NAME_LEN` |
 | Parameter name | 1 to 16 letters, digits, `_` | The PX4 rule, for the log and the baseline. | `params.rs` `valid_param_name` |
 | Parameters at log start; baseline parameters | 65,536 | Bounds the parameter table. | `ingest.rs` with `params.rs` `MAX_PARAMS` |

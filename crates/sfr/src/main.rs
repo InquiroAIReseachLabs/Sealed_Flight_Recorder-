@@ -1135,10 +1135,15 @@ fn verify_cmd(
             }
             let anchors = certs::read_certificates(anchor_path, "trust anchor")
                 .map_err(|e| fail(exit_code::USAGE, e))?;
+            // Each CRL is read as it is loaded, so a refusal names its file.
             let crls = crl_paths
                 .iter()
-                .map(|p| certs::read_crl(p))
-                .collect::<Result<Vec<_>, _>>()
+                .map(|p| {
+                    let der = certs::read_crl(p)?;
+                    certs::parse_crl(&der).map_err(|e| format!("CRL {p}: {e}"))?;
+                    Ok(der)
+                })
+                .collect::<Result<Vec<_>, String>>()
                 .map_err(|e| fail(exit_code::USAGE, e))?;
             Some(Trust::Anchors {
                 anchors,

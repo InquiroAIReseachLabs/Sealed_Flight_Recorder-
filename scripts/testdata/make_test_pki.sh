@@ -44,6 +44,12 @@
 #                     indirectCRL): refused
 #   inter_critical.crl  CRL issued by inter, number 2, with a critical extension sfr does not
 #                     read (1.3.6.1.4.1.32473.1, an example OID, RFC 5612): refused
+#   inter_dp.crl      CRL issued by inter, number 2, listing nothing, scoped to one distribution
+#                     point (issuingDistributionPoint distributionPoint): refused
+#   inter_usercerts.crl  CRL issued by inter, number 2, listing nothing, scoped to end-entity
+#                     certificates (issuingDistributionPoint onlyContainsUserCerts): refused
+#   inter_cacerts.crl CRL issued by inter, number 2, listing nothing, scoped to CA certificates
+#                     (issuingDistributionPoint onlyContainsCACerts): refused
 set -euo pipefail
 export LC_ALL=C TZ=UTC
 
@@ -149,6 +155,21 @@ indirectCRL = TRUE
 [ crl_critical ]
 authorityKeyIdentifier = keyid
 1.3.6.1.4.1.32473.1 = critical, ASN1:NULL
+[ crl_dp ]
+authorityKeyIdentifier = keyid
+issuingDistributionPoint = critical, @idp_dp
+[ idp_dp ]
+fullname = URI:http://example.com/inter-part1.crl
+[ crl_usercerts ]
+authorityKeyIdentifier = keyid
+issuingDistributionPoint = critical, @idp_usercerts
+[ idp_usercerts ]
+onlyuser = TRUE
+[ crl_cacerts ]
+authorityKeyIdentifier = keyid
+issuingDistributionPoint = critical, @idp_cacerts
+[ idp_cacerts ]
+onlyCA = TRUE
 EOF
   : > "$work/index.txt"
   mkdir -p "$work/new"
@@ -207,6 +228,9 @@ EOF
   gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_delta.crl crl_delta
   gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_indirect.crl crl_indirect
   gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_critical.crl crl_critical
+  gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_dp.crl crl_dp
+  gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_usercerts.crl crl_usercerts
+  gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_cacerts.crl crl_cacerts
 }
 
 case "${1:-}" in

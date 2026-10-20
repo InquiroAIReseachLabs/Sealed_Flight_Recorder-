@@ -1129,3 +1129,68 @@ fn old_delta_indirect_and_unknown_critical_crls_are_refused() {
         );
     }
 }
+
+/// RFC 5280 section 5.2.5: an issuingDistributionPoint that names a distribution point, or
+/// limits the CRL to end-entity or CA certificates, makes it a partial CRL, which may not list a
+/// certificate revoked in another one. Each is refused, and the message names the CRL file.
+#[test]
+fn a_crl_scoped_by_its_issuing_distribution_point_is_refused_naming_the_file() {
+    let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    for (crl, why) in [
+        (
+            "inter_dp.crl",
+            "a CRL scoped to one distribution point (issuingDistributionPoint distributionPoint)",
+        ),
+        (
+            "inter_usercerts.crl",
+            "a CRL that covers only end-entity certificates (issuingDistributionPoint onlyContainsUserCerts)",
+        ),
+        (
+            "inter_cacerts.crl",
+            "a CRL that covers only CA certificates (issuingDistributionPoint onlyContainsCACerts)",
+        ),
+    ] {
+        let o = verify_anchor(&record, "root.pem", &["root.crl", crl]);
+        assert_eq!(o.status.code(), Some(4), "{crl}: {}", text(&o));
+        assert!(
+            text(&o).contains(why),
+            "{crl}: want `{why}` in {}",
+            text(&o)
+        );
+        assert!(
+            text(&o).contains(&format!("CRL {}: ", pki(crl))),
+            "{crl}: the message names the file: {}",
+            text(&o)
+        );
+        assert!(!text(&o).contains("Integrity: VERIFIED"), "{crl}");
+    }
+}
+
+/// A complete CRL is never superseded by a scoped one of a higher number: given inter.crl
+/// (number 1, complete, revoking the signer) and a scoped CRL of number 2 that lists nothing,
+/// verify refuses the scoped CRL rather than taking it as current and passing the revoked
+/// signer.
+#[test]
+fn a_complete_crl_is_never_superseded_by_a_scoped_one() {
+    let (o, record) = seal(
+        SIGNER_REVOKED,
+        Some("signer_revoked.pem"),
+        Some("inter.pem"),
+        SEAL_TIME,
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let revoked = verify_anchor(&record, "root.pem", &BOTH_CRLS);
+    assert_eq!(revoked.status.code(), Some(1), "{}", text(&revoked));
+    for scoped in ["inter_dp.crl", "inter_usercerts.crl", "inter_cacerts.crl"] {
+        for order in [
+            ["root.crl", "inter.crl", scoped],
+            ["root.crl", scoped, "inter.crl"],
+        ] {
+            let o = verify_anchor(&record, "root.pem", &order);
+            assert_ne!(o.status.code(), Some(0), "{order:?}: {}", text(&o));
+            assert!(!text(&o).contains("Integrity: VERIFIED"), "{order:?}");
+            assert!(text(&o).contains(scoped), "{order:?}: {}", text(&o));
+        }
+    }
+}
