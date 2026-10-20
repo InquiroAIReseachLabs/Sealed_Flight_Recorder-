@@ -1,7 +1,7 @@
 //! Record verification (SPEC B1.3 `verify`, B1.7).
 //!
 //! **Standalone:** the bytes must parse, carry a known `schema_version`, be exactly their own
-//! canonical form, hold exactly the schema 1 fields, and their recomputed Merkle root, rules
+//! canonical form, hold exactly the record's fields, and their recomputed Merkle root, rules
 //! digest, overall status, key fingerprint and Ed25519 signature must all check.
 //! **Deep (with the log):** the log is re-read and re-analysed with the embedded rules and
 //! baseline; configuration, events, and results must be identical to the sealed ones, and the
@@ -21,7 +21,7 @@ use crate::merkle;
 use crate::params::{Baseline, FirmwareSpec};
 use crate::record::{config_json, events_json, log_json, sealed_topics_json};
 use crate::rules::parse_rules;
-use crate::seal::{RECORD_FIELDS, signed_payload};
+use crate::seal::{RECORD_FIELDS, Section, TreeShape, signed_payload};
 use crate::ulog::ParamValue;
 use std::collections::BTreeMap;
 use std::io::{self, Read};
@@ -368,7 +368,7 @@ pub fn claimed_key_fingerprint(bytes: &[u8]) -> Option<String> {
 }
 
 /// What a verifier says about a schema version it does not know.
-const KNOWN_SCHEMAS: &str = "this verifier knows schema 1 and 2";
+const KNOWN_SCHEMAS: &str = "this verifier knows schema 3 only (schema 1 and 2 records do not sign the shape of the tree or bind each leaf to its section; seal the log again with this version of sfr)";
 
 /// The schema version, if it is one this verifier knows (`crate::KNOWN_SCHEMA_VERSIONS`).
 fn known_schema(v: i64) -> Option<u32> {
@@ -470,7 +470,7 @@ fn standalone(
         .map(|m| member(bytes, &m.value))
         .transpose()?
     {
-        Some(Value::Int(v)) if known_schema(v).is_some() => known_schema(v).unwrap_or(1),
+        Some(Value::Int(v)) if known_schema(v).is_some() => known_schema(v).unwrap_or(3),
         Some(other) => {
             return Err(fail(format!(
                 "unknown schema_version {}; {KNOWN_SCHEMAS}",
@@ -516,23 +516,41 @@ fn standalone(
     context.extend_from_slice(b",\"tool\":");
     context.extend_from_slice(slice(span("tool")));
     context.push(b'}');
+    // Each leaf is hashed with the tag byte of its section, and the number of leaves of each
+    // section goes into the signed payload (`seal::Section`, `seal::TreeShape`).
+    let single =
+        |section: Section, bytes: &[u8]| merkle::tagged_leaf_hash(crypto, section.tag(), bytes);
     let mut hashes = vec![
-        merkle::leaf_hash(crypto, &context),
-        merkle::leaf_hash(crypto, slice(span("log"))),
-        merkle::leaf_hash(crypto, slice(span("config"))),
-        merkle::leaf_hash(crypto, slice(span("baseline"))),
-        merkle::leaf_hash(crypto, slice(span("rules"))),
+        single(Section::SealContext, &context),
+        single(Section::Log, slice(span("log"))),
+        single(Section::Config, slice(span("config"))),
+        single(Section::Baseline, slice(span("baseline"))),
+        single(Section::Rules, slice(span("rules"))),
     ];
-    for k in ["results", "sealed_topics", "events"] {
+    let mut variable = [0usize; 3];
+    for (i, (k, section)) in [
+        ("results", Section::Result),
+        ("sealed_topics", Section::SealedTopic),
+        ("events", Section::Event),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let m = find(k).ok_or_else(|| fail(format!("missing field `{k}`")))?;
         if slice(m.value.clone()).first() != Some(&b'[') {
             return Err(fail(format!("field `{k}` is not an array")));
         }
-        hashes.extend(merkle::leaf_hashes(
+        if let Some(n) = variable.get_mut(i) {
+            *n = m.elements.len();
+        }
+        hashes.extend(merkle::tagged_leaf_hashes(
             crypto,
+            section.tag(),
             m.elements.iter().map(|e| slice(e.clone())),
         ));
     }
+    let [results_count, sealed_topics_count, events_count] = variable;
+    let shape = TreeShape::of_counts(results_count, sealed_topics_count, events_count);
     let leaf_count = hashes.len();
     let root = merkle::root(crypto, &hashes).ok_or_else(|| fail("a record has no leaves"))?;
     let event_count = find("events").map_or(0, |m| m.elements.len());
@@ -616,9 +634,23 @@ fn standalone(
     if merkle_obj
         .keys()
         .map(String::as_str)
-        .ne(["algorithm", "leaf_count", "root"])
+        .ne(["algorithm", "leaf_count", "root", "sections"])
     {
-        problems.push("field `merkle` must hold exactly algorithm, leaf_count, root".to_string());
+        problems.push(
+            "field `merkle` must hold exactly algorithm, leaf_count, root, sections".to_string(),
+        );
+    }
+    // The signature covers the shape found in the record, not the one it states; `sections` is
+    // the readable copy, and it must agree.
+    if merkle_obj.get("sections") != Some(&shape.to_json()) {
+        problems.push(format!(
+            "Merkle sections: recorded {}, found {}",
+            merkle_obj
+                .get("sections")
+                .map(canonical)
+                .unwrap_or_default(),
+            canonical(&shape.to_json())
+        ));
     }
     let algorithm = string(merkle_obj, "algorithm")?;
     if algorithm != merkle::ALGORITHM {
@@ -680,7 +712,7 @@ fn standalone(
     let signed_root = hex_decode::<32>(recorded_root);
     match (sig, signed_root) {
         (Some(sig), Some(r)) => {
-            if !crypto.ed25519_verify(public_key, &signed_payload(schema, &r), &sig) {
+            if !crypto.ed25519_verify(public_key, &signed_payload(schema, &shape, &r), &sig) {
                 problems.push("signature does not verify".to_string());
             }
         }
@@ -688,19 +720,9 @@ fn standalone(
             .push("signature or Merkle root is not lowercase hex of the right length".to_string()),
     }
 
-    // seal.allow_untested_version: a boolean in schema 2, absent in schema 1.
-    match (schema, seal.get("allow_untested_version")) {
-        (1, None) | (2.., Some(Value::Bool(_))) => {}
-        (1, Some(_)) => {
-            return Err(fail(
-                "`seal.allow_untested_version` is not a schema 1 field",
-            ));
-        }
-        _ => {
-            return Err(fail(
-                "`seal.allow_untested_version` must be true or false in schema 2",
-            ));
-        }
+    // seal.allow_untested_version: a boolean.
+    if !matches!(seal.get("allow_untested_version"), Some(Value::Bool(_))) {
+        return Err(fail("`seal.allow_untested_version` must be true or false"));
     }
 
     // Signer certificate and chain: null, or standard base64 (the DER is checked by
@@ -1099,14 +1121,15 @@ mod tests {
             panic!("record is an object")
         };
         edit(&mut r);
-        let (root, n) = crate::seal::merkle_root(&TestBackend, &r).unwrap();
+        let (root, shape) = crate::seal::merkle_root(&TestBackend, &r).unwrap();
         let sig = key
-            .sign(&crate::seal::signed_payload(SCHEMA_VERSION, &root))
+            .sign(&crate::seal::signed_payload(SCHEMA_VERSION, &shape, &root))
             .unwrap();
         let merkle = Obj::new()
             .field("algorithm", Value::str(merkle::ALGORITHM))
-            .field("leaf_count", Value::count(n as u64))
+            .field("leaf_count", Value::count(shape.leaf_count()))
             .field("root", Value::str(hex(&root)))
+            .field("sections", shape.to_json())
             .build();
         r.insert("merkle".into(), merkle);
         let signature = Obj::new()

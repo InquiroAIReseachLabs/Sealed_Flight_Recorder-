@@ -1,6 +1,6 @@
 # Sandbox: the engine bundle for the browser
 
-The engine bundle runs `sfr` in a web page: seal a PX4 log, verify a record, verify a record with its log, and the tamper demo of `scripts/run_demo.sh`. It is a v1.0 evaluation release. The page that invited evaluators use is built and hosted separately; this repository delivers the bundle, its JavaScript API, and the tests that hold it to the command line.
+The engine bundle runs `sfr` in a web page: seal a PX4 log, verify a record, verify a record with its log, and the tamper demo of `scripts/run_demo.sh`. It is part of evaluation release 0.1.0. The page that invited evaluators use is built and hosted separately; this repository delivers the bundle, its JavaScript API, and the tests that hold it to the command line.
 
 ## What it promises
 

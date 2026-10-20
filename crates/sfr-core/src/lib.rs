@@ -42,13 +42,17 @@ pub const TOOL_NAME: &str = "sfr";
 /// Record file extension (SPEC B1.1).
 pub const RECORD_EXTENSION: &str = "sfr";
 
-/// Record schema version `seal` writes (SPEC B1.7). Schema 1 was the first; schema 2 adds
-/// `seal.allow_untested_version`. A verifier must reject any version it does not know and must
-/// never guess; this one knows [`KNOWN_SCHEMA_VERSIONS`].
-pub const SCHEMA_VERSION: u32 = 2;
+/// Record schema version `seal` writes (SPEC B1.7). Schema 1 was the first; schema 2 added
+/// `seal.allow_untested_version`; schema 3 signs the shape of the tree (its size and the number
+/// of leaves in each section) and tags every leaf with its section, and drops
+/// `seal.token_cmvp_certificate`. A verifier must reject any version it does not know and must
+/// never guess; this one knows [`KNOWN_SCHEMA_VERSIONS`], which is schema 3 only: a schema 1 or
+/// 2 record has leaves that are not bound to their section, so it is refused, not accepted
+/// beside the new form.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The schema versions `verify` accepts.
-pub const KNOWN_SCHEMA_VERSIONS: [u32; 2] = [1, 2];
+pub const KNOWN_SCHEMA_VERSIONS: [u32; 1] = [3];
 
 /// The PX4 versions `sfr` is tested on, as (major, minor) series, inclusive: v1.14 to v1.17.
 /// `seal` refuses a log outside them, or one whose version it cannot read, unless given
@@ -83,12 +87,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_version_is_two_and_one_still_verifies() {
+    fn schema_version_is_three_and_only_three_verifies() {
         assert_eq!(
-            SCHEMA_VERSION, 2,
-            "SPEC B1.7: schema 2 adds seal.allow_untested_version"
+            SCHEMA_VERSION, 3,
+            "SPEC B1.7: schema 3 signs the tree shape and tags every leaf with its section"
         );
-        assert_eq!(KNOWN_SCHEMA_VERSIONS, [1, 2]);
+        assert_eq!(KNOWN_SCHEMA_VERSIONS, [3]);
     }
 
     #[test]

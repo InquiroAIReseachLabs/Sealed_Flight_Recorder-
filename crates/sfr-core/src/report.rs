@@ -25,7 +25,7 @@ pub const EVALUATION_LINE: &str = "EVALUATION KEY: not for operational use";
 /// Report file extension, appended to the record's file stem (SPEC B1.8).
 pub const REPORT_EXTENSION: &str = "sfr.md";
 
-/// The report line of a record sealed with `--allow-untested-version` (schema 2).
+/// The report line of a record sealed with `--allow-untested-version` (`seal.allow_untested_version`).
 pub const UNTESTED_VERSION_LINE: &str = "**Untested PX4 version.** Sealed with `--allow-untested-version`: \
 sfr is tested on PX4 v1.14 to v1.17 logs only, and this log's version is outside them or could not be read.";
 
@@ -292,7 +292,7 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     );
     out.push('\n');
     out.push_str(&format!(
-        "**Status: {}**. Sealed (time claimed by the sealer) {} by {} {}, v1.0 evaluation release. \
+        "**Status: {}**. Sealed (time claimed by the sealer) {} by {} {} (evaluation release). \
          This report is generated from the record {} alone.\n\n",
         escape(&s(r, "status", "record")?),
         escape(&s(seal, "time_utc", "seal")?),

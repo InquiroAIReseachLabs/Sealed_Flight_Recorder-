@@ -483,9 +483,10 @@ fn table(
     let fw = &id.firmware;
     let mut out = String::new();
     if dry_run {
-        out.push_str(
-            "sfr seal --dry-run: v1.0 evaluation release; nothing is signed or written\n\n",
-        );
+        out.push_str(&format!(
+            "sfr seal --dry-run: sfr {} (evaluation release); nothing is signed or written\n\n",
+            env!("CARGO_PKG_VERSION")
+        ));
     }
     let firmware = match (&fw.version, &fw.git) {
         (Some(v), Some(g)) => format!("{v} ({g})"),

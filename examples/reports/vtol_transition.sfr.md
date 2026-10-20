@@ -2,10 +2,10 @@ EVALUATION KEY: not for operational use
 
 # Sealed flight record: vtol\_transition\.ulg
 
-- Merkle root: `aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b` (sha256\-rfc6962, 34 leaves)
-- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
+- Merkle root: `745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430` (sha256\-rfc6962, 34 leaves)
+- Key fingerprint: `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be`
 
-**Status: PASS**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0, v1.0 evaluation release. This report is generated from the record vtol\_transition\.sfr alone.
+**Status: PASS**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0 (evaluation release). This report is generated from the record vtol\_transition\.sfr alone.
 
 ## Rules
 
@@ -94,15 +94,15 @@ The record holds no sealed topic digests.
 ## Seal
 
 - Seal time (claimed by the sealer, not proven): 2026\-10\-18T15\:00\:00Z
-- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
+- Key fingerprint: `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be`
 - Key custody (declared by the sealer; this report cannot attest it): file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
-- Merkle root: `aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b` (sha256\-rfc6962, 34 leaves)
-- Schema version: 2
+- Merkle root: `745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430` (sha256\-rfc6962, 34 leaves)
+- Schema version: 3
 
 ## Verify
 
-With the public key whose fingerprint is `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51` saved as `sfr.pub`, in the directory that holds the record and the log:
+With the public key whose fingerprint is `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
 sfr verify vtol_transition.sfr --pubkey sfr.pub --allow-evaluation-key --ulog vtol_transition.ulg
