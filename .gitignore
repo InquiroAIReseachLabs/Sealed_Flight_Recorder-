@@ -1,8 +1,10 @@
 # Build output
 /target/
 /fuzz/target/
+/tools/review_metrics/target/
 /fuzz/artifacts/
 /fuzz/corpus/
+/fuzz/phase0-*.log
 
 # Private keys never enter the repository (SPEC B1.9).
 *.key

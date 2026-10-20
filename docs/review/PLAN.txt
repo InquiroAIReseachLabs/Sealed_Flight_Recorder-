@@ -1,0 +1,165 @@
+# Chunked Code Review Plan
+
+Status: working plan for the maintainers and the coding agents that execute it.
+Scope: the `sfr` Rust workspace (`sfr-core`, `sfr`, `sfr-wasm`, `sfr-pkcs11-helper`).
+Baseline measured at commit `2bcd85c`. Line counts below are from that commit; Phase 0 regenerates them.
+
+## 1. Why this exists
+
+Outside testing finds what an attacker can reach. It does not tell us how much of the code has been read line by line. The reports so far show a steady flow of findings, mostly in the rule engine, and lists of source files that were only partly read. This plan changes the sampling method: read every reviewable line, in small chunks, with independent passes, and fix each chunk on its own.
+
+Rules of the road, with the evidence behind them:
+
+| Rule | Basis |
+|---|---|
+| Review 200 lines at a time, 400 at most. Keep a pass under 60 minutes, 90 at most. Stay under about 300 lines per hour. | Cisco / SmartBear study of about 2,500 reviews: [summary](https://mikeconley.ca/blog/2009/09/14/smart-bear-cisco-and-the-largest-study-on-code-review-ever/). Above 450 lines per hour, defect density was below average in 87% of cases. These are human rates; we keep chunks small for agents too, which is a judgment, not a measured result. |
+| Use more than one reviewer, each with a different perspective. | Perspective-based reading: [Basili et al.](https://www.cs.umd.edu/~mvz/handouts/emp_pbr.pdf). About 30% better individual coverage on one document set, no difference on the other, small samples. Treat as a hint. |
+| Reviewers must work independently before findings are merged. | Capture-recapture estimates of remaining defects assume independent reviewers and work best with four or more: [Wohlin et al.](https://wohlin.eu/jss04-1.pdf). We record which pass found what so the estimate stays possible. |
+| Give each chunk a written contract so reviewers can understand it. Do not hand them an argument that the code is right. | Understanding the change is the main obstacle in modern review and only a minority of comments are about defects: [Bacchelli and Bird](https://web.eecs.umich.edu/~weimerw/2018-481/readings/codereview.pdf). The Cisco data also found fewer defects in reviews where authors pre-annotated. |
+| Measure test strength mechanically, not by opinion. | Mutation testing and coverage give an objective answer to "would the tests notice if this line were wrong". |
+
+## 2. Roles and independence
+
+- **Reviewer**: reads one chunk in one pass type. Starts a fresh session per chunk and per pass. Sees only the chunk, its contract, the cited spec text, and the repo docs. Does not see other passes' findings until all passes for the chunk are written.
+- **Fixer**: a different session from every reviewer of that chunk. Writes the test first, then the fix.
+- **Fix reviewer**: a third session. Reviews the fix PR only. Never the same session as the fixer.
+- **Maintainer**: merges. Not required to read code.
+- No session reviews and fixes the same chunk.
+
+## 3. Phase 0: mechanical gates and chunk ledger (no behavior changes)
+
+Goal: objective measurements first, so review time goes where the tests are weak.
+
+0.1 **Chunk ledger.** Create `docs/review/LEDGER.md`. List every production source file except generated data (`crates/sfr-core/src/px4_tables.rs`, which is machine-verified against PX4 sources by `docs/VALIDATION.md`). Split at function boundaries into sub-chunks of at most 400 non-blank, non-comment lines. Give each an ID `C<group>.<n>`, its file, its line range, its status (`todo`, `contract`, `review`, `fix`, `closed`), and the pass and fix PR numbers. Functions over 400 lines are split at logical sections; record the split points.
+
+0.2 **Lint gate (report only at first).** Run, per crate, without failing the build:
+```
+cargo clippy --workspace --all-targets -- \
+  -W clippy::indexing_slicing -W clippy::arithmetic_side_effects \
+  -W clippy::as_conversions -W clippy::cast_possible_truncation \
+  -W clippy::unwrap_used -W clippy::expect_used -W clippy::panic \
+  -W clippy::pedantic
+```
+Save counts per file to `docs/review/lint-baseline.txt`. Inline test modules do not count; separate them in the report. Each warning in a chunk is triaged during that chunk's review: fix, or annotate with a one-line reason.
+
+0.3 **Coverage.** `cargo llvm-cov --workspace --lcov` (install `cargo-llvm-cov` if missing). Record line and branch coverage per chunk in the ledger.
+
+0.4 **Mutation testing.** `cargo mutants` (install `cargo-mutants` if missing), run per file so a run fits the time limit. Record caught, missed, and unviable mutants per chunk. Every missed mutant becomes a line in the chunk's review input: either add a test that kills it, or classify it as equivalent with a reason. Targets (defaults): no missed mutants in code that decides a verdict, a rule result, or a verification outcome; at least 80% of mutants caught elsewhere.
+
+0.5 **Property tests.** Add `proptest` cases, behind `dev-dependencies` only, for: ULog ingest round-trips and refusals on arbitrary bytes, canonical JSON (encode, parse, re-encode is the identity or a refusal), Merkle root stability under the leaf encoding, and CRL and certificate parsing refusing arbitrary bytes without panicking.
+
+0.6 **Fuzzing.** Run real `cargo fuzz` targets for the ULog parser, the record parser, and the CRL parser on a nightly toolchain. Report executions, coverage reached, and any crash. Commit minimized corpus seeds. Save the run configuration so a maintainer can repeat it.
+
+0.7 **Long-function list.** Generate the list of functions over 100 lines and the top 20 by branch count, with file and line. These are simplification candidates, handled in Phase 3 only after their chunk is pinned by tests (see section 6).
+
+0.8 **Docs-vs-code table.** For each normative statement in `README.md`, `docs/SPEC.md`, `docs/RULES.md`, `docs/THREAT_MODEL.md`, `docs/RECORD_FORMAT.md`, and `docs/LIMITS.md`, list the code location that implements it, or mark it unimplemented. Disagreements are findings of type `DOC`.
+
+Exit of Phase 0: the files above exist, and a one-page summary lists the 10 chunks with the lowest mutation score.
+
+## 4. Chunk groups, in risk order
+
+Each group holds the ledger sub-chunks of the listed files. Order reflects exposure to untrusted input, size and complexity, and how little of the code outside readers have seen. Phase 0 may reorder within a group by mutation score; it does not move groups without a written reason in the ledger.
+
+| Group | Files (functions of note) | Lines at baseline | Untrusted input | Contract sources |
+|---|---|---|---|---|
+| G1 Log parser and ingest | `sfr-core/src/ulog.rs` (`read`, 313 lines), `ingest.rs` (`data`, `finish`), `px4.rs` | about 3,400 | Raw log bytes | ULog file-format spec; PX4 message definitions at each supported tag; `docs/SPEC.md` ingest sections; `docs/LIMITS.md` |
+| G2 Rule engine and events | `evaluate.rs` (`r4`, rule functions), `events.rs` (`instance_events`) | about 3,300 | Decoded log content | `docs/RULES.md`; PX4 sources named in `docs/VALIDATION.md` |
+| G3 Certificates and signatures | `sfr/src/certs.rs` (`parse_crl`), `sfr-core/src/crypto.rs` | about 1,300 | Certificates, CRLs, record signatures | RFC 5280; `docs/THREAT_MODEL.md`; library documentation for the pinned versions |
+| G4 Verification | `sfr-core/src/verify.rs` (`standalone`, `compare`), `sfr/src/main.rs` (`verify_cmd`, 507 lines) | about 2,100 | Records, reports, flags | `docs/SPEC.md` verify sections; `docs/RECORD_FORMAT.md` |
+| G5 Sealed form | `json.rs`, `record.rs`, `merkle.rs`, `seal.rs` | about 1,800 | Record JSON | RFC 8785 subset as written in `docs/SPEC.md`; RFC 6962 and its replacement RFC 9162 for the tree |
+| G6 Configuration | `rules.rs` (`parse_rules`, 262 lines), `params.rs`, `pkcs11_uri.rs` | about 1,600 | Rules and baseline files, URIs | `docs/RULES.md`; RFC 7512 for PKCS#11 URIs |
+| G7 Output | `report.rs` (`render`, 389 lines), `display.rs`, `sfr-wasm` | about 830 plus `sfr-wasm` | Strings from logs, shown to people | `docs/SPEC.md` report sections |
+| G8 Keys, hardware, CLI | `keys.rs`, `sfr/src/hardware.rs`, `sfr-pkcs11-helper`, `sfr/src/main.rs` (`seal_cmd`, 317 lines, output paths) | about 1,800 (rest of `main.rs` is split across G4 and G8 by function) | Key files, tool output, paths, flags | `docs/INTEGRATION_NOTES.md`; `docs/THREAT_MODEL.md` |
+| GX Cross-cutting | Duplicated logic, dead code, public API surface, error messages, unit and exit-code consistency | whole tree | none | `docs/` |
+
+## 5. Per-chunk loop
+
+For each chunk, in ledger order:
+
+**Step 1. Contract** (`docs/review/contracts/C<group>.<n>.md`, at most one page). Written by the contract author, who is not a reviewer. It states:
+1. What the chunk promises to its callers, in testable sentences.
+2. What it receives from outside the trust boundary, and what it may assume.
+3. Invariants that must hold on every path, including error paths.
+4. Which `SPEC`, `RULES`, `LIMITS`, or external spec lines it implements, as links.
+5. Known documented limitations the reviewers must not report as new (see section 9).
+The contract must not argue the code is correct.
+
+**Step 2. Three independent passes**, each a fresh session, each limited to 60 minutes of work and the chunk's lines:
+
+- **Pass A: adversarial input.** Ask of every operation: what value, order, size, or repetition of input reaches this line, and what happens? Categories to cover: integer overflow, truncation and sign conversion, unbounded allocation and loops, panics reachable from input, indexing out of range, state assumed from earlier records but not enforced, the same fact accepted in two forms, silent acceptance of something unrecognized, error paths that leave partial output, and differences from other parsers of the same format.
+- **Pass B: specification conformance.** For every behavior the chunk implements, open the cited spec text at the pinned version and compare. Quote the text. Never state a fact about PX4, ULog, an RFC, or a library from memory: read it, and record the file, tag or version, and line.
+- **Pass C: maintainer.** Dead code, duplicated logic, functions over 100 lines, branches no test reaches, names that mislead, comments that contradict the code, docs that contradict the code, error messages that expose library internals instead of saying what is wrong and where.
+
+Each reviewer writes findings to `docs/review/findings/<chunk>-<pass>.md` (private branch until fixed; see section 8) using the format in section 7. They also record the list of lines they actually read.
+
+**Step 3. Merge.** A coordinator (a separate session) merges the three files, deduplicates, assigns severity, and records for each finding which passes found it. The overlap goes in the ledger. Pass A and B findings with severity High or above go first.
+
+**Step 4. Fix.** The fixer, for each finding in severity order:
+1. Writes a test that fails on the current code. For parser and rule findings, add a minimal log or record to the existing corpus (`testdata/` and the false-pass corpus) in addition to a unit test.
+2. Writes the smallest change that makes it pass.
+3. Updates `SPEC`, `RULES`, `LIMITS`, or `THREAT_MODEL` in the same PR if behavior a user can see changed.
+4. Keeps behavior fixes and refactors in separate PRs.
+
+**Step 5. Fix review.** A third session reviews the fix PR with the same three perspectives, limited to the changed lines and their callers.
+
+**Step 6. Close.** Re-run the chunk's mutation test and coverage. The chunk closes when section 6 is met.
+
+## 6. Closing a chunk
+
+All of the following:
+1. Contract exists and has been read by all three reviewers.
+2. Three passes completed, with line-read lists covering 100% of the chunk.
+3. Every finding is fixed with a test that failed before the fix, or is recorded as a documented limitation with a pointer to the document that states it.
+4. A second set of passes, run after the fixes by fresh sessions, finds no new Critical or High issue. (Medium and Low are fixed or logged.)
+5. Lint warnings in the chunk are fixed or annotated with a one-line reason.
+6. Mutation targets from 0.4 are met, with equivalent mutants classified.
+7. Full workspace tests, the false-pass corpus, and the pyulog differential check pass on the merge commit.
+
+**Refactoring rule (Phase 3).** A function on the long-function list is simplified only after its chunk is closed at the 80% mutation level. A refactor PR must show identical results on the full corpus and identical `.sfr` bytes for the golden logs. If bytes change, it is not a refactor.
+
+## 7. Finding format
+
+```
+ID:        <chunk>-<pass>-<nn>
+Pass:      A | B | C
+Type:      BUG | SPEC | DOC | SIMPLIFY | TEST-GAP
+Severity:  Critical | High | Medium | Low
+Introduced-by: <commit or PR if known, else "unknown">
+Where:     <file>:<lines>
+What:      <one sentence>
+Evidence:  <input or command that reproduces; or the spec quote with source, version, line>
+Fix:       <smallest change>
+Test:      <name of the test that must fail before and pass after>
+```
+Severity: **Critical**: a record can verify, or a verdict can say PASS, when it must not. **High**: a wrong verdict in a realistic case, a crash on input, or unbounded resource use. **Medium**: a wrong or missing result in an unusual case, or a document that contradicts behavior. **Low**: wording, naming, message clarity.
+
+`Introduced-by` is recorded for every finding that has a known commit, so we can tell how many defects come from fixes.
+
+## 8. Pull requests and disclosure
+
+- One PR per chunk fix set. If it changes more than about 300 lines, split it.
+- PR titles and descriptions state the behavior change only. No attack recipes, no names of review tools or reports, no internal project names.
+- Findings files stay on a private branch (`review/findings`) until all fixes in that chunk are merged. Only then are summaries moved into `docs/review/` as "found, fixed, tested" with no reproduction details.
+- Every PR runs the full test suite and the corpus checks in CI.
+
+## 9. Closed design decisions and documented limits (do not report as new)
+
+Reviewers report a disagreement between these and the code, but not the decision itself.
+- The signed record carries SHA-256 and BLAKE3 digests of the log. SHA-256 is the seal. BLAKE3 is a second digest that deep verification also checks; a mismatch fails verification and adds no security beyond SHA-256.
+- Limits stated in `docs/THREAT_MODEL.md` and `docs/LIMITS.md`: the verifier trusts its own clock; seal time is claimed by the sealer; a withheld newer CRL cannot be detected offline; edits before sealing are not detected; there is no record chain; some rules read identifiers that the log itself declares.
+If a reviewer thinks a documented limit should change, they open a separate note. They do not block a chunk on it.
+
+## 10. Metrics kept in the ledger
+
+Per chunk: lines, functions over 100 lines, lint warnings before and after, coverage, mutants caught and missed before and after, findings by pass and severity, findings found by more than one pass, time per pass, and number of findings whose `Introduced-by` is a fix. After G1 to G4, compute the share of findings found by only one pass; if it is high, the reviewed code is still undercounted, and more passes are warranted for the remaining groups.
+
+## 11. Order of work
+
+1. Pending hardening PRs on `main` merge first.
+2. Phase 0 (section 3) may start in parallel; it changes no behavior.
+3. Phase 1: G1, G2, G3 (highest exposure and complexity), then G4, G5.
+4. Phase 2: G6, G7, G8, GX.
+5. Phase 3: simplification of long functions, one per PR, under the refactoring rule.
+6. Phase 4: an outside adversarial round to verify, given the list of closed chunks. Its job is confirming fixes and probing what the chunk reviews could not reach.
+
+The plan is complete when every ledger row is `closed`, Phase 3 is done or explicitly deferred with reasons, and the Phase 4 round finds no Critical or High issue.

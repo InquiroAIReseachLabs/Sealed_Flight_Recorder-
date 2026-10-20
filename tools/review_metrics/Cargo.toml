@@ -1,0 +1,18 @@
+# review_metrics: reads Rust sources and prints, as JSON, what the chunked code review needs
+# (docs/review/PLAN.txt, Phase 0): item and function line ranges, the ranges of test-only code,
+# the lines that hold code (not blank, not comment), and a branch count per function.
+# Not a workspace member: the root Cargo.toml excludes tools/review_metrics, and the empty
+# [workspace] below keeps it standalone with its own Cargo.lock, like fuzz/.
+[package]
+name = "review-metrics"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Line ranges, test-only ranges, code lines and branch counts of Rust sources, for the chunk ledger."
+
+[dependencies]
+proc-macro2 = { version = "=1.0.107", default-features = false, features = ["span-locations"] }
+quote = { version = "=1.0.47", default-features = false }
+syn = { version = "=2.0.119", default-features = false, features = ["full", "visit", "parsing", "printing", "clone-impls", "proc-macro"] }
+
+[workspace]

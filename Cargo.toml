@@ -1,7 +1,8 @@
 # Sealed Flight Record workspace (SPEC B1.2).
 # One engine (sfr-core), a thin command line wrapper (sfr), and the PKCS#11
 # signing helper, which runs as its own process (SPEC B1.2).
-# fuzz/ is a separate cargo-fuzz package; it is excluded from the workspace on purpose.
+# fuzz/ is a separate cargo-fuzz package, and tools/review_metrics a standalone review tool; both are
+# excluded from the workspace on purpose.
 [workspace]
 resolver = "3"
 members = [
@@ -9,7 +10,7 @@ members = [
   "crates/sfr",
   "crates/sfr-pkcs11-helper",
 ]
-exclude = ["fuzz"]
+exclude = ["fuzz", "tools/review_metrics"]
 
 [workspace.package]
 version = "0.1.0"
