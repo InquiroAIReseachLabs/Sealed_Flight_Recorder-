@@ -21,7 +21,15 @@
 #                        revive it if a verifier trusted the seal time
 #   signer_server.pem    another signer whose only extended key usage is server authentication
 #   signer_revoked.pem   another signer, revoked in inter.crl
-#   inter.crl         CRL issued by inter, listing signer_revoked.pem
+#   inter.crl         CRL issued by inter, number 1, listing signer_revoked.pem
+#   root.crl          CRL issued by root, number 1, listing nothing (inter is not revoked)
+#   inter_older.crl   CRL issued by inter, number 0, listing nothing: older than inter.crl
+#   inter_stale.crl   CRL issued by inter, number 0, listing nothing, valid 2025-06-01 to
+#                     2025-07-01: older than inter.crl and past its nextUpdate
+#   root_2025.crl     CRL issued by root, number 0, listing nothing, valid 2025-06-01 to
+#                     2025-07-01: with inter_stale.crl, the CRLs current in mid-June 2025
+#   inter_same.crl    CRL issued by inter with the same number as inter.crl (1) and other content
+#   other_root.crl    CRL issued by the unrelated other_root, number 99, listing nothing
 set -euo pipefail
 export LC_ALL=C TZ=UTC
 
@@ -127,9 +135,22 @@ EOF
   sed -i -E 's/^R\t([0-9]+Z)\t[0-9]+Z,/R\t\1\t260601000000Z,/' "$work/index.txt"
   grep -v -E "CN=sfr test (root|other_root|inter)$" "$work/index.txt" > "$work/index.inter"
   mv "$work/index.inter" "$work/index.txt"
-  openssl ca -batch -config "$work/ca.cnf" -gencrl -cert "$out/inter.pem" \
-    -keyfile "$work/inter.key" -crlexts crl -crl_lastupdate 20260601000000Z \
-    -crl_nextupdate 20460101000000Z -out "$out/inter.crl" 2> /dev/null
+  cp "$work/index.txt" "$work/index.with_revoked"
+  : > "$work/index.empty"
+  # gencrl <issuer> <crl number, hex> <index file> <lastUpdate> <nextUpdate> <file>
+  gencrl() {
+    echo "$2" > "$work/crlnumber"
+    cp "$3" "$work/index.txt"
+    openssl ca -batch -config "$work/ca.cnf" -gencrl -cert "$out/$1.pem" -keyfile "$work/$1.key" \
+      -crlexts crl -crl_lastupdate "$4" -crl_nextupdate "$5" -out "$out/$6" 2> /dev/null
+  }
+  gencrl inter 01 "$work/index.with_revoked" 20260601000000Z 20460101000000Z inter.crl
+  gencrl root 01 "$work/index.empty" 20260601000000Z 20460101000000Z root.crl
+  gencrl inter 00 "$work/index.empty" 20260101000000Z 20460101000000Z inter_older.crl
+  gencrl inter 00 "$work/index.empty" 20250601000000Z 20250701000000Z inter_stale.crl
+  gencrl inter 01 "$work/index.empty" 20260601000000Z 20460101000000Z inter_same.crl
+  gencrl root 00 "$work/index.empty" 20250601000000Z 20250701000000Z root_2025.crl
+  gencrl other_root 63 "$work/index.empty" 20260601000000Z 20460101000000Z other_root.crl
 }
 
 case "${1:-}" in

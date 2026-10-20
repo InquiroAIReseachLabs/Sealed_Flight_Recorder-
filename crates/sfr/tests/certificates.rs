@@ -108,12 +108,33 @@ fn seal(seed: u8, cert: Option<&str>, chain: Option<&str>, time: &str) -> (Outpu
     (o, out.join("custom_detection.sfr"))
 }
 
+/// The current CRLs of the two issuers in the test chain: root (issued inter) and inter (issued
+/// the signers). `verify --trust-anchor` needs one for each, unless it is given `--no-crl-check`.
+const BOTH_CRLS: [&str; 2] = ["root.crl", "inter.crl"];
+
 fn verify_anchor(record: &Path, anchor: &str, crls: &[&str]) -> Output {
-    verify_anchor_at(record, anchor, crls, None)
+    verify_anchor_with(record, anchor, crls, &[])
 }
 
 /// `sfr verify --trust-anchor`, with `--at` when `at` is given.
 fn verify_anchor_at(record: &Path, anchor: &str, crls: &[&str], at: Option<&str>) -> Output {
+    match at {
+        Some(at) => verify_anchor_with(record, anchor, crls, &["--at", at]),
+        None => verify_anchor(record, anchor, crls),
+    }
+}
+
+/// This machine's clock as an RFC 3339 time `offset` seconds from now.
+fn now_plus(offset: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    sfr_core::seal::format_utc(now + offset)
+}
+
+/// [`verify_anchor`] with more command-line words, such as `--no-crl-check`.
+fn verify_anchor_with(record: &Path, anchor: &str, crls: &[&str], more: &[&str]) -> Output {
     let anchor = pki(anchor);
     let crls: Vec<String> = crls.iter().map(|c| pki(c)).collect();
     let mut args = vec![
@@ -126,19 +147,8 @@ fn verify_anchor_at(record: &Path, anchor: &str, crls: &[&str], at: Option<&str>
     for c in &crls {
         args.extend(["--crl", c.as_str()]);
     }
-    if let Some(at) = at {
-        args.extend(["--at", at]);
-    }
+    args.extend_from_slice(more);
     sfr(&args)
-}
-
-/// This machine's clock as an RFC 3339 time `offset` seconds from now.
-fn now_plus(offset: i64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-    sfr_core::seal::format_utc(now + offset)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -157,27 +167,35 @@ fn a_chain_to_the_trust_anchor_verifies_and_names_the_anchor() {
     let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
     let anchor = format!("sha256:{}", sha256_hex(&der("root.pem")));
-    for crls in [&[][..], &["inter.crl"][..]] {
-        let v = verify_anchor(&record, "root.pem", crls);
+    // The CRLs may be given in either order.
+    for crls in [BOTH_CRLS, ["inter.crl", "root.crl"]] {
+        let v = verify_anchor(&record, "root.pem", &crls);
         assert_eq!(v.status.code(), Some(0), "{}", text(&v));
         let out = String::from_utf8_lossy(&v.stdout);
         assert!(out.contains("Integrity: VERIFIED (record)"), "{out}");
         assert!(
             out.contains(&format!(
-                "trust     certificate chain to the trust anchor {anchor} at the verification time; {} CRL(s) checked",
-                crls.len()
+                "trust     certificate chain to the trust anchor {anchor} at the verification time; 2 CRL(s) checked\n"
             )),
             "{out}"
         );
         // The time the chain was judged at is printed, and the seal time is labelled a claim.
         assert!(
-            out.contains("time      20") && out.contains("(verifier clock); certificate validity was checked at this time, not at the claimed seal time\n"),
+            out.contains("time      20")
+                && out.contains("(verifier clock); certificate validity was checked at this time, not at the claimed seal time\n"),
             "{out}"
         );
         assert!(
             out.contains("seal time 2026-10-18T15:00:00Z (claimed by the sealer, not proven)\n"),
             "{out}"
         );
+        // Each CRL used is printed: its issuer, number, thisUpdate and nextUpdate.
+        for line in [
+            "crl       CN=sfr test root: CRL number 1, thisUpdate 2026-06-01T00:00:00Z, nextUpdate 2046-01-01T00:00:00Z\n",
+            "crl       CN=sfr test inter: CRL number 1, thisUpdate 2026-06-01T00:00:00Z, nextUpdate 2046-01-01T00:00:00Z\n",
+        ] {
+            assert!(out.contains(line), "{line} in {out}");
+        }
         // Custody is attested by the chain to the anchor, and still says what the sealer declared.
         assert!(
             out.contains(&format!(
@@ -193,6 +211,10 @@ fn a_chain_to_the_trust_anchor_verifies_and_names_the_anchor() {
         record.to_str().unwrap(),
         "--trust-anchor",
         &pki("root.pem"),
+        "--crl",
+        &pki("root.crl"),
+        "--crl",
+        &pki("inter.crl"),
         "--ulog",
         LOG,
         "--json",
@@ -200,6 +222,10 @@ fn a_chain_to_the_trust_anchor_verifies_and_names_the_anchor() {
     assert_eq!(v.status.code(), Some(0), "{}", text(&v));
     let json = String::from_utf8_lossy(&v.stdout);
     assert!(json.contains("\"trust\": \"trust-anchor\""), "{json}");
+    assert!(
+        json.contains("\"crl_check\": true") && json.contains("\"number\": \"1\""),
+        "{json}"
+    );
     assert!(json.contains("\"custody_attested\": true"), "{json}");
     assert!(
         json.contains("\"key_custody\": \"file-evaluation\""),
@@ -212,7 +238,7 @@ fn a_chain_to_the_trust_anchor_verifies_and_names_the_anchor() {
     changed[start] = if changed[start] == b'A' { b'B' } else { b'A' };
     let tampered = record.with_file_name("tampered.sfr");
     std::fs::write(&tampered, changed).unwrap();
-    let v = verify_anchor(&tampered, "root.pem", &[]);
+    let v = verify_anchor(&tampered, "root.pem", &BOTH_CRLS);
     assert_eq!(v.status.code(), Some(1), "{}", text(&v));
     assert!(text(&v).contains("Integrity: FAILED"), "{}", text(&v));
 }
@@ -227,29 +253,30 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             Some("inter.pem"),
             SEAL_TIME,
             "root.pem",
-            &["inter.crl"][..],
+            &BOTH_CRLS[..],
             None,
             "revoked by a supplied CRL",
         ),
         (
-            "expired at the verification time",
+            "expired at the seal time",
             SIGNER_EXPIRED,
             "signer_expired.pem",
             Some("inter.pem"),
             SEAL_TIME,
             "root.pem",
-            &[][..],
+            &BOTH_CRLS[..],
             None,
             "had expired at the verification time",
         ),
         (
-            "not yet valid at the time given with --at",
+            "not yet valid at the seal time",
             SIGNER,
             "signer.pem",
             Some("inter.pem"),
             "2025-06-01T00:00:00Z",
             "root.pem",
-            &[][..],
+            // Judged as of that time, the 2026 CRLs would be from the future: give the ones current then.
+            &["root_2025.crl", "inter_stale.crl"][..],
             Some("2025-06-01T00:00:00Z"),
             "not yet valid at the verification time",
         ),
@@ -260,7 +287,7 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             Some("inter.pem"),
             SEAL_TIME,
             "root.pem",
-            &[][..],
+            &BOTH_CRLS[..],
             None,
             "lacks extended key usage code signing",
         ),
@@ -271,7 +298,7 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             Some("inter.pem"),
             SEAL_TIME,
             "other_root.pem",
-            &[][..],
+            &BOTH_CRLS[..],
             None,
             "does not reach a supplied trust anchor",
         ),
@@ -282,7 +309,7 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             None,
             SEAL_TIME,
             "root.pem",
-            &[][..],
+            &BOTH_CRLS[..],
             None,
             "does not reach a supplied trust anchor",
         ),
@@ -299,7 +326,8 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
         assert!(out.contains("Flight rules: UNKNOWN"), "{case}: {out}");
         assert!(!out.contains("VERIFIED"), "{case}: {out}");
     }
-    // The revoked signer passes when no CRL is given: the CRL is what revokes it.
+    // The revoked signer passes only when revocation is not checked at all: the CRL is what
+    // revokes it.
     let (_, record) = seal(
         SIGNER_REVOKED,
         Some("signer_revoked.pem"),
@@ -307,7 +335,9 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
         SEAL_TIME,
     );
     assert_eq!(
-        verify_anchor(&record, "root.pem", &[]).status.code(),
+        verify_anchor_with(&record, "root.pem", &[], &["--no-crl-check"])
+            .status
+            .code(),
         Some(0)
     );
 }
@@ -377,7 +407,7 @@ fn seal_refuses_a_certificate_for_another_key_and_verify_refuses_two_trust_sourc
     ]);
     assert_eq!(o.status.code(), Some(4));
     assert!(
-        text(&o).contains("--crl applies only to --trust-anchor"),
+        text(&o).contains("--crl and --no-crl-check apply only to --trust-anchor"),
         "{}",
         text(&o)
     );
@@ -446,6 +476,219 @@ fn verify_with_no_trust_source_checks_nothing_and_exits_non_zero() {
     assert!(String::from_utf8_lossy(&v.stdout).contains("\"integrity\": \"NOT CHECKED\""));
 }
 
+/// A signer that its issuer has revoked, sealed and ready to verify against `root.pem`.
+fn revoked_record() -> PathBuf {
+    let (o, record) = seal(
+        SIGNER_REVOKED,
+        Some("signer_revoked.pem"),
+        Some("inter.pem"),
+        SEAL_TIME,
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    record
+}
+
+#[test]
+fn the_order_of_crl_arguments_never_decides_whether_a_revoked_signer_verifies() {
+    // Issue 24, F1: webpki used the first CRL of the right issuer, so an older CRL of the same
+    // issuer, given first, hid the revocation. The highest CRL number now decides, in any order.
+    let record = revoked_record();
+    // inter_older.crl is number 0 and lists nothing; inter_stale.crl is number 0, lists nothing and
+    // is past its nextUpdate. inter.crl is number 1 and lists the signer.
+    let sets: [&[&str]; 8] = [
+        &["root.crl", "inter.crl", "inter_older.crl"],
+        &["root.crl", "inter_older.crl", "inter.crl"],
+        &["inter_older.crl", "inter.crl", "root.crl"],
+        &["inter_older.crl", "root.crl", "inter.crl"],
+        &["root.crl", "inter.crl", "inter_stale.crl"],
+        &["root.crl", "inter_stale.crl", "inter.crl"],
+        &["inter_stale.crl", "inter.crl", "root.crl"],
+        &[
+            "inter_stale.crl",
+            "inter_older.crl",
+            "root.crl",
+            "inter.crl",
+        ],
+    ];
+    for crls in sets {
+        let v = verify_anchor(&record, "root.pem", crls);
+        assert_eq!(v.status.code(), Some(1), "{crls:?}: {}", text(&v));
+        let out = text(&v);
+        assert!(
+            out.contains("Integrity: FAILED: certificate chain:")
+                && out.contains("revoked by a supplied CRL"),
+            "{crls:?}: {out}"
+        );
+        assert!(!out.contains("VERIFIED"), "{crls:?}: {out}");
+    }
+    // The same files verify a signer that is not revoked, in either order, and the CRLs printed
+    // are the current ones (number 1), not the older ones.
+    let (o, good) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    for crls in sets {
+        let v = verify_anchor(&good, "root.pem", crls);
+        assert_eq!(v.status.code(), Some(0), "{crls:?}: {}", text(&v));
+        let out = stdout(&v);
+        assert!(
+            out.contains("2 CRL(s) checked\n")
+                && out.contains(
+                    "crl       CN=sfr test inter: CRL number 1, thisUpdate 2026-06-01T00:00:00Z"
+                ),
+            "{crls:?}: {out}"
+        );
+        assert!(!out.contains("CRL number 0"), "{crls:?}: {out}");
+    }
+}
+
+#[test]
+fn every_issuer_in_the_chain_needs_a_crl_unless_checking_is_switched_off() {
+    // Issue 24, F2: with no CRL a revoked signer verified and the trust line said "0 CRL(s)".
+    let record = revoked_record();
+    let refused = |crls: &[&str], missing: &[&str], present_not: &[&str]| {
+        let v = verify_anchor(&record, "root.pem", crls);
+        assert_eq!(v.status.code(), Some(1), "{crls:?}: {}", text(&v));
+        let out = text(&v);
+        assert!(
+            out.contains(
+                "Integrity: FAILED: certificate chain: no CRL was given for the issuer(s)"
+            ),
+            "{crls:?}: {out}"
+        );
+        for m in missing {
+            assert!(out.contains(m), "{crls:?}: {m} in {out}");
+        }
+        for m in present_not {
+            let issuers = out
+                .split("issuer(s) ")
+                .nth(1)
+                .unwrap()
+                .split(" of the certificates")
+                .next()
+                .unwrap();
+            assert!(
+                !issuers.contains(m),
+                "{crls:?}: {m} should not be missing in {out}"
+            );
+        }
+        assert!(!out.contains("VERIFIED"), "{crls:?}: {out}");
+    };
+    // None: both issuers are missing.
+    refused(
+        &[],
+        &["CN=sfr test root", "CN=sfr test inter", "none were given"],
+        &[],
+    );
+    // Only the signer's issuer: the intermediate's issuer, root, is missing.
+    refused(
+        &["inter.crl"],
+        &["CN=sfr test root"],
+        &["CN=sfr test inter"],
+    );
+    // Only root's: inter, the signer's issuer, is missing.
+    refused(&["root.crl"], &["CN=sfr test inter"], &["CN=sfr test root"]);
+    // A CRL of an unrelated issuer, even with a high number, covers nothing.
+    refused(
+        &["inter.crl", "other_root.crl"],
+        &[
+            "CN=sfr test root",
+            "the CRLs given are from CN=sfr test inter; CN=sfr test other_root",
+        ],
+        &["CN=sfr test inter"],
+    );
+    // Switched off, it verifies, says so in the output, in the warning and in the JSON.
+    let v = verify_anchor_with(&record, "root.pem", &[], &["--no-crl-check"]);
+    assert_eq!(v.status.code(), Some(0), "{}", text(&v));
+    let out = stdout(&v);
+    assert!(
+        out.contains(
+            "revocation NOT CHECKED (--no-crl-check): a revoked certificate would still verify\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        String::from_utf8_lossy(&v.stderr)
+            .contains("sfr: warning: --no-crl-check: revocation is NOT checked"),
+        "{}",
+        text(&v)
+    );
+    let j = verify_anchor_with(&record, "root.pem", &[], &["--no-crl-check", "--json"]);
+    assert!(stdout(&j).contains("\"crl_check\": false"), "{}", text(&j));
+    // The switch contradicts --crl, and means nothing without --trust-anchor.
+    let v = verify_anchor_with(&record, "root.pem", &["inter.crl"], &["--no-crl-check"]);
+    assert_eq!(v.status.code(), Some(4), "{}", text(&v));
+    assert!(
+        text(&v).contains("--no-crl-check and --crl contradict each other"),
+        "{}",
+        text(&v)
+    );
+}
+
+#[test]
+fn a_crl_past_its_next_update_fails_against_the_verification_time() {
+    // Issue 24, F2: nextUpdate was ignored, so a stale CRL alone was accepted. The record is
+    // sealed in mid-June 2025, when this CRL was current, and the claimed time must not help it.
+    let (o, record) = seal(
+        SIGNER_LAPSED,
+        Some("signer_lapsed.pem"),
+        Some("inter.pem"),
+        "2025-06-15T00:00:00Z",
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let v = verify_anchor(&record, "root.pem", &["root.crl", "inter_stale.crl"]);
+    assert_eq!(v.status.code(), Some(1), "{}", text(&v));
+    let out = text(&v);
+    assert!(
+        out.contains("Integrity: FAILED: certificate chain: the current CRL of CN=sfr test inter (number 0) is out of date: its nextUpdate 2025-07-01T00:00:00Z is not after the verification time 20"),
+        "{out}"
+    );
+    assert!(!out.contains("VERIFIED"), "{out}");
+}
+
+#[test]
+fn two_different_crls_with_one_number_from_one_issuer_are_refused() {
+    let record = revoked_record();
+    for crls in [
+        ["root.crl", "inter.crl", "inter_same.crl"],
+        ["inter_same.crl", "root.crl", "inter.crl"],
+    ] {
+        let v = verify_anchor(&record, "root.pem", &crls);
+        assert_eq!(v.status.code(), Some(1), "{crls:?}: {}", text(&v));
+        assert!(
+            text(&v)
+                .contains("two different CRLs from CN=sfr test inter have the same CRL number 1"),
+            "{crls:?}: {}",
+            text(&v)
+        );
+    }
+}
+
+#[test]
+fn a_crl_of_another_issuer_never_displaces_the_issuers_own() {
+    // other_root.crl is number 99, far above inter.crl's 1, but it speaks for another issuer.
+    let record = revoked_record();
+    let v = verify_anchor(
+        &record,
+        "root.pem",
+        &["other_root.crl", "root.crl", "inter.crl"],
+    );
+    assert_eq!(v.status.code(), Some(1), "{}", text(&v));
+    assert!(
+        text(&v).contains("revoked by a supplied CRL"),
+        "{}",
+        text(&v)
+    );
+    // And it is not printed as used for a chain it is not part of.
+    let (_, good) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
+    let v = verify_anchor(
+        &good,
+        "root.pem",
+        &["other_root.crl", "root.crl", "inter.crl"],
+    );
+    assert_eq!(v.status.code(), Some(0), "{}", text(&v));
+    assert!(!stdout(&v).contains("other_root"), "{}", text(&v));
+    assert!(stdout(&v).contains("2 CRL(s) checked\n"), "{}", text(&v));
+}
+
 #[test]
 fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
     // A record that declares pkcs11-token, signed by the key the test CA certified.
@@ -468,6 +711,10 @@ fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
         declared.to_str().unwrap(),
         "--trust-anchor",
         &pki("root.pem"),
+        "--crl",
+        &pki("root.crl"),
+        "--crl",
+        &pki("inter.crl"),
         "--require-hardware-key",
     ]);
     assert_eq!(v.status.code(), Some(0), "{}", text(&v));
@@ -484,6 +731,10 @@ fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
         declared.to_str().unwrap(),
         "--trust-anchor",
         &pki("root.pem"),
+        "--crl",
+        &pki("root.crl"),
+        "--crl",
+        &pki("inter.crl"),
         "--json",
     ]);
     let json = stdout(&j);
@@ -534,6 +785,10 @@ fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
         record.to_str().unwrap(),
         "--trust-anchor",
         &pki("root.pem"),
+        "--crl",
+        &pki("root.crl"),
+        "--crl",
+        &pki("inter.crl"),
         "--allow-evaluation-key",
         "--require-hardware-key",
     ]);
@@ -558,7 +813,7 @@ fn a_backdated_seal_time_cannot_put_an_expired_certificate_back_in_its_window() 
         backdated,
     );
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
-    let v = verify_anchor(&record, "root.pem", &[]);
+    let v = verify_anchor(&record, "root.pem", &BOTH_CRLS);
     assert_eq!(v.status.code(), Some(1), "{}", text(&v));
     let out = text(&v);
     assert!(
@@ -568,8 +823,10 @@ fn a_backdated_seal_time_cannot_put_an_expired_certificate_back_in_its_window() 
     );
     assert!(!out.contains("VERIFIED"), "{out}");
     // Asking, explicitly and on the record, for the verification to be made as of mid-2025
-    // judges the same record at that time, and says so.
-    let v = verify_anchor_at(&record, "root.pem", &[], Some(backdated));
+    // judges the same record at that time, and says so. The CRLs are judged at that time too:
+    // the ones current in June 2025 pass, the 2026 ones would be from the future.
+    let crls_then = ["root_2025.crl", "inter_stale.crl"];
+    let v = verify_anchor_at(&record, "root.pem", &crls_then, Some(backdated));
     assert_eq!(v.status.code(), Some(0), "{}", text(&v));
     let out = String::from_utf8_lossy(&v.stdout);
     assert!(
@@ -582,16 +839,21 @@ fn a_backdated_seal_time_cannot_put_an_expired_certificate_back_in_its_window() 
         out.contains("seal time 2025-06-01T00:00:00Z (claimed by the sealer, not proven)"),
         "{out}"
     );
-    let json = sfr(&[
-        "verify",
-        "--allow-evaluation-key",
-        record.to_str().unwrap(),
-        "--trust-anchor",
-        &pki("root.pem"),
-        "--at",
-        backdated,
-        "--json",
-    ]);
+    let v = verify_anchor_at(&record, "root.pem", &BOTH_CRLS, Some(backdated));
+    assert_eq!(v.status.code(), Some(1), "{}", text(&v));
+    assert!(
+        text(&v).contains(
+            "has thisUpdate 2026-06-01T00:00:00Z, after the verification time 2025-06-01T00:00:00Z"
+        ),
+        "{}",
+        text(&v)
+    );
+    let json = verify_anchor_with(
+        &record,
+        "root.pem",
+        &crls_then,
+        &["--at", backdated, "--json"],
+    );
     let json = String::from_utf8_lossy(&json.stdout);
     assert!(
         json.contains("\"seal_time_claimed_utc\": \"2025-06-01T00:00:00Z\"")
@@ -607,28 +869,31 @@ fn a_seal_time_in_the_verifiers_future_is_refused_with_or_without_a_certificate(
     let tomorrow = now_plus(86_400);
     let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), &tomorrow);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
-    for args in [
-        vec!["--trust-anchor".to_string(), pki("root.pem")],
-        vec!["--pubkey".to_string(), {
-            let pubkey = record.with_file_name("sfr.pub");
-            std::fs::write(
-                &pubkey,
-                sfr_core::keys::public_key_pem(&sfr_core::crypto::Signer::public_key(
-                    &sfr_core::crypto::rustcrypto::FileKey::from_seed(&[SIGNER; 32], "k"),
-                )),
-            )
-            .unwrap();
-            pubkey.to_str().unwrap().to_string()
-        }],
-    ] {
-        let mut a = vec![
-            "verify".to_string(),
-            "--allow-evaluation-key".to_string(),
-            record.to_str().unwrap().to_string(),
-        ];
-        a.extend(args.clone());
-        let refs: Vec<&str> = a.iter().map(String::as_str).collect();
-        let v = sfr(&refs);
+    let pubkey = record.with_file_name("sfr.pub");
+    std::fs::write(
+        &pubkey,
+        sfr_core::keys::public_key_pem(&sfr_core::crypto::Signer::public_key(
+            &sfr_core::crypto::rustcrypto::FileKey::from_seed(&[SIGNER; 32], "k"),
+        )),
+    )
+    .unwrap();
+    let r = record.to_str().unwrap();
+    let (root, root_crl, inter_crl) = (pki("root.pem"), pki("root.crl"), pki("inter.crl"));
+    let trust_sets: [Vec<&str>; 2] = [
+        vec![
+            "--trust-anchor",
+            &root,
+            "--crl",
+            &root_crl,
+            "--crl",
+            &inter_crl,
+        ],
+        vec!["--pubkey", pubkey.to_str().unwrap()],
+    ];
+    for args in trust_sets {
+        let mut a = vec!["verify", "--allow-evaluation-key", r];
+        a.extend(args.iter().copied());
+        let v = sfr(&a);
         assert_eq!(v.status.code(), Some(1), "{args:?}: {}", text(&v));
         let out = text(&v);
         assert!(
@@ -639,8 +904,8 @@ fn a_seal_time_in_the_verifiers_future_is_refused_with_or_without_a_certificate(
         );
         assert!(!out.contains("VERIFIED"), "{args:?}: {out}");
         // A verification time the verifier chooses, after the claimed time, accepts it.
-        let mut with_at = refs.clone();
         let later = now_plus(2 * 86_400);
+        let mut with_at = a.clone();
         with_at.extend(["--at", &later]);
         let v = sfr(&with_at);
         assert_eq!(v.status.code(), Some(0), "{args:?}: {}", text(&v));
@@ -653,7 +918,7 @@ fn a_seal_time_in_the_verifiers_future_is_refused_with_or_without_a_certificate(
         &now_plus(120),
     );
     assert_eq!(
-        verify_anchor(&ahead, "root.pem", &[]).status.code(),
+        verify_anchor(&ahead, "root.pem", &BOTH_CRLS).status.code(),
         Some(0)
     );
 }
