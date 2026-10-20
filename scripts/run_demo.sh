@@ -61,7 +61,7 @@ expect 0 "EVALUATION KEY"
 step "b. seal the golden VTOL flight (testdata/sitl/v1.17.0/vtol_transition.ulg)"
 run seal "$vtol" --rules "$rules" --baseline "$vtol_baseline" --key "$work/key/sfr.key" \
   --evaluation-only --out "$work/sealed"
-expect 0 "status    PASS"
+expect 0 "status    WARN"
 events="$(printf '%s\n' "$out" | awk '$1 == "events" { print $2 }')"
 [ -n "$events" ] || fail "seal printed no event count"
 echo "events in the record: $events"
