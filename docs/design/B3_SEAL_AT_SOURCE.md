@@ -18,7 +18,7 @@ It does not add:
 
 The hook is a small separate program on the companion computer, not part of `sfr`; it calls `sfr seal`. It reads the vehicle's MAVLink 2 stream:
 
-1. It watches `HEARTBEAT` from the flight controller. `base_mode` carries `MAV_MODE_FLAG_SAFETY_ARMED` (bit value 128). Set to clear is the disarm edge; the hook records its own clock as `t_edge_seen`.
+1. It watches `HEARTBEAT` from the flight controller. `base_mode` carries `MAV_MODE_FLAG_SAFETY_ARMED` (its top bit, bit 7). Set to clear is the disarm edge; the hook records its own clock as `t_edge_seen`.
 2. It waits for the logger to close the file. PX4's logger keeps writing briefly after disarm (`SDLOG_MODE` and related parameters decide).
 3. It gets the log from a mounted card, over MAVLink (`LOG_ENTRY`, `LOG_REQUEST_DATA`) or MAVLink FTP, and records `t_transfer_done`.
 4. It runs `sfr seal` with the vehicle's TPM-sealed key (`--key-uri tpm-sealed:<dir>`, already supported) and the rules and baseline for that airframe.

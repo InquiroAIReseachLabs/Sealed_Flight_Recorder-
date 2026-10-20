@@ -1,6 +1,6 @@
-//! Two small things a reader could take the wrong way (the key-file mode and the BLAKE3 index):
-//! `seal` warns about a key file other users can read, and the BLAKE3 digest of a log is an index
-//! that comes second, after the SHA-256 the seal rests on.
+//! Two small things a reader could take the wrong way (the key-file mode and the BLAKE3 digest):
+//! `seal` warns about a key file other users can read, and the BLAKE3 digest of a log is checked
+//! second, after the SHA-256 the seal rests on: a mismatch fails, but it adds no security.
 // A panicking test is a failing test, so tests may use expect and unwrap.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
@@ -113,7 +113,7 @@ fn a_key_file_that_group_or_other_can_access_is_warned_about() {
 }
 
 #[test]
-fn blake3_is_an_index_the_sha256_is_checked_first_and_the_output_says_so() {
+fn blake3_is_checked_after_sha256_adds_no_security_and_the_output_says_so() {
     let dir = scratch();
     let (key, public) = keygen(&dir.join("k"));
     let out = dir.join("out");
@@ -121,13 +121,14 @@ fn blake3_is_an_index_the_sha256_is_checked_first_and_the_output_says_so() {
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
     // Where sfr prints the BLAKE3 digest it says what it is; the report does too.
     assert!(
-        text(&o).contains("(index only, adds no security)"),
+        text(&o).contains("(checked by verify --ulog like SHA-256; adds no security beyond it)"),
         "{}",
         text(&o)
     );
     let report = std::fs::read_to_string(out.join("custom_detection.sfr.md")).unwrap();
     assert!(
-        report.contains("BLAKE3 (index only, adds no security)"),
+        report
+            .contains("BLAKE3 (checked by verify --ulog like SHA-256; adds no security beyond it)"),
         "{report}"
     );
     assert!(!report.contains("supplementary"), "{report}");

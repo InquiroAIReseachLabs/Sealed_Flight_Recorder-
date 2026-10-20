@@ -87,20 +87,23 @@ Sealing on the companion computer right after disarm shrinks the window in which
 ## Keys
 
 - **`pkcs11-token`:** the private key stays in a PKCS#11 token or HSM, and the token signs.
-- **`tpm-sealed`:** the Ed25519 seed is sealed to one TPM 2.0 and no other TPM can load it. It is in `sfr`'s memory for one signature, then zeroized.
+- **`tpm-sealed`:** the Ed25519 seed is sealed to one TPM 2.0 and no other TPM can load it. It is in `sfr`'s memory for one signature, then zeroized (`crates/sfr/src/hardware.rs`).
 - **`file-evaluation`:** a key file, for evaluation only. Reports and `sfr verify` output carry an EVALUATION KEY banner, and `sfr verify` refuses it unless given `--allow-evaluation-key`.
 
-`seal` uses them through `--key-uri pkcs11:...` (`sfr-pkcs11-helper`), `--key-uri tpm-sealed:<dir>` (tpm2-tools) and `--key <sfr.key> --evaluation-only`. A stolen key voids trust in every record signed with that fingerprint after the theft.
+`seal` uses them through `--key-uri pkcs11:...` (`sfr-pkcs11-helper`), `--key-uri tpm-sealed:<dir>` (tpm2-tools) and `--key <sfr.key> --evaluation-only`. The programs that see the payload or the seed are found by fixed paths only: `sfr-pkcs11-helper` in the directory of the running `sfr` (its canonical path), and the tpm2-tools commands in `/usr/bin`, or in the absolute directory `SFR_TPM2_TOOLS_DIR` names (a relative one is refused); never on `PATH`. A release build never reads `SFR_PKCS11_HELPER`: only a test build with the `dev-helper` feature does, and a release build with that feature does not compile. A stolen key voids trust in every record signed with that fingerprint after the theft.
 
 `--require-hardware-key` means custody attested by a certificate chain, not declared. With `--pubkey` it always refuses, and a declared `file-evaluation` is refused whatever the chain.
 
 `verify --trust-anchor` requires:
 
-- the chain reaches the anchor, and every certificate is valid at the verification time (the verifier's clock or `--at`);
+- the chain reaches the anchor, and every certificate is valid at the verification time (the verifier's clock, or `--at`; a time in the past needs `--allow-past-at`, and the output's first line then says the record verified as of that time and whether the chain is valid now);
+- the anchor is a root (its own issuer); an intermediate CA given as the anchor needs `--allow-partial-chain`, and the trust line then says nothing above it was checked;
 - the signer certificate carries the sfr record-signing extended key usage (`2.25.182460915354635260549596502533646383540`) and keyUsage digitalSignature, and not also code signing, TLS server authentication or any usage;
 - no certificate in the path is in the current CRL of its issuer (`--crl`). A listed certificate counts as revoked whatever its revocation date, because a stolen key could backdate a seal.
 
-Every CRL given is read, in any order; for each issuer the one with the highest CRL number is current (RFC 5280 section 5.2.3). Every issuer in the chain needs a current CRL: a missing one, one past its `nextUpdate` by the verifier's clock, or one from another issuer does not count. `--no-crl-check` skips the check with a warning. There is no online revocation check, so withholding the newest CRL goes unnoticed until its predecessor's `nextUpdate` passes.
+Every CRL given is read, in any order; for each issuer the one with the highest CRL number is current (RFC 5280 section 5.2.3). Every issuer in the chain needs a current CRL: a missing one, one past its `nextUpdate` by the verifier's clock, one whose `thisUpdate` is more than `--max-crl-age` before the verification time (default 7 days, `DEFAULT_MAX_CRL_AGE_SECONDS` in `crates/sfr/src/certs.rs`), or one from another issuer does not count. Indirect CRLs, delta CRLs, CRLs that cover only some revocation reasons, and CRLs with a critical extension `sfr` does not read are refused, not ignored. `verify` prints the issuer, CRL number, thisUpdate and nextUpdate of every CRL it used. `--no-crl-check` skips the check with a warning.
+
+The CRLs must come from the verifier, fetched from the issuer, never from the operator whose record is being checked. There is no online revocation check: a verifier given an older CRL cannot tell that a newer one exists, so a withheld newer CRL (one that revokes the signer) cannot be detected offline. `--max-crl-age` bounds how old that CRL can be.
 
 `sfr` checks nothing about a token: not whether its key can be exported, how it was made, or who vouched for it. The token must sign Ed25519 (`CKM_EDDSA`). No shipping TPM implements EdDSA, so in `tpm-sealed` the TPM only protects the seed at rest. With a PCR policy (`keygen --tpm-sealed --tpm-pcrs`) the TPM refuses to unseal when the measured boot state differs, so after a firmware or boot change the key must be made again.
 
@@ -114,7 +117,7 @@ MAVLink source ids are self-reported unless message signing is on for the link. 
 
 ## Cryptography
 
-On every target, `sfr` uses `sha2` (SHA-256), `ed25519-dalek` (Ed25519) and `blake3` (the index digest); `seal.crypto_crates` names each crate and version, and a record is byte-identical wherever it is sealed. These crates have no CMVP certificate, and `sfr` makes no claim under any cryptographic module standard or security regime.
+On every target, `sfr` uses `sha2` (SHA-256), `ed25519-dalek` (Ed25519) and `blake3` (a second digest of the log: `verify --ulog` checks it and a mismatch fails, but it adds no security beyond SHA-256); `seal.crypto_crates` names each crate and version, and a record is byte-identical wherever it is sealed. These crates have no CMVP certificate, and `sfr` makes no claim under any cryptographic module standard or security regime.
 
 ## Sensitivity
 

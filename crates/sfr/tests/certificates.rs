@@ -112,6 +112,10 @@ fn seal(seed: u8, cert: Option<&str>, chain: Option<&str>, time: &str) -> (Outpu
     (o, out.join("custom_detection.sfr"))
 }
 
+/// The test CRLs were issued on 2026-06-01, long before the tests run: every verify here allows
+/// them that age, except the tests of the age limit itself.
+const TEST_CRL_AGE: &str = "7300d";
+
 /// The current CRLs of the two issuers in the test chain: root (issued inter) and inter (issued
 /// the signers). `verify --trust-anchor` needs one for each, unless it is given `--no-crl-check`.
 const BOTH_CRLS: [&str; 2] = ["root.crl", "inter.crl"];
@@ -123,7 +127,7 @@ fn verify_anchor(record: &Path, anchor: &str, crls: &[&str]) -> Output {
 /// `sfr verify --trust-anchor`, with `--at` when `at` is given.
 fn verify_anchor_at(record: &Path, anchor: &str, crls: &[&str], at: Option<&str>) -> Output {
     match at {
-        Some(at) => verify_anchor_with(record, anchor, crls, &["--at", at]),
+        Some(at) => verify_anchor_with(record, anchor, crls, &["--at", at, "--allow-past-at"]),
         None => verify_anchor(record, anchor, crls),
     }
 }
@@ -147,6 +151,8 @@ fn verify_anchor_with(record: &Path, anchor: &str, crls: &[&str], more: &[&str])
         record.to_str().unwrap(),
         "--trust-anchor",
         &anchor,
+        "--max-crl-age",
+        TEST_CRL_AGE,
     ];
     for c in &crls {
         args.extend(["--crl", c.as_str()]);
@@ -215,6 +221,8 @@ fn a_chain_to_the_trust_anchor_verifies_and_names_the_anchor() {
         record.to_str().unwrap(),
         "--trust-anchor",
         &pki("root.pem"),
+        "--max-crl-age",
+        TEST_CRL_AGE,
         "--crl",
         &pki("root.crl"),
         "--crl",
@@ -441,6 +449,8 @@ fn seal_refuses_a_certificate_for_another_key_and_verify_refuses_two_trust_sourc
         pubkey.to_str().unwrap(),
         "--trust-anchor",
         &pki("root.pem"),
+        "--max-crl-age",
+        TEST_CRL_AGE,
     ]);
     assert_eq!(o.status.code(), Some(4));
     assert!(text(&o).contains("give one trust source"), "{}", text(&o));
@@ -455,7 +465,7 @@ fn seal_refuses_a_certificate_for_another_key_and_verify_refuses_two_trust_sourc
     ]);
     assert_eq!(o.status.code(), Some(4));
     assert!(
-        text(&o).contains("--crl and --no-crl-check apply only to --trust-anchor"),
+        text(&o).contains("--crl, --no-crl-check, --max-crl-age and --allow-partial-chain apply only to --trust-anchor"),
         "{}",
         text(&o)
     );
@@ -760,6 +770,8 @@ fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
         "--no-report",
         "--trust-anchor",
         &pki("root.pem"),
+        "--max-crl-age",
+        TEST_CRL_AGE,
         "--crl",
         &pki("root.crl"),
         "--crl",
@@ -781,6 +793,8 @@ fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
         "--no-report",
         "--trust-anchor",
         &pki("root.pem"),
+        "--max-crl-age",
+        TEST_CRL_AGE,
         "--crl",
         &pki("root.crl"),
         "--crl",
@@ -837,6 +851,8 @@ fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
         record.to_str().unwrap(),
         "--trust-anchor",
         &pki("root.pem"),
+        "--max-crl-age",
+        TEST_CRL_AGE,
         "--crl",
         &pki("root.crl"),
         "--crl",
@@ -904,7 +920,7 @@ fn a_backdated_seal_time_cannot_put_an_expired_certificate_back_in_its_window() 
         &record,
         "root.pem",
         &crls_then,
-        &["--at", backdated, "--json"],
+        &["--at", backdated, "--allow-past-at", "--json"],
     );
     let json = String::from_utf8_lossy(&json.stdout);
     assert!(
@@ -935,6 +951,8 @@ fn a_seal_time_in_the_verifiers_future_is_refused_with_or_without_a_certificate(
         vec![
             "--trust-anchor",
             &root,
+            "--max-crl-age",
+            TEST_CRL_AGE,
             "--crl",
             &root_crl,
             "--crl",
@@ -973,4 +991,141 @@ fn a_seal_time_in_the_verifiers_future_is_refused_with_or_without_a_certificate(
         verify_anchor(&ahead, "root.pem", &BOTH_CRLS).status.code(),
         Some(0)
     );
+}
+
+/// A time in the past needs --allow-past-at, and the output then says first, in plain words,
+/// that it verified as of that time and whether the chain holds now.
+#[test]
+fn a_past_verification_time_needs_its_flag_and_says_so_first() {
+    // signer_lapsed.pem was valid 2025-02-01 to 2025-12-31; root_2025.crl and inter_stale.crl
+    // were current in June 2025.
+    let (o, record) = seal(
+        SIGNER_LAPSED,
+        Some("signer_lapsed.pem"),
+        Some("inter.pem"),
+        "2025-06-15T00:00:00Z",
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let crls = ["root_2025.crl", "inter_stale.crl"];
+    let at = "2025-06-15T12:00:00Z";
+    let without = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        record.to_str().unwrap(),
+        "--trust-anchor",
+        &pki("root.pem"),
+        "--crl",
+        &pki(crls[0]),
+        "--crl",
+        &pki(crls[1]),
+        "--max-crl-age",
+        TEST_CRL_AGE,
+        "--at",
+        at,
+    ]);
+    assert_eq!(without.status.code(), Some(4), "{}", text(&without));
+    assert!(
+        text(&without).contains("Add --allow-past-at"),
+        "{}",
+        text(&without)
+    );
+    let with = verify_anchor_with(&record, "root.pem", &crls, &["--at", at, "--allow-past-at"]);
+    assert_eq!(with.status.code(), Some(0), "{}", text(&with));
+    assert_eq!(
+        stdout(&with).lines().next(),
+        Some(
+            "VERIFIED as of 2025-06-15T12:00:00Z at the verifier's request (--at, --allow-past-at), not now: the certificate chain is NOT valid now"
+        ),
+        "{}",
+        text(&with)
+    );
+}
+
+/// An intermediate CA given as the trust anchor stops the chain short of a root: refused
+/// unless --allow-partial-chain is given, which the trust line then states.
+#[test]
+fn an_intermediate_as_trust_anchor_needs_allow_partial_chain() {
+    let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let refused = verify_anchor(&record, "inter.pem", &BOTH_CRLS);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("is an intermediate CA (issued by CN=sfr test root), not a root"),
+        "{}",
+        text(&refused)
+    );
+    let allowed = verify_anchor_with(&record, "inter.pem", &BOTH_CRLS, &["--allow-partial-chain"]);
+    assert_eq!(allowed.status.code(), Some(0), "{}", text(&allowed));
+    assert!(
+        stdout(&allowed).contains(
+            "the anchor is an intermediate CA, accepted with --allow-partial-chain: nothing above it was checked"
+        ),
+        "{}",
+        text(&allowed)
+    );
+    // The root as anchor needs no flag.
+    let root = verify_anchor(&record, "root.pem", &BOTH_CRLS);
+    assert_eq!(root.status.code(), Some(0), "{}", text(&root));
+}
+
+/// A CRL older than --max-crl-age (7 days unless given) fails; a delta CRL, an indirect CRL and
+/// a CRL with a critical extension sfr does not read are refused, not ignored. Every CRL used
+/// is printed with its issuer, number, thisUpdate and nextUpdate.
+#[test]
+fn old_delta_indirect_and_unknown_critical_crls_are_refused() {
+    let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let verify = |inter_crl: &str, age: Option<&str>| {
+        let (anchor, root_crl, inter_crl) = (pki("root.pem"), pki("root.crl"), pki(inter_crl));
+        let mut args = vec![
+            "verify",
+            "--allow-evaluation-key",
+            record.to_str().unwrap(),
+            "--trust-anchor",
+            &anchor,
+            "--crl",
+            &root_crl,
+            "--crl",
+            &inter_crl,
+        ];
+        if let Some(a) = age {
+            args.extend(["--max-crl-age", a]);
+        }
+        sfr(&args)
+    };
+    // The test CRLs date from 2026-06-01: older than the default.
+    let old = verify("inter.crl", None);
+    assert_eq!(old.status.code(), Some(1), "{}", text(&old));
+    assert!(
+        text(&old).contains("more than --max-crl-age 604800 s before the verification time"),
+        "{}",
+        text(&old)
+    );
+    let ok = verify("inter.crl", Some(TEST_CRL_AGE));
+    assert_eq!(ok.status.code(), Some(0), "{}", text(&ok));
+    for line in [
+        "crl       CN=sfr test inter: CRL number 1, thisUpdate 2026-06-01T00:00:00Z, nextUpdate 2046-01-01T00:00:00Z",
+        "crl       CN=sfr test root: CRL number 1, thisUpdate 2026-06-01T00:00:00Z, nextUpdate 2046-01-01T00:00:00Z",
+    ] {
+        assert!(stdout(&ok).contains(line), "{line} in {}", text(&ok));
+    }
+    for (crl, why) in [
+        ("inter_delta.crl", "a delta CRL (deltaCRLIndicator)"),
+        (
+            "inter_indirect.crl",
+            "an indirect CRL (issuingDistributionPoint indirectCRL)",
+        ),
+        (
+            "inter_critical.crl",
+            "the extension 1.3.6.1.4.1.32473.1 is marked critical and sfr does not read it",
+        ),
+    ] {
+        let o = verify(crl, Some(TEST_CRL_AGE));
+        assert_ne!(o.status.code(), Some(0), "{crl}: {}", text(&o));
+        assert!(
+            text(&o).contains(why),
+            "{crl}: want `{why}` in {}",
+            text(&o)
+        );
+    }
 }
