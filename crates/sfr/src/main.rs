@@ -15,7 +15,7 @@ compile_error!(
 
 use sfr_core::crypto::rustcrypto::{FileKey, RustCrypto};
 use sfr_core::crypto::{CryptoBackend, Custody, Signer};
-use sfr_core::display::terminal_safe;
+use sfr_core::display::{terminal_safe, visible};
 use sfr_core::evaluate::{Evaluation, Status, evaluate};
 use sfr_core::exit_code;
 use sfr_core::ingest::{FlightLogIngestor, IngestError, Ingested, Px4Ingestor};
@@ -495,7 +495,8 @@ fn transition_tuning(
             .map_or(&[][..], |r| &r.detail[..]);
         let mark = sfr_core::report::watched_mark(name, b.is_some(), r3_lines);
         out.push_str(&format!(
-            "  {name:<18}{:<16}{:<16}{mark}\n",
+            "  {:<18}{:<16}{:<16}{mark}\n",
+            visible(name),
             show(b),
             show(l)
         ));
@@ -521,13 +522,16 @@ fn table(
         ));
     }
     let firmware = match (&fw.version, &fw.git) {
-        (Some(v), Some(g)) => format!("{v} ({g})"),
-        (Some(v), None) => v.clone(),
-        (None, Some(g)) => format!("unknown version ({g})"),
+        (Some(v), Some(g)) => format!("{} ({})", visible(v), visible(g)),
+        (Some(v), None) => visible(v),
+        (None, Some(g)) => format!("unknown version ({})", visible(g)),
         (None, None) => "unknown".into(),
     };
     for (k, v) in [
-        ("log", format!("{} ({} bytes)", id.file_name, id.size)),
+        (
+            "log",
+            format!("{} ({} bytes)", visible(&id.file_name), id.size),
+        ),
         ("sha256", sfr_core::hex(&id.sha256)),
         (
             "blake3",
@@ -552,11 +556,11 @@ fn table(
             r.id,
             r.status.as_str(),
             r.name,
-            r.found
+            visible(&r.found)
         ));
         if matches!(r.status, Status::Fail | Status::Warn) {
             for d in &r.detail {
-                out.push_str(&format!("{:<14}- {d}\n", ""));
+                out.push_str(&format!("{:<14}- {}\n", "", visible(d)));
             }
         }
     }
@@ -882,9 +886,9 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         t.push_str(&format!(
             "\n{:<10}{}\n{:<10}{}\n{:<10}{}\n{:<10}{} ({})\n{:<10}{} (claimed: this machine's clock, or --seal-time)\n",
             "record",
-            shown(&out_path),
+            visible(&shown(&out_path)),
             "report",
-            shown(&report_path),
+            visible(&shown(&report_path)),
             "merkle",
             sfr_core::hex(&sealed.root),
             "key",
@@ -1430,8 +1434,9 @@ fn verify_cmd(
                 ));
                 if let Some(given) = &renamed_log {
                     t.push_str(&format!(
-                        "note      the log given is named {given}, the record was sealed from one named {}; the content matches, so this changes nothing, but it is not the name the sealer wrote\n",
-                        v.log_file_name
+                        "note      the log given is named {}, the record was sealed from one named {}; the content matches, so this changes nothing, but it is not the name the sealer wrote\n",
+                        visible(given),
+                        visible(&v.log_file_name)
                     ));
                 }
                 t
@@ -1525,7 +1530,8 @@ fn not_checked(
             t.push('\n');
         }
         t.push_str(&format!(
-            "{INTEGRITY_NOT_CHECKED}\nFlight rules: UNKNOWN (the record's integrity was not checked)\nrecord    {record_path}\n{}To check it, {how}.\n",
+            "{INTEGRITY_NOT_CHECKED}\nFlight rules: UNKNOWN (the record's integrity was not checked)\nrecord    {}\n{}To check it, {how}.\n",
+            visible(record_path),
             claimed_lines(claimed)
         ));
         t

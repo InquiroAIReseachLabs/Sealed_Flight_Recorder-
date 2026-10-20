@@ -15,6 +15,7 @@
 #[cfg(test)]
 use crate::SCHEMA_VERSION;
 use crate::crypto::{CryptoBackend, Custody, Sha256Stream};
+use crate::display::visible;
 use crate::evaluate::{Overall, Status, evaluate};
 use crate::hex;
 use crate::ingest::{FlightLogIngestor, IngestError, Px4Ingestor};
@@ -138,7 +139,7 @@ pub const REPORT_NOT_CHECKED: &str =
 /// or that it was not checked.
 pub fn report_line(checked: Option<&str>) -> String {
     match checked {
-        Some(name) => format!("{name} matches the record"),
+        Some(name) => format!("{} matches the record", visible(name)),
         None => REPORT_NOT_CHECKED.to_string(),
     }
 }
@@ -170,6 +171,7 @@ pub fn verified_text(
     time: Option<&str>,
 ) -> String {
     let time = time.map_or_else(String::new, |t| format!("time      {t}\n"));
+    let record_path = visible(record_path);
     format!(
         "{}\n{}\nrecord    {record_path}\nreport    {report}\ntrust     {trust}\n{time}custody   {custody}\nkey       {}\nmerkle    {} ({} leaves)\ncrypto    {} (crate versions)\nseal time {} ({SEAL_TIME_CLAIM})\nevents    {}\n",
         integrity_line(v),
@@ -177,7 +179,7 @@ pub fn verified_text(
         v.fingerprint,
         v.merkle_root,
         v.leaf_count,
-        v.crypto_crates,
+        visible(&v.crypto_crates),
         v.claimed_time_utc,
         v.events
     )
@@ -289,8 +291,8 @@ pub fn is_refusal(m: &Mismatch) -> bool {
 /// or `REFUSED` and the reason for a record that [`custody_policy`] refuses.
 pub fn failed_line(m: &Mismatch) -> String {
     match m.first.strip_prefix(REFUSED_PREFIX) {
-        Some(why) => format!("Integrity: REFUSED: {why}"),
-        None => format!("Integrity: FAILED: {}", m.first),
+        Some(why) => format!("Integrity: REFUSED: {}", visible(why)),
+        None => format!("Integrity: FAILED: {}", visible(&m.first)),
     }
 }
 
@@ -301,7 +303,7 @@ pub fn failed_text(m: &Mismatch, claimed: Option<&ClaimedSeal>) -> String {
     let mut t = failed_line(m);
     t.push('\n');
     for other in m.also.iter().take(20) {
-        t.push_str(&format!("  also: {other}\n"));
+        t.push_str(&format!("  also: {}\n", visible(other)));
     }
     if m.also.len() > 20 {
         t.push_str(&format!("  and {} more\n", m.also.len() - 20));
@@ -321,10 +323,10 @@ pub fn failed_text(m: &Mismatch, claimed: Option<&ClaimedSeal>) -> String {
 pub fn claimed_lines(claimed: Option<&ClaimedSeal>) -> String {
     let key = claimed
         .and_then(|c| c.fingerprint.as_deref())
-        .unwrap_or("unreadable");
+        .map_or_else(|| "unreadable".to_string(), visible);
     let custody = claimed.and_then(|c| c.custody.as_deref()).map_or_else(
         || "unreadable".to_string(),
-        |c| custody_text(c, &Attestation::Unattested),
+        |c| custody_text(&visible(c), &Attestation::Unattested),
     );
     format!("key       {key} (named by the record, not proven)\ncustody   {custody}\n")
 }

@@ -66,7 +66,7 @@ The record holds no sealed topic digests.
 | 10 | 18.760000 | LOG\_MESSAGE |  | level 3; text \[failure\] Timeout waiting for ack |
 | 11 | 37.920000 | LOG\_MESSAGE |  | level 4; text \[mc\_pos\_control\] invalid setpoints |
 | 12 | 37.920000 | LOG\_MESSAGE |  | level 4; text \[mc\_pos\_control\] Failsafe\: blind land |
-| 13 | 37.936000 | LOG\_MESSAGE |  | level 4; text \[failsafe\] Failsafe activated  |
+| 13 | 37.936000 | LOG\_MESSAGE |  | level 4; text \[failsafe\] Failsafe activated\<U\+0009\> |
 | 14 | 37.936000 | NAV\_STATE\_CHANGE |  | new 12; new\_name DESCEND; old 4; old\_name AUTO\_LOITER |
 | 15 | 37.936000 | FAILSAFE\_SET |  | flag global\_position\_invalid; initial false |
 | 16 | 37.936000 | FAILSAFE\_SET |  | flag global\_position\_invalid\_relaxed; initial false |
