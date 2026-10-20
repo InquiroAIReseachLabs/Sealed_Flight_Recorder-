@@ -1011,6 +1011,13 @@ def run(path, rules, required, ptime, param_index, debug):
                             bad = True
                         else:
                             warned = True
+            # A gap over 1 s between failsafe_flags samples that overlaps a window: a warning
+            # (sfr's FAILSAFE_FLAGS_MAX_GAP_US; PX4 publishes them at least every 600 ms).
+            for fft in ff_by_inst.values():
+                ts = sorted(fft['timestamp'])
+                for x, y in zip(ts, ts[1:]):
+                    if y - x > 1_000_000 and any(x < b and y > a for a, b in windows):
+                        warned = True
             results['R4'] = 'FAIL' if bad else ('WARN' if warned else 'PASS')
         # R5: every ARM followed by a DISARM, per instance; no ARM and no DISARM is N/A.
         if not vs_ok(['arming_state']):

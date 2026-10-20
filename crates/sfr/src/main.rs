@@ -558,10 +558,12 @@ fn table(
             r.name,
             visible(&r.found)
         ));
-        if matches!(r.status, Status::Fail | Status::Warn) {
-            for d in &r.detail {
-                out.push_str(&format!("{:<14}- {}\n", "", visible(d)));
-            }
+        let shown = |d: &&String| {
+            matches!(r.status, Status::Fail | Status::Warn)
+                || d.starts_with(sfr_core::report::NOT_READ_PREFIX)
+        };
+        for d in r.detail.iter().filter(shown) {
+            out.push_str(&format!("{:<14}- {}\n", "", visible(d)));
         }
     }
     let tuning = transition_tuning(ing, rules, baseline, eval);
@@ -722,7 +724,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         return Err(fail(
             exit_code::USAGE,
             format!(
-                "rules file {rules_path}: an ignore pattern matches every parameter, so R3 would compare none; \
+                "rules file {rules_path}: its ignore patterns match every parameter name, so R3 would compare none; \
                  nothing written. To seal it anyway, add --allow-ignore-all: the record and its report will say so"
             ),
         ));

@@ -114,6 +114,9 @@ def vectors():
     edit("ignore_all_unflagged.sfr", "reject", lambda r: set_rules(r, IGNORE_ALL))
     edit("ignore_all_flagged.sfr", "accept",
          lambda r: (set_rules(r, IGNORE_ALL), r["seal"].__setitem__("allow_ignore_all", True)))
+    edit("ignore_union_unflagged.sfr", "reject", lambda r: set_rules(r, IGNORE_UNION))
+    edit("ignore_union_flagged.sfr", "accept",
+         lambda r: (set_rules(r, IGNORE_UNION), r["seal"].__setitem__("allow_ignore_all", True)))
     edit("rules_unparsable.sfr", {"sfr": "reject", "reference": "accept",
                                   "why": "the reference verifier reads the rules file as TOML and its ignore list only, not every key"},
          lambda r: set_rules(r, "format = \"sfr-rules/1\"\n[nonsense]\n"))
@@ -147,6 +150,10 @@ def schema5(r, cut=0, version=1):
     r["log"]["truncated"] = None if cut == 0 else {"offset": str(size - cut), "trailing_bytes": str(cut)}
     r["log"]["ulog_version"] = version
     r["seal"]["allow_untested_ulog_version"] = version > 1
+
+
+IGNORE_UNION = ('format = "sfr-rules/1"\n\n[required_topics]\ntopics = []\n\n[parameters]\nignore = ['
+                + ", ".join('"%s*"' % c for c in ref.NAME_CHARS) + ']\n')
 
 
 def set_rules(r, text):

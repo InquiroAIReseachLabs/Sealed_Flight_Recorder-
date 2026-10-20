@@ -10,6 +10,8 @@
   "float.sfr": "reject",
   "ignore_all_flagged.sfr": "accept",
   "ignore_all_unflagged.sfr": "reject",
+  "ignore_union_flagged.sfr": "accept",
+  "ignore_union_unflagged.sfr": "reject",
   "int_2_53.sfr": "reject",
   "int_2_53_minus_1.sfr": "accept",
   "int_2_53_plus_1.sfr": "reject",

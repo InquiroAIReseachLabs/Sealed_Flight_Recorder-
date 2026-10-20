@@ -20,7 +20,8 @@ What it checks (the standalone checks of RECORD_FORMAT.md, "What a verifier chec
     order, every status PASS, WARN, FAIL or N/A; the overall status equals the one the results
     give; sealed topics and events in order;
   - the rules digest; seal.allow_untested_version and seal.allow_ignore_all are booleans, and
-    allow_ignore_all is true exactly when the embedded rules file ignores every parameter;
+    allow_ignore_all is true exactly when the embedded rules file's ignore patterns together
+    match every parameter name;
   - the custody value; certificates null or base64;
   - the Merkle root, leaf count and section counts recomputed from the leaves;
   - the key fingerprint against the given public key, and the Ed25519 signature over the signed
@@ -456,7 +457,7 @@ def check(raw, pem):
         ignore = tomllib.loads(rules["text"]).get("parameters", {}).get("ignore", [])
     except tomllib.TOMLDecodeError:
         raise Bad("the embedded rules file does not parse")
-    if any(isinstance(p, str) and p and set(p) == {"*"} for p in ignore) != seal["allow_ignore_all"]:
+    if cover_every_name([p for p in ignore if isinstance(p, str)]) != seal["allow_ignore_all"]:
         raise Bad("seal.allow_ignore_all disagrees with the embedded rules file")
     if seal["key_custody"] not in CUSTODY:
         raise Bad("unknown key custody %r" % seal["key_custody"])
@@ -488,6 +489,55 @@ def check(raw, pem):
                           bytes.fromhex(sig["value"])):
         raise Bad("signature does not verify")
     return None
+
+
+NAME_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+MAX_COVER_STATES = 100000
+
+
+def cover_every_name(patterns):
+    """RECORD_FORMAT.md: whether the ignore patterns (`*` matches any run) together match every
+    parameter name, 1 to 16 of NAME_CHARS. Looks for a name no pattern matches, each pattern a
+    set of positions; characters no pattern names behave alike. Past MAX_COVER_STATES sets per
+    length it answers True, as sfr does."""
+    if not patterns:
+        return False
+    toks = [[None if ch == "*" else ch for ch in p] for p in patterns]
+
+    def close(t, st):
+        st = set(st)
+        for i, tok in enumerate(t):
+            if i in st and tok is None:
+                st.add(i + 1)
+        return frozenset(st)
+
+    def step(t, st, c):
+        nxt = set()
+        for i in st:
+            if i < len(t):
+                if t[i] is None:
+                    nxt.add(i)
+                elif t[i] == c:
+                    nxt.add(i + 1)
+        return close(t, nxt)
+
+    letters = sorted({ch for t in toks for ch in t if ch is not None})
+    other = next((c for c in NAME_CHARS if c not in letters), None)
+    if other is not None:
+        letters.append(other)
+    frontier = {tuple(close(t, {0}) for t in toks)}
+    for _ in range(16):
+        nxt = set()
+        for state in frontier:
+            for c in letters:
+                s2 = tuple(step(t, st, c) for t, st in zip(toks, state))
+                if not any(len(t) in st for t, st in zip(toks, s2)):
+                    return False
+                nxt.add(s2)
+            if len(nxt) > MAX_COVER_STATES:
+                return True
+        frontier = nxt
+    return True
 
 
 def decimal(v):
