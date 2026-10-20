@@ -601,7 +601,7 @@ pub fn seal(req: SealRequest<'_>) -> Result<SealOutput, Failure> {
         report,
         record_name,
         report_name,
-        text: t,
+        text: sfr_core::display::terminal_safe(&t),
         notes,
         status: eval.status.as_str().to_string(),
         merkle_root: sfr_core::hex(&sealed.root),
@@ -708,7 +708,7 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
             Ok(VerifyOutput {
                 exit_code: exit_code::OK,
                 headline,
-                text: t,
+                text: sfr_core::display::terminal_safe(&t),
                 deep,
                 custody: Some(v.custody.as_str().to_string()),
                 verified: Some(VerifiedSummary {
@@ -738,7 +738,7 @@ pub fn verify(req: VerifyRequest<'_>) -> Result<VerifyOutput, Failure> {
             Ok(VerifyOutput {
                 exit_code: exit_code::RULE_FAIL,
                 headline,
-                text: t,
+                text: sfr_core::display::terminal_safe(&t),
                 deep,
                 custody: m.custody.map(|c| c.as_str().to_string()),
                 verified: None,

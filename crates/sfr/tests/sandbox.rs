@@ -296,6 +296,8 @@ fn the_in_browser_key_seals_an_evaluation_record_the_cli_verifies() {
     assert_eq!(seal("key_fingerprint"), key.fingerprint);
     assert_eq!(seal("time_utc"), "2026-10-19T10:00:00Z");
     std::fs::write(dir.join("flight.sfr"), &s.record).unwrap();
+    // The report the sandbox wrote goes beside the record, so the CLI checks it against the record.
+    std::fs::write(dir.join("flight.sfr.md"), &s.report).unwrap();
     std::fs::write(dir.join("sfr.pub"), &key.public_key_pem).unwrap();
     let o = sfr(
         &dir,
@@ -324,6 +326,10 @@ fn both_verify(dir: &Path, record: &str, log: Option<&str>) -> (Output, sfr_wasm
     ];
     if let Some(l) = log {
         args.extend(["--ulog", l]);
+    }
+    // A record with no report beside it is verified alone, as the sandbox does (it takes none).
+    if !dir.join(format!("{record}.md")).is_file() {
+        args.push("--no-report");
     }
     let cli = sfr(dir, &args);
     let record_bytes = read(dir, record);

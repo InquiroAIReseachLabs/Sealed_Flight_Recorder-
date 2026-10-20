@@ -42,16 +42,56 @@ fn plain(v: &Value) -> String {
     }
 }
 
-/// Text as the report must write it: control characters as spaces, and a backslash before
-/// every ASCII punctuation character.
+/// Whether the report must write `c` out as `<U+XXXX>`: a Unicode format character (category
+/// Cf, listed here from the Unicode database, not taken from the renderer), or the line and
+/// paragraph separator.
+fn hidden(c: char) -> bool {
+    let c = c as u32;
+    [
+        (0xAD, 0xAD),
+        (0x600, 0x605),
+        (0x61C, 0x61C),
+        (0x6DD, 0x6DD),
+        (0x70F, 0x70F),
+        (0x890, 0x891),
+        (0x8E2, 0x8E2),
+        (0x180E, 0x180E),
+        (0x200B, 0x200F),
+        (0x2028, 0x202E),
+        (0x2060, 0x2064),
+        (0x2066, 0x206F),
+        (0xFEFF, 0xFEFF),
+        (0xFFF9, 0xFFFB),
+        (0x110BD, 0x110BD),
+        (0x110CD, 0x110CD),
+        (0x13430, 0x1343F),
+        (0x1BCA0, 0x1BCA3),
+        (0x1D173, 0x1D17A),
+        (0xE0001, 0xE0001),
+        (0xE0020, 0xE007F),
+    ]
+    .iter()
+    .any(|&(a, b)| (a..=b).contains(&c))
+}
+
+/// Text as the report must write it: control characters as spaces, a hidden character as its
+/// marker, and a backslash before every ASCII punctuation character (the marker's included).
 fn esc(t: &str) -> String {
     let mut out = String::new();
     for c in t.chars() {
-        let c = if c.is_control() { ' ' } else { c };
-        if c.is_ascii_punctuation() {
-            out.push('\\');
+        let shown = if c.is_control() {
+            " ".to_string()
+        } else if hidden(c) {
+            format!("<U+{:04X}>", c as u32)
+        } else {
+            c.to_string()
+        };
+        for d in shown.chars() {
+            if d.is_ascii_punctuation() {
+                out.push('\\');
+            }
+            out.push(d);
         }
-        out.push(c);
     }
     out
 }
@@ -169,13 +209,14 @@ pub fn shell_arg(name: &str) -> String {
     if n.starts_with('-') {
         n.insert_str(0, "./");
     }
-    if n.chars().any(char::is_control) {
+    let odd = |c: char| c.is_control() || hidden(c);
+    if n.chars().any(odd) {
         let body: String = n
             .chars()
             .map(|c| match c {
                 '\'' => "\\'".to_string(),
                 '\\' => "\\\\".to_string(),
-                c if c.is_control() => c
+                c if odd(c) => c
                     .to_string()
                     .bytes()
                     .map(|b| format!("\\{b:03o}"))
@@ -228,6 +269,22 @@ pub fn check(record: &Value, md: &str) {
         l.expect("");
     }
     l.expect(&format!("# Sealed flight record: {}", esc(&file)));
+    l.expect("");
+    // The Merkle root and the key fingerprint come first, under the title.
+    let merkle_top = o(f(r, "merkle"), "merkle");
+    assert_eq!(
+        l.item("Merkle root"),
+        format!(
+            "{} ({}, {} leaves)",
+            hex_span(f(merkle_top, "root")),
+            ev(f(merkle_top, "algorithm")),
+            ev(f(merkle_top, "leaf_count"))
+        )
+    );
+    assert_eq!(
+        l.item("Key fingerprint"),
+        hex_span(f(seal, "key_fingerprint"))
+    );
     l.expect("");
     l.expect(&format!(
         "**Status: {}**. Sealed (time claimed by the sealer) {} by {} {}, v1.0 evaluation release. This report is generated from the record {} alone.",

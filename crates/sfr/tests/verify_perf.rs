@@ -110,6 +110,9 @@ fn standalone_verify_of_10000_events_is_under_10_ms() {
             .arg(dir.join("perf.sfr"))
             .arg("--pubkey")
             .arg(dir.join("k/sfr.pub"))
+            // The number published is the cost of verifying the record; rendering and comparing
+            // its report, which `verify` otherwise requires, is not part of it.
+            .arg("--no-report")
             .output()
             .unwrap();
         cli.push(t0.elapsed());

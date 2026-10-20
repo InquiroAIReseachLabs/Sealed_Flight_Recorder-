@@ -2,6 +2,9 @@ EVALUATION KEY: not for operational use
 
 # Sealed flight record: gz\_x500\_vision\_hover\.ulg
 
+- Merkle root: `9d34be2f6eae5d3d9c4b38041846522e5c1116b7c20edb1543b410cbc71b0835` (sha256\-rfc6962, 29 leaves)
+- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
+
 **Status: FAIL**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0, v1.0 evaluation release. This report is generated from the record gz\_x500\_vision\_hover\.sfr alone.
 
 ## Rules

@@ -166,7 +166,7 @@ fn relabelling_an_evaluation_record_as_a_token_record_fails_under_require_hardwa
 
     // Plain verify accepts the signature and cannot call the custody anything but unattested:
     // the banner is gone, and so is any suggestion that a token was involved.
-    let v = sfr(&["verify", f, "--pubkey", p]);
+    let v = sfr(&["verify", f, "--pubkey", p, "--no-report"]);
     assert_eq!(v.status.code(), Some(0), "{}", text(&v));
     let out = stdout(&v);
     assert!(
@@ -176,7 +176,14 @@ fn relabelling_an_evaluation_record_as_a_token_record_fails_under_require_hardwa
     );
 
     // --require-hardware-key means attested by a certificate chain, not declared: refused.
-    let v = sfr(&["verify", f, "--pubkey", p, "--require-hardware-key"]);
+    let v = sfr(&[
+        "verify",
+        f,
+        "--pubkey",
+        p,
+        "--no-report",
+        "--require-hardware-key",
+    ]);
     assert_eq!(v.status.code(), Some(1), "{}", text(&v));
     let out = stdout(&v);
     assert!(
@@ -191,6 +198,7 @@ fn relabelling_an_evaluation_record_as_a_token_record_fails_under_require_hardwa
         f,
         "--pubkey",
         p,
+        "--no-report",
         "--require-hardware-key",
         "--allow-evaluation-key",
     ]);

@@ -2,6 +2,9 @@ EVALUATION KEY: not for operational use
 
 # Sealed flight record: vtol\_transition\.ulg
 
+- Merkle root: `aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b` (sha256\-rfc6962, 34 leaves)
+- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
+
 **Status: PASS**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0, v1.0 evaluation release. This report is generated from the record vtol\_transition\.sfr alone.
 
 ## Rules

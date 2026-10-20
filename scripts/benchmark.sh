@@ -171,7 +171,7 @@ while read -r name log rules baseline; do
     [[ "$rss" =~ ^[1-9][0-9]*$ ]] || die "$name: GNU time gave no maximum resident set size: $rss"
     [ "$rss" -gt "$peak" ] && peak="$rss"
     start="$(now_us)"
-    "$sfr" verify "$record" --pubkey "$work/key/sfr.pub" --allow-evaluation-key > /dev/null || die "$name: standalone verify failed"
+    "$sfr" verify "$record" --pubkey "$work/key/sfr.pub" --allow-evaluation-key --no-report > /dev/null || die "$name: standalone verify failed"
     end="$(now_us)"
     verifies+=("$((end - start))")
   done

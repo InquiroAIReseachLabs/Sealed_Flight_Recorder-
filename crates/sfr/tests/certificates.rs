@@ -709,6 +709,7 @@ fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
     let v = sfr(&[
         "verify",
         declared.to_str().unwrap(),
+        "--no-report",
         "--trust-anchor",
         &pki("root.pem"),
         "--crl",
@@ -729,6 +730,7 @@ fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
     let j = sfr(&[
         "verify",
         declared.to_str().unwrap(),
+        "--no-report",
         "--trust-anchor",
         &pki("root.pem"),
         "--crl",
@@ -756,6 +758,7 @@ fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
     let v = sfr(&[
         "verify",
         declared.to_str().unwrap(),
+        "--no-report",
         "--pubkey",
         pubkey.to_str().unwrap(),
     ]);
@@ -768,6 +771,7 @@ fn custody_is_attested_by_the_chain_and_only_by_the_chain() {
     let v = sfr(&[
         "verify",
         declared.to_str().unwrap(),
+        "--no-report",
         "--pubkey",
         pubkey.to_str().unwrap(),
         "--require-hardware-key",

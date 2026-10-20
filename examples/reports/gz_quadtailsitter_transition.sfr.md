@@ -2,6 +2,9 @@ EVALUATION KEY: not for operational use
 
 # Sealed flight record: gz\_quadtailsitter\_transition\.ulg
 
+- Merkle root: `40853d2a6ec3dc09e57648516395a704ba615edb9010812d8c60beb9089fce12` (sha256\-rfc6962, 35 leaves)
+- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
+
 **Status: PASS**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0, v1.0 evaluation release. This report is generated from the record gz\_quadtailsitter\_transition\.sfr alone.
 
 ## Rules

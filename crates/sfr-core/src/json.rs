@@ -98,7 +98,11 @@ fn sorted_utf16(map: &BTreeMap<String, Value>) -> Vec<(&String, &Value)> {
     entries
 }
 
-fn write_string(out: &mut String, s: &str) {
+/// `s` as a JSON string. `display` is for text a person reads (`pretty`): it also writes the
+/// characters that hide or move the reader's view (controls, format characters, line and
+/// paragraph separators; `crate::display`) as `\uXXXX`, which is the same string. The canonical
+/// form never does: RFC 8785 writes every other character as itself.
+fn write_string(out: &mut String, s: &str, display: bool) {
     out.push('"');
     for c in s.chars() {
         match c {
@@ -112,6 +116,12 @@ fn write_string(out: &mut String, s: &str) {
             c if u32::from(c) < 0x20 => {
                 let _ = write!(out, "\\u{:04x}", u32::from(c));
             }
+            c if display && (c.is_control() || crate::display::is_hidden(c)) => {
+                let mut units = [0u16; 2];
+                for unit in c.encode_utf16(&mut units) {
+                    let _ = write!(out, "\\u{unit:04x}");
+                }
+            }
             c => out.push(c),
         }
     }
@@ -119,6 +129,10 @@ fn write_string(out: &mut String, s: &str) {
 }
 
 fn write_canonical(out: &mut String, v: &Value) {
+    write_value(out, v, false);
+}
+
+fn write_value(out: &mut String, v: &Value, display: bool) {
     match v {
         Value::Null => out.push_str("null"),
         Value::Bool(true) => out.push_str("true"),
@@ -126,14 +140,14 @@ fn write_canonical(out: &mut String, v: &Value) {
         Value::Int(n) => {
             let _ = write!(out, "{n}");
         }
-        Value::Str(s) => write_string(out, s),
+        Value::Str(s) => write_string(out, s, display),
         Value::Array(items) => {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
-                write_canonical(out, item);
+                write_value(out, item, display);
             }
             out.push(']');
         }
@@ -143,9 +157,9 @@ fn write_canonical(out: &mut String, v: &Value) {
                 if i > 0 {
                     out.push(',');
                 }
-                write_string(out, k);
+                write_string(out, k, display);
                 out.push(':');
-                write_canonical(out, item);
+                write_value(out, item, display);
             }
             out.push('}');
         }
@@ -180,14 +194,14 @@ fn write_pretty(out: &mut String, v: &Value, depth: usize) {
                     out.push(',');
                 }
                 indent(out, depth + 1);
-                write_string(out, k);
+                write_string(out, k, true);
                 out.push_str(": ");
                 write_pretty(out, item, depth + 1);
             }
             indent(out, depth);
             out.push('}');
         }
-        other => write_canonical(out, other),
+        other => write_value(out, other, true),
     }
 }
 
@@ -198,7 +212,9 @@ pub fn canonical(v: &Value) -> String {
     out
 }
 
-/// Indented text of `v` with the same key order as [`canonical`], ending in a newline.
+/// Indented text of `v` with the same key order as [`canonical`], ending in a newline. It is for
+/// people: a character that hides or moves the reader's view (a control, a format character such
+/// as U+202E) is written as a `\uXXXX` escape, so the string is the same and the page shows it.
 pub fn pretty(v: &Value) -> String {
     let mut out = String::new();
     write_pretty(&mut out, v, 0);
