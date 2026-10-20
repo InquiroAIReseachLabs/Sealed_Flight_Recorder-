@@ -77,7 +77,7 @@ The record holds no sealed topic digests.
 | 9 | 33.596000 | VTOL\_TRANSITION\_START |  | direction to\_fw |
 | 10 | 36.056000 | VTOL\_TRANSITION\_END |  | direction to\_fw |
 | 11 | 37.376000 | LOG\_MESSAGE |  | level 4; text \[health\_and\_arming\_checks\] Preflight Fail\: ESC failure detected |
-| 12 | 45.832000 | LOG\_MESSAGE |  | level 3; text \[sensors\] Accel \#0 fail\:  TIMEOUT\!  |
+| 12 | 45.832000 | LOG\_MESSAGE |  | level 3; text \[sensors\] Accel \#0 fail\:  TIMEOUT\!\<U\+0009\> |
 | 13 | 57.136000 | COMMAND | GENERAL | command 3000; result NO\_ACK; source\_component 1; source\_system 1 |
 | 14 | 57.148000 | VTOL\_TRANSITION\_START |  | direction to\_mc |
 | 15 | 61.540000 | VTOL\_TRANSITION\_END |  | direction to\_mc |

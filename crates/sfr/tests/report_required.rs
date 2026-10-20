@@ -266,11 +266,14 @@ fn a_right_to_left_override_in_a_value_is_shown_in_the_report_the_terminal_and_j
     assert!(std::fs::read_to_string(&record).unwrap().contains(RLO));
 
     // The report shows it as text, escaped for Markdown like any other punctuation, and its verify
-    // command writes it out in octal, so the command can be read and pasted as it is.
+    // command takes the names from shell variables set with the character written out in octal.
     let md = std::fs::read_to_string(&report).unwrap();
     assert!(!md.contains(RLO), "a raw U+202E in the report");
     assert!(md.contains("flight\\<U\\+202E\\>gnp\\.ulg"), "{md}");
-    assert!(md.contains("$'flight\\342\\200\\256gnp.ulg'"), "{md}");
+    assert!(
+        md.contains("log=\"$(printf 'flight\\342\\200\\256gnp.ulgx')\"; log=\"${log%x}\""),
+        "{md}"
+    );
 
     // Neither seal's output nor verify's, in text or JSON, holds the raw character.
     let (r, p) = (record.to_str().unwrap(), public.to_str().unwrap());
