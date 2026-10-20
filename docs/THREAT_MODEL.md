@@ -19,6 +19,8 @@ Only the record, `<name>.sfr`, is signed: the Ed25519 signature covers its Merkl
 - **When the log was made, or sealed.** `seal.time_utc` is a claim: the sealing machine's clock or the `--seal-time` given, signed but not proven, and `verify` labels it claimed. Only a trusted time supplied from outside the sealer would prove it; `sfr` takes none. What `verify` does with it: it never uses it to judge a certificate, and it refuses a claimed time later than the verification time (the verifier's clock, or `--at`) by more than 300 seconds of clock skew. A claimed time in the past stays unproven: a key holder can claim any earlier time, so the record says nothing about whether it existed then.
 - **That nothing changed the log before sealing.** The window from disarm to seal is open; see below.
 
+Designs for closing some of these gaps (a time from outside the sealer, a chain of records, sealing at disarm, a second verifier, selective disclosure) are in [design/README.md](design/README.md). None is built, and none changes what this page says today.
+
 ## Attacks and what detects them
 
 | Attack | Detected by | Shown by |

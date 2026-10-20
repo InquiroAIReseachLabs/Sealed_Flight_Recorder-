@@ -240,6 +240,7 @@ From `crates/sfr-core/src/lib.rs` (`exit_code`):
 | [docs/RULES.md](docs/RULES.md) | each rule, the log data it reads, the rules file and the baseline |
 | [docs/RECORD_FORMAT.md](docs/RECORD_FORMAT.md) | the record, exactly, and how to verify one with `openssl` and `b3sum` |
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | what a seal proves and what it does not |
+| [docs/design/README.md](docs/design/README.md) | design notes for five things a record does not do yet: trusted time, a chain of records, sealing at the source, a second verifier, and access; none is built |
 | [docs/INTEGRATION_NOTES.md](docs/INTEGRATION_NOTES.md) | the topics `sfr` reads, sealing after disarm, CI use, key handling |
 | [docs/LIMITS.md](docs/LIMITS.md) | the input limits |
 | [docs/RELEASE.md](docs/RELEASE.md), [docs/BENCHMARK.md](docs/BENCHMARK.md) | how a release is made and benchmarked |
