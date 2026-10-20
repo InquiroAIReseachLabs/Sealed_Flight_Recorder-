@@ -2,10 +2,10 @@ EVALUATION KEY: not for operational use
 
 # Sealed flight record: gz\_x500\_vision\_hover\.ulg
 
-- Merkle root: `9d34be2f6eae5d3d9c4b38041846522e5c1116b7c20edb1543b410cbc71b0835` (sha256\-rfc6962, 29 leaves)
-- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
+- Merkle root: `bc26f99353efef7aa3c5ef3fd85d0b7564bca1b2bc8873401db2c68ea177abae` (sha256\-rfc6962, 29 leaves)
+- Key fingerprint: `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be`
 
-**Status: FAIL**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0, v1.0 evaluation release. This report is generated from the record gz\_x500\_vision\_hover\.sfr alone.
+**Status: FAIL**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0 (evaluation release). This report is generated from the record gz\_x500\_vision\_hover\.sfr alone.
 
 ## Rules
 
@@ -78,15 +78,15 @@ These are reported, not a rule failure: R3 compares the parameters at log start 
 ## Seal
 
 - Seal time (claimed by the sealer, not proven): 2026\-10\-18T15\:00\:00Z
-- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
+- Key fingerprint: `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be`
 - Key custody (declared by the sealer; this report cannot attest it): file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
-- Merkle root: `9d34be2f6eae5d3d9c4b38041846522e5c1116b7c20edb1543b410cbc71b0835` (sha256\-rfc6962, 29 leaves)
-- Schema version: 2
+- Merkle root: `bc26f99353efef7aa3c5ef3fd85d0b7564bca1b2bc8873401db2c68ea177abae` (sha256\-rfc6962, 29 leaves)
+- Schema version: 3
 
 ## Verify
 
-With the public key whose fingerprint is `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51` saved as `sfr.pub`, in the directory that holds the record and the log:
+With the public key whose fingerprint is `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
 sfr verify gz_x500_vision_hover.sfr --pubkey sfr.pub --allow-evaluation-key --ulog gz_x500_vision_hover.ulg

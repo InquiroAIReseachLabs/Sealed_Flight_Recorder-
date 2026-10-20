@@ -1,6 +1,6 @@
 # Record format (`.sfr`)
 
-This page specifies schema version 1 of the record that `sfr seal` writes, exactly enough to write an independent verifier from it. SPEC B1.7 is the normative summary; the code that implements it is `crates/sfr-core/src/seal.rs` (fields, leaves, signed payload), `crates/sfr-core/src/json.rs` (canonical JSON), `crates/sfr-core/src/merkle.rs` (the tree), `crates/sfr-core/src/keys.rs` (keys and fingerprint) and `crates/sfr-core/src/verify.rs` (verification). The last section checks a golden record with `openssl`, `b3sum` and the Python standard library, without `sfr`.
+This page specifies schema version 3 of the record that `sfr seal` writes, exactly enough to write an independent verifier from it. SPEC B1.7 is the normative summary; the code that implements it is `crates/sfr-core/src/seal.rs` (fields, leaves, signed payload), `crates/sfr-core/src/json.rs` (canonical JSON), `crates/sfr-core/src/merkle.rs` (the tree), `crates/sfr-core/src/keys.rs` (keys and fingerprint) and `crates/sfr-core/src/verify.rs` (verification). The last section checks a golden record with `openssl`, `b3sum` and the Python standard library, without `sfr`.
 
 ## The file
 
@@ -29,7 +29,7 @@ A parameter value is a typed string (`crates/sfr-core/src/ulog.rs` `f32_shortest
 
 ## Top-level fields
 
-A schema 1 record holds exactly these thirteen fields, no more and no fewer (`RECORD_FIELDS` in `crates/sfr-core/src/seal.rs`). They are listed here in canonical (sorted) order.
+A record holds exactly these thirteen fields, no more and no fewer (`RECORD_FIELDS` in `crates/sfr-core/src/seal.rs`). They are listed here in canonical (sorted) order.
 
 | Field | Type | Contents |
 |---|---|---|
@@ -37,10 +37,10 @@ A schema 1 record holds exactly these thirteen fields, no more and no fewer (`RE
 | `config` | object | the configuration that flew: `firmware`, `parameters`, `watched_parameters` |
 | `events` | array | the timeline, in sequence order |
 | `log` | object | the log's identity: `blake3`, `file_name`, `firmware`, `sha256`, `size`, `vehicle` |
-| `merkle` | object | `algorithm`, `leaf_count`, `root` |
+| `merkle` | object | `algorithm`, `leaf_count`, `root`, `sections` |
 | `results` | array | one result per rule, in rule-id order |
 | `rules` | object | the rules file: `sha256`, `text` |
-| `schema_version` | integer | `2`; `sfr` still verifies `1`, the schema before `seal.allow_untested_version` |
+| `schema_version` | integer | `3`. Schema 1 (the first) and schema 2 (which added `seal.allow_untested_version`) are not verified any more: their leaves are not bound to their section, and the signature does not cover the shape of the tree (below). Seal the log again |
 | `seal` | object | who sealed, when, and how the key is held |
 | `sealed_topics` | array | one digest per instance of each sealed topic; empty without `[sealed_topics]` |
 | `signature` | object | `algorithm`, `value` |
@@ -55,7 +55,7 @@ A schema 1 record holds exactly these thirteen fields, no more and no fewer (`RE
 
 | Member | Value |
 |---|---|
-| `allow_untested_version` | schema 2 only: `true` when the log's PX4 version is outside v1.14 to v1.17, or could not be read, and `seal` sealed it because it was given `--allow-untested-version` (the report then says so); `false` otherwise |
+| `allow_untested_version` | `true` when the log's PX4 version is outside v1.14 to v1.17, or could not be read, and `seal` sealed it because it was given `--allow-untested-version` (the report then says so); `false` otherwise |
 | `certificate_chain` | `null`, or, beside a signer certificate, an array of the intermediate CA certificates given with `seal --chain`, nearest the signer first, each the standard base64 (RFC 4648, padded) of its DER |
 | `crypto_crates` | array of `{"name": ..., "version": ...}`, one per crate that computed the record, sorted by name: `blake3`, `ed25519-dalek`, `sha2` with their crate versions (`RUSTCRYPTO_CRATES` in `crates/sfr-core/src/crypto.rs`) |
 | `key_custody` | `pkcs11-token`, `tpm-sealed` or `file-evaluation` (below) |
@@ -63,7 +63,6 @@ A schema 1 record holds exactly these thirteen fields, no more and no fewer (`RE
 | `key_label` | the key file name, token object label, or sealed-key directory |
 | `signer_certificate` | `null`, or the standard base64 (RFC 4648, padded) of the DER of the signer's X.509 certificate given with `seal --cert`; its key is the signing key (`seal` refuses another) |
 | `time_utc` | `YYYY-MM-DDTHH:MM:SSZ`: the time given with `--seal-time`, converted to UTC, or the sealing machine's clock when none is given. A claim: signed, so it cannot change after sealing, but nothing checks it, and `verify` never uses it to judge a certificate |
-| `token_cmvp_certificate` | always `null`: `sfr` records nothing about the token beyond the key's fingerprint and label |
 
 **Key custody** is declared by the sealer, signed with the record, and a statement of the sealer's, not a fact (`sfr verify` prints it as `unattested`, or `attested by certificate chain` when the signer's certificate chains to a trust anchor the verifier supplied): `pkcs11-token` (the private key never leaves a PKCS#11 token or HSM), `tpm-sealed` (the seed is sealed to one TPM 2.0 and is in `sfr`'s memory for one signature), `file-evaluation` (a key file, for evaluation only). A verifier must treat custody as a claim unless something outside the record attests it ([THREAT_MODEL.md](THREAT_MODEL.md)). The certificates are inside the seal leaf, so the signature covers them; `verify --trust-anchor` checks them (`crates/sfr/src/certs.rs`).
 
@@ -142,7 +141,7 @@ ARM and FAILSAFE_SET events carry a boolean `initial` (SPEC B1.5); no other even
 
 ### `merkle` and `signature`
 
-`merkle`: exactly `algorithm` (`sha256-rfc6962`), `leaf_count` (integer) and `root` (64 lowercase hex digits, the Merkle root below). `signature`: exactly `algorithm` (`ed25519`) and `value` (128 lowercase hex digits, the Ed25519 signature over the signed payload below). Uppercase hex is refused (`hex_decode` in `crates/sfr-core/src/keys.rs`).
+`merkle`: exactly `algorithm` (`sha256-rfc6962`), `leaf_count` (integer, the tree size), `root` (64 lowercase hex digits, the Merkle root below) and `sections` (an object with one integer for each section below, the number of leaves it holds: `seal_context`, `log`, `config`, `baseline`, `rules`, `results`, `sealed_topics`, `events`). `signature`: exactly `algorithm` (`ed25519`) and `value` (128 lowercase hex digits, the Ed25519 signature over the signed payload below). Uppercase hex is refused (`hex_decode` in `crates/sfr-core/src/keys.rs`).
 
 ## Merkle leaves
 
@@ -159,7 +158,7 @@ The leaves, in this fixed order (`leaves` in `crates/sfr-core/src/seal.rs`):
 
 `status`, `merkle` and `signature` are not leaves. `status` is bound because it must agree with the results, which are leaves.
 
-Each leaf's hash is SHA-256(`0x00` || JCS(leaf)), where JCS(leaf) is the leaf's canonical bytes. An interior node's hash is SHA-256(`0x01` || left || right) over the two 32-byte child hashes. The tree is RFC 6962's: for `n` leaves, `n` above one, the left subtree holds the first `k` leaves, where `k` is the largest power of two strictly below `n`, and the right subtree the rest, recursively; a single leaf's tree hash is its leaf hash; nothing is duplicated. `merkle.leaf_count` is the number of leaves, so it is five plus the lengths of the three arrays. The unit test `roots_match_an_independent_rfc6962_computation` in `crates/sfr-core/src/merkle.rs` holds roots for one to seven leaves computed independently.
+Each leaf carries the tag byte of its section: `0x01` for the seal context, `0x02` for `log`, `0x03` for `config`, `0x04` for `baseline`, `0x05` for `rules`, `0x06` for each result, `0x07` for each sealed topic digest and `0x08` for each event (`Section` in `crates/sfr-core/src/seal.rs`). A leaf's hash is SHA-256(`0x00` || tag || JCS(leaf)), where JCS(leaf) is the leaf's canonical bytes. The tag binds a leaf to its section: a result moved into `sealed_topics`, or an event into `results`, hashes differently, so the root changes. (In schema 1 and 2 the hash was SHA-256(`0x00` || JCS(leaf)) with no tag, and a leaf moved between sections left the root unchanged.) An interior node's hash is SHA-256(`0x01` || left || right) over the two 32-byte child hashes. The tree is RFC 6962's: for `n` leaves, `n` above one, the left subtree holds the first `k` leaves, where `k` is the largest power of two strictly below `n`, and the right subtree the rest, recursively; a single leaf's tree hash is its leaf hash; nothing is duplicated. `merkle.leaf_count` is the number of leaves, so it is five plus the lengths of the three arrays, and `merkle.sections` gives the number of leaves in each section. The unit test `roots_match_an_independent_rfc6962_computation` in `crates/sfr-core/src/merkle.rs` holds roots for one to seven leaves computed independently.
 
 ## Signed payload and signature
 
@@ -169,8 +168,12 @@ The signed payload is, byte for byte (`signed_payload` in `crates/sfr-core/src/s
 |---|---|
 | ASCII `SFR-RECORD-V1` | the domain separation prefix |
 | `0x00` | a separator |
-| `0x00 0x00 0x00 0x02` | `schema_version` as a 4-byte big-endian unsigned integer (`0x01` for a schema 1 record) |
+| `0x00 0x00 0x00 0x03` | `schema_version` as a 4-byte big-endian unsigned integer |
+| 8 bytes | the tree size (`merkle.leaf_count`) as a big-endian unsigned integer |
+| 8 times 8 bytes | the number of leaves in each section as big-endian unsigned integers, in this order: seal context, `log`, `config`, `baseline`, `rules`, `results`, `sealed_topics`, `events` (the values of `merkle.sections`; the first five are always 1) |
 | the Merkle root | its raw bytes, not hex |
+
+The payload is 122 bytes (`signed_payload_layout` in `crates/sfr-core/src/seal.rs` checks its layout and length). It covers the shape of the tree as well as its root, so the leaf counts of the sections cannot change without the signature failing, and the record names the same counts that the arrays hold.
 
 The signature is Ed25519 (RFC 8032, pure Ed25519, no prehash) over that payload, stored as the lowercase hex of its raw bytes. `sfr` checks it with `ed25519-dalek`'s `verify_strict`, which also refuses the weak public keys and malleable signature forms that RFC 8032 verification alone accepts. `seal` verifies every signature it makes before it writes anything, so a record it writes always passes `verify_strict`; a verifier that is less strict accepts everything `sfr` accepts, and possibly more.
 
@@ -183,17 +186,17 @@ The signature is Ed25519 (RFC 8032, pure Ed25519, no prehash) over that payload,
 `sfr verify --pubkey <sfr.pub>` (standalone) checks, in this order (`standalone` in `crates/sfr-core/src/verify.rs`):
 
 1. The size is at most `MAX_RECORD_BYTES`.
-2. `schema_version` is `1` or `2`. A verifier must reject any other value and must never guess; `sfr` reports an unknown version as such when the file parses within the value subset, even if it is not canonical, and otherwise reports the parse error.
+2. `schema_version` is `3`. A verifier must reject any other value and must never guess; `sfr` reports an unknown version as such when the file parses within the value subset, even if it is not canonical, and otherwise reports the parse error.
 3. The bytes are canonical, and the object holds exactly the thirteen fields.
 4. Every `results` element is an object whose `id` is a rule id (above), in strictly increasing order; every `sealed_topics` element is an object with a string `topic` and an integer `multi_id`, in strictly increasing order; event `i` has the integer `seq` `i`.
-5. `merkle` holds exactly its three members, its algorithm is `sha256-rfc6962`, its `leaf_count` and `root` equal the ones recomputed from the leaves.
+5. `merkle` holds exactly its four members, its algorithm is `sha256-rfc6962`, its `leaf_count`, `root` and `sections` equal the ones recomputed from the leaves.
 6. `rules.text` and `rules.sha256` are strings, and `rules.sha256` is the SHA-256 of `rules.text`.
 7. `status` is a string that agrees with the results.
 8. `seal.key_fingerprint` is a string, the fingerprint of the given public key.
-9. `signature` holds exactly `algorithm` `ed25519` and `value`; `value` is 128 and `merkle.root` 64 lowercase hex digits; the signature over the signed payload, built from the recorded root, verifies under the given public key.
+9. `signature` holds exactly `algorithm` `ed25519` and `value`; `value` is 128 and `merkle.root` 64 lowercase hex digits; the signature over the signed payload, built from the recorded root and the leaf counts the arrays hold, verifies under the given public key.
 10. `seal.key_custody` is one of the three values.
 11. `seal.crypto_crates` is an array of objects, each with string `name` and `version`, and `seal.time_utc` is a string.
-12. `seal.allow_untested_version` is a boolean in a schema 2 record and absent from a schema 1 record.
+12. `seal.allow_untested_version` is a boolean.
 13. `seal.signer_certificate` is null or base64, and `seal.certificate_chain` is null or, beside a signer certificate, a non-empty array of base64 strings.
 
 With `--trust-anchor` instead of `--pubkey`, the key for step 9 is the one in `seal.signer_certificate`, and once the record verifies, its certificate chain must reach the anchor, every certificate must be valid at the verification time (the verifier's clock, or the time given with `--at`; not `seal.time_utc`, which is the sealer's claim), the signer certificate must carry the sfr record-signing extended key usage `2.25.182460915354635260549596502533646383540` and not also code signing, TLS server authentication or any usage, and its keyUsage must set digitalSignature (`check_signer_purpose` in `crates/sfr/src/certs.rs`), and no certificate in the path may be listed in the current CRL of its issuer (`crates/sfr/src/certs.rs`). Every CRL given with `--crl` is read, whatever the order; for each issuer the one with the highest `cRLNumber` (RFC 5280 section 5.2.3) is current; every issuer of the signer certificate and of the intermediates needs one, and it must not be past its `nextUpdate` by the verifier's clock, unless `--no-crl-check` is given. Then the report: the one `--report` names, or `<name>.sfr.md` beside `<name>.sfr`, must be byte for byte the report the record renders (`check` in `crates/sfr-core/src/report.rs`); a record with no report found fails, unless `--no-report` is given, which skips the check and says so. Last, the custody policy (`custody_policy` in `crates/sfr-core/src/verify.rs`) judges a record whose signature and chain are good: a declared `file-evaluation` is `Integrity: REFUSED` unless `--allow-evaluation-key` is given, and `--require-hardware-key` accepts only custody attested by the certificate chain (never one declared `file-evaluation`); these are refusals of a record that is intact, so they are not reported as a failed check.
@@ -230,7 +233,7 @@ The ULog file, read once in file order: the definitions section, the data sectio
 | `first_timestamp_us`, `last_timestamp_us` | decimal string, or null when `message_count` is 0 |
 | `data_sha256` | lowercase hex of `H`'s digest (the SHA-256 of no bytes when `message_count` is 0) |
 
-5. **Leaves.** Each entry is one Merkle leaf, SHA-256(0x00 || JCS(entry)), after the results' leaves and before the events' leaves.
+5. **Leaves.** Each entry is one Merkle leaf, SHA-256(0x00 || 0x07 || JCS(entry)), after the results' leaves and before the events' leaves.
 
 `format_sha256` covers the topic's own 'F' record only, not the 'F' records of nested types it uses.
 
@@ -288,28 +291,36 @@ if [ "$fp" = "$recorded" ]; then echo "key fingerprint matches: sha256:$fp"; els
 ```
 
 ```text doc-output
-key fingerprint matches: sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51
+key fingerprint matches: sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be
 ```
 
-### 3. The signature over the recorded Merkle root
+### 3. The signature over the recorded Merkle root and tree shape
 
-The payload is built from the recorded root; step 4 shows that root is the one the record's content gives.
+The payload is built from the recorded root and section counts; step 4 shows that they are the ones the record's content gives.
 
 ```sh doc-test
 rec=examples/reports/vtol_transition.sfr
-root=$(grep -o '"merkle":{"algorithm":"sha256-rfc6962","leaf_count":[0-9]*,"root":"[0-9a-f]\{64\}"}' "$rec" | sed 's/.*"root":"\([0-9a-f]*\)".*/\1/')
+merkle=$(grep -o '"merkle":{"algorithm":"sha256-rfc6962","leaf_count":[0-9]*,"root":"[0-9a-f]\{64\}","sections":{[^}]*}}' "$rec")
+root=$(printf '%s' "$merkle" | sed 's/.*"root":"\([0-9a-f]*\)".*/\1/')
+count() { printf '%s' "$merkle" | sed "s/.*\"$1\":\([0-9]*\).*/\1/"; }
 sig=$(grep -o '"signature":{"algorithm":"ed25519","value":"[0-9a-f]\{128\}"}' "$rec" | sed 's/.*"value":"\([0-9a-f]*\)".*/\1/')
 unhex() { printf '%b' "$(printf '%s' "$1" | sed 's/../\\x&/g')"; }
 mkdir -p try
 version=$(grep -o '"schema_version":[0-9]*' "$rec" | cut -d: -f2)
-{ printf 'SFR-RECORD-V1\000\000\000\000'; printf "\\$(printf '%03o' "$version")"; unhex "$root"; } > try/payload.bin
+be64() { unhex "$(printf '%016x' "$1")"; }
+{
+  printf 'SFR-RECORD-V1\000\000\000\000'; printf "\\$(printf '%03o' "$version")"
+  be64 "$(count leaf_count)"
+  for section in seal_context log config baseline rules results sealed_topics events; do be64 "$(count $section)"; done
+  unhex "$root"
+} > try/payload.bin
 unhex "$sig" > try/signature.bin
 wc -c < try/payload.bin
 openssl pkeyutl -verify -pubin -inkey examples/reports/sfr.pub -rawin -in try/payload.bin -sigfile try/signature.bin
 ```
 
 ```text doc-output
-50
+122
 Signature Verified Successfully
 ```
 
@@ -322,7 +333,7 @@ This script (Python 3, standard library only) does every standalone check above 
 ```sh doc-test
 mkdir -p try
 cat > try/sfr_check.py <<'EOF'
-# sfr_check.py: standalone checks of a schema 1 record, without sfr (docs/RECORD_FORMAT.md).
+# sfr_check.py: standalone checks of a schema 3 record, without sfr (docs/RECORD_FORMAT.md).
 # Everything but the signature, which openssl checks. Python 3 standard library only.
 import hashlib, json, re, sys
 
@@ -366,8 +377,8 @@ def mth(h):  # RFC 6962 Merkle tree hash of leaf hashes
 def check(path):
     raw = open(path, "rb").read()
     r = json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_float=no_float, parse_constant=no_float)
-    if r.get("schema_version") not in (1, 2):
-        return "unknown schema_version %r; this checker knows 1 and 2" % r.get("schema_version")
+    if r.get("schema_version") != 3:
+        return "unknown schema_version %r; this checker knows 3 only" % r.get("schema_version")
     if jcs(r).encode("utf-8") != raw:
         return "not in canonical form"
     fields = {"schema_version", "tool", "seal", "log", "config", "baseline", "rules", "results",
@@ -404,13 +415,17 @@ def check(path):
         return "status disagrees with the results"
     if seal["key_custody"] not in ("pkcs11-token", "tpm-sealed", "file-evaluation"):
         return "unknown key custody"
-    if (r["schema_version"] == 2) != isinstance(seal.get("allow_untested_version"), bool):
-        return "seal.allow_untested_version must be a boolean in schema 2 and absent in schema 1"
+    if not isinstance(seal.get("allow_untested_version"), bool):
+        return "seal.allow_untested_version must be a boolean"
     context = {"schema_version": r["schema_version"], "tool": r["tool"], "seal": r["seal"]}
-    leaves = [context, r["log"], r["config"], r["baseline"], r["rules"]]
-    leaves += r["results"] + r["sealed_topics"] + r["events"]
-    root = mth([sha256(b"\x00" + jcs(x).encode("utf-8")) for x in leaves]).hex()
-    if r["merkle"] != {"algorithm": "sha256-rfc6962", "leaf_count": len(leaves), "root": root}:
+    # Each section's leaves carry the section's tag byte, in the hash and in the signed counts.
+    sections = [("seal_context", 1, [context]), ("log", 2, [r["log"]]), ("config", 3, [r["config"]]),
+                ("baseline", 4, [r["baseline"]]), ("rules", 5, [r["rules"]]), ("results", 6, r["results"]),
+                ("sealed_topics", 7, r["sealed_topics"]), ("events", 8, r["events"])]
+    leaves = [(tag, x) for _, tag, xs in sections for x in xs]
+    root = mth([sha256(b"\x00" + bytes([tag]) + jcs(x).encode("utf-8")) for tag, x in leaves]).hex()
+    counts = {name: len(xs) for name, _, xs in sections}
+    if r["merkle"] != {"algorithm": "sha256-rfc6962", "leaf_count": len(leaves), "root": root, "sections": counts}:
         return "merkle differs: computed root %s over %d leaves" % (root, len(leaves))
     sig = r["signature"]
     if set(sig) != {"algorithm", "value"} or sig["algorithm"] != "ed25519" \
@@ -430,7 +445,7 @@ python3 -I try/sfr_check.py examples/reports/vtol_transition.sfr
 
 ```text doc-output
 structure, order, rules digest and status: ok
-merkle root aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b over 34 leaves: matches the record
+merkle root 745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430 over 34 leaves: matches the record
 ```
 
 With steps 2 and 3, the record is unchanged since it was signed by the holder of that key. With step 1, the log is the one it was sealed from.
@@ -448,6 +463,6 @@ echo "exit $rc"
 ```
 
 ```text doc-output
-FAILED: merkle differs: computed root 2b8540bbc7f6df08b064c848a32d70fdb7fa6b3348df17da3bb7acac509bc50f over 34 leaves
+FAILED: merkle differs: computed root 7c8b315562e5c20e420dd3ac1efc0ee03dd3776c68ba77f6bd2a05f9a5ba0392 over 34 leaves
 exit 1
 ```

@@ -201,7 +201,7 @@ target/release/sfr seal testdata/sitl/v1.17.0/mc_flight_1.ulg --rules try/my_rul
 ```
 
 ```text doc-output
-sfr seal --dry-run: v1.0 evaluation release; nothing is signed or written
+sfr seal --dry-run: sfr 0.1.0 (evaluation release); nothing is signed or written
 
 log       mc_flight_1.ulg (8536869 bytes)
 sha256    6e7b6956c20422aa9f31a13e7f074e80cba85760928fd895eed941e9492823fc
