@@ -99,10 +99,11 @@ for f in old new; do
   issue "lapsed_$f" inter "v3_$f" 20250201000000Z 20251231000000Z
   issue "revoked_$f" inter "v3_$f" 20260101000000Z 20360101000000Z
 done
-gencrl() { # issuer number index lastUpdate nextUpdate out
+gencrl() { # issuer number index lastUpdate nextUpdate out; lastUpdate "now" issues it now
   echo "$2" > "$pki/crlnumber"; cp "$3" "$pki/index.txt"
+  local last=(-crl_lastupdate "$4"); [ "$4" = now ] && last=()
   quiet openssl ca -batch -config "$pki/ca.cnf" -gencrl -cert "$pki/$1.pem" -keyfile "$pki/$1.key" \
-    -crlexts crl -crl_lastupdate "$4" -crl_nextupdate "$5" -out "$pki/$6.pem"
+    -crlexts crl "${last[@]}" -crl_nextupdate "$5" -out "$pki/$6.pem"
   openssl crl -in "$pki/$6.pem" -outform DER -out "$pki/$6.crl" 2> /dev/null
 }
 : > "$pki/index.empty"
@@ -112,9 +113,10 @@ for f in old new; do # revoke both revoked_* certificates in inter's current CRL
 done
 sed -i -E 's/^R\t([0-9]+Z)\t[0-9]+Z,/R\t\1\t260601000000Z,/' "$pki/index.txt"
 grep -v -E "CN=t12 (root|inter)$" "$pki/index.txt" > "$pki/index.revoked"
-gencrl inter 02 "$pki/index.revoked" 20260601000000Z 20460101000000Z inter_current
+# The current CRLs are issued now: verify refuses a CRL older than --max-crl-age (7 days by default).
+gencrl inter 02 "$pki/index.revoked" now 20460101000000Z inter_current
 gencrl inter 01 "$pki/index.empty" 20250601000000Z 20250701000000Z inter_stale
-gencrl root 01 "$pki/index.empty" 20260601000000Z 20460101000000Z root_crl
+gencrl root 01 "$pki/index.empty" now 20460101000000Z root_crl
 
 # ---- helpers ---------------------------------------------------------------------------------
 # supports <bin> <flag>: whether the usage text a build prints with no command names the flag.
