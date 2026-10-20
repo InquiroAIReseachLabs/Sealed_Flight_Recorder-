@@ -42,7 +42,7 @@ const USAGE: &str = "usage:
   sfr keygen --tpm-sealed --out <dir> [--tpm-parent <handle>] [--tpm-pcrs <bank:list>] [--json]
   sfr seal <flight.ulg> --rules <rules.toml> --baseline <baseline.params>
            (--key-uri pkcs11:... | --key-uri tpm-sealed:<dir> | --key <sfr.key> --evaluation-only | --dry-run)
-           [--out <dir>] [--seal-time <RFC3339>] [--allow-untested-version] [--json]
+           [--out <dir>] [--seal-time <RFC3339>] [--allow-untested-version] [--allow-ignore-all] [--json]
   sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> ([--crl <crl>]... | --no-crl-check))
              [--ulog <flight.ulg>] (--report <name.sfr.md> | --no-report) [--allow-evaluation-key]
              [--require-hardware-key] [--at <RFC3339>] [--json]
