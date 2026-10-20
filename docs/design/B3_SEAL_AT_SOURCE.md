@@ -76,4 +76,4 @@ MAVLink 2 (`HEARTBEAT`, `LOG_ENTRY`, `LOG_REQUEST_DATA`, `AUTOPILOT_VERSION`, an
 
 ## Size
 
-Medium to large, mostly outside `sfr`. The hook is a few hundred lines in a language with a MAVLink library; the `sfr` side is a schema bump with the new members, their report and verify lines, and `--max-gap`. Testing needs PX4 SITL with a companion process, which the repository already uses for its logs. About four engineer-weeks, with a further two for field trials on real hardware (not available to the author of this page; see the list of untested areas in the series' summary).
+Medium to large, mostly outside `sfr`. The hook is a few hundred lines in a language with a MAVLink library; the `sfr` side is a schema bump with the new members, their report and verify lines, and `--max-gap`. Testing needs PX4 SITL with a companion process, which the repository already uses for its logs. About four engineer-weeks, with a further two for field trials on real hardware (not available to the author of this page).

@@ -76,4 +76,4 @@ The last line is always printed: the verifier states that it does not know wheth
 
 ## Size
 
-Medium. A schema bump (with the migration rule of A5: refuse older), new seal fields, a `chain` command and its tests, TPM calls through `tpm2-tools` as `tpm-sealed` already does, and the NV attestation reader. About three engineer-weeks, plus one for the hardware tests against `swtpm`, which implements the NV commands.
+Medium. A schema bump (with the rule that a verifier refuses an older schema), new seal fields, a `chain` command and its tests, TPM calls through `tpm2-tools` as `tpm-sealed` already does, and the NV attestation reader. About three engineer-weeks, plus one for the hardware tests against `swtpm`, which implements the NV commands.

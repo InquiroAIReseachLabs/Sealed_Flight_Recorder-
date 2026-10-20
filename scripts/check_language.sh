@@ -11,8 +11,8 @@
 #      must never be committed, which is why the scan is optional and .gitignore lists it. CI
 #      writes it from the repository secret SFR_FORBIDDEN_TERMS when that secret is set.
 #   4. No text file names an internal codename or work-order label ("Chunk <n>", a change
-#      order, its short form, the name of the internal standard); record files (.sfr) and this
-#      script are exempt. Public docs (every Markdown file except docs/SPEC.md, which states the
+#      order, its short form, the name of the internal standard); record files (.sfr), this
+#      script and scripts/claims_audit/t11_text_scan.sh (which holds the same list) are exempt. Public docs (every Markdown file except docs/SPEC.md, which states the
 #      rules below and must quote them) hold no compliance,
 #      certification, FIPS or "validated" wording at all, claim or not; say "production" only
 #      inside double quotes or inline code, or as "not production" / "not for production"; and
@@ -20,6 +20,10 @@
 #   5. No public file says "counsel", "lawyer", "to be supplied", "placeholder", "TBD" or "coming
 #      soon": the repository states what exists, not what is promised. An HTML `placeholder=`
 #      attribute is markup, not wording. This script is exempt, because it holds the list.
+#
+#   6. No text file names who asked for a change, which review found it or which tracker item it
+#      closes ("founder", "red team", "grok", "issue 12", "A-series", "the series"). This script and
+#      scripts/claims_audit/t11_text_scan.sh are exempt, because they hold the list.
 #
 # Files scanned: tracked plus untracked files that .gitignore does not exclude, so a new doc
 # fails locally before it is committed, the same way it would fail in CI.
@@ -128,11 +132,23 @@ scan_pending() {
   return 0
 }
 
+# Internal wording, in every text file (rule 6): who asked for a change, which review found it, which
+# tracker item it closes. Public text states what the software does, not how the work was organised.
+INTERNAL_RE='\b(founders?|red[ -]?team(s|ers?)?|grok|issues? ?#?[0-9]+|[a-z]-series|the (same )?series|bot review|work order)\b|\bfinding F[0-9]\b'
+scan_internal() {
+  local dir="$1" hits
+  hits="$(cd "$dir" && candidate_files . \
+    | grep -zvE '\.(ulg|sfr|png|jpe?g|gif|ico|wasm|pdf|gz)$' | grep -zv -x -F -e 'scripts/check_language.sh' -e 'scripts/claims_audit/t11_text_scan.sh' \
+    | xargs -0 -r grep -n -i -I -E -- "$INTERNAL_RE" 2>/dev/null || true)"
+  if [ -n "$hits" ]; then printf '%s\n' "$hits"; return 1; fi
+  return 0
+}
+
 # Codenames, in every text file (rule 4): record files and this script are exempt.
 scan_codenames() {
   local dir="$1" hits
   hits="$(cd "$dir" && candidate_files . \
-    | grep -zvE '\.(ulg|sfr|png|jpe?g|gif|ico|wasm|pdf|gz)$' | grep -zv -x -F -- 'scripts/check_language.sh' \
+    | grep -zvE '\.(ulg|sfr|png|jpe?g|gif|ico|wasm|pdf|gz)$' | grep -zv -x -F -e 'scripts/check_language.sh' -e 'scripts/claims_audit/t11_text_scan.sh' \
     | xargs -0 -r grep -n -i -I -E -- "$CODENAME_RE" 2>/dev/null || true)"
   if [ -n "$hits" ]; then printf '%s
 ' "$hits"; return 1; fi
@@ -239,12 +255,19 @@ if [ "${1:-}" = "--self-test" ]; then
   for n in 1 2 3 4; do printf '%s\n' "$out" | grep -q "^docs/PEND.md:$n:" || { echo "FAIL: self-test: pending wording on line $n missed"; exit 1; }; done
   printf '%s\n' "$out" | grep -q '^pend.rs:1:' || { echo "FAIL: self-test: pending wording in a source file missed"; exit 1; }
   printf '%s\n' "$out" | grep -q 'form.html' && { echo "FAIL: self-test: an HTML placeholder attribute was flagged"; exit 1; }
+  printf 'For the founder: the red team found it.\nGrok reported issue #24.\nThe A-series fixes.\nSee the series summary.\n' > "$tmp/docs/INTERNAL.md"
+  printf '// Issue 24, F6: a renamed log\n' > "$tmp/internal.rs"
+  printf 'The PX4 v1.14 series is tested. An issue with the log. Issues found by the checker. Red teaming is not a word here: redirect.\n' > "$tmp/docs/INTERNAL_OK.md"
+  out="$(scan_internal "$tmp" || true)"
+  for n in 1 2 3 4; do printf '%s\n' "$out" | grep -q "^docs/INTERNAL.md:$n:" || { echo "FAIL: self-test: internal wording on line $n missed"; exit 1; }; done
+  printf '%s\n' "$out" | grep -q '^internal.rs:1:' || { echo "FAIL: self-test: internal wording in a source file missed"; exit 1; }
+  printf '%s\n' "$out" | grep -q 'INTERNAL_OK' && { echo "FAIL: self-test: ordinary wording flagged as internal: $out"; exit 1; }
   for scan in scan_codenames scan_claims scan_production scan_companies; do
     out="$($scan "$tmp" || true)"
     printf '%s\n' "$out" | grep -q -E 'FINE.md|SPEC.md' && { echo "FAIL: self-test: $scan flagged an allowed or exempt file: $out"; exit 1; }
   done
 
-  echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing; weapon and strike terms; public-doc codenames, claim words, production, legal forms; pending wording)"
+  echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing; weapon and strike terms; public-doc codenames, claim words, production, legal forms; pending wording; internal wording)"
   exit 0
 fi
 
@@ -279,7 +302,8 @@ fi
 
 for rule in "codenames:no internal codename or change-order wording in any file" "claims:no compliance, certification, FIPS or validated wording in a public doc" \
   "production:production only quoted or as not production in a public doc" "companies:no company legal form in a public doc" \
-  "pending:no counsel, lawyer, to be supplied, placeholder, TBD or coming soon wording in any file"; do
+  "pending:no counsel, lawyer, to be supplied, placeholder, TBD or coming soon wording in any file" \
+  "internal:no founder, red team, issue number, series or review-bot wording in any file"; do
   name="${rule%%:*}" what="${rule#*:}"
   if hits="$("scan_$name" "$root")"; then
     echo "PASS: $what"

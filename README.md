@@ -243,6 +243,7 @@ From `crates/sfr-core/src/lib.rs` (`exit_code`):
 | [docs/design/README.md](docs/design/README.md) | design notes for five things a record does not do yet: trusted time, a chain of records, sealing at the source, a second verifier, and access; none is built |
 | [docs/INTEGRATION_NOTES.md](docs/INTEGRATION_NOTES.md) | the topics `sfr` reads, sealing after disarm, CI use, key handling |
 | [docs/LIMITS.md](docs/LIMITS.md) | the input limits |
+| [docs/CLAIMS_AUDIT.md](docs/CLAIMS_AUDIT.md) | the tests that re-check every claim in these pages from a fresh clone, and what they do not show |
 | [docs/RELEASE.md](docs/RELEASE.md), [docs/BENCHMARK.md](docs/BENCHMARK.md) | how a release is made and benchmarked |
 | [examples/reports/README.md](examples/reports/README.md) | the example records and reports |
 
