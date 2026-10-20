@@ -19,9 +19,10 @@
 # listed in scripts/benchmark/vtol_transition.segments (runs of whole data records with no
 # subscription or info record, at most 1 MB each, written by scripts/benchmark/make_segments.py).
 # The 10 MB log is the flight cut at the end of the first segment that reaches 10 MB; the 50 and
-# 100 MB logs are one full copy of the flight, then its segments appended in order, again and
-# again, until the log reaches the size. Each log overshoots its size by under 1 MB. They are not
-# real flights: timestamps restart with each repetition, the 10 MB log ends mid-flight, and R5 may
+# 100 MB logs are one full copy of the flight, then its subscriptions and segments again and again,
+# each repetition under new message ids, until the log reaches the size (build_large below). Each
+# log overshoots its size by under 1 MB. They are not real flights: each repetition replays the
+# flight's data as new subscriptions of the same topics, the 10 MB log ends mid-flight, and R5 may
 # fail on them. The record is still written and timed.
 #
 # Gates (SPEC B1.10): on x86_64 each 100 MB seal median under 2 s; on aarch64 under 4 s, which
@@ -86,30 +87,50 @@ hardware() {
 
 # build_large <out> <bytes>: a log of at least <bytes>, cut at a record boundary. Below the
 # flight's size, the flight up to the end of the first segment that reaches <bytes> (every
-# subscription before that point included); above it, one copy of the flight, then its segments
-# in order until <bytes>.
+# subscription before that point included). Above it, one copy of the flight, then repetitions of
+# its subscriptions and segments until <bytes>; repetition r carries every message id raised by r
+# times msg_ids (scripts/benchmark/remap_msg_ids.awk), so each repetition is a new subscription of
+# the same topic instances and every subscription's timestamps keep increasing (ULog
+# specification). Every other byte comes from the flight.
 build_large() {
-  local out="$1" want="$2" size kind off len
+  local out="$1" want="$2" size kind off len ids want_kind r=1 unit="$work/repeat_unit.bin"
   if [ "$want" -lt "$(wc -c < "$src")" ]; then
     size="$(awk -v w="$want" '$1 == "segment" && $2 + $3 >= w { print $2 + $3; exit }' "$manifest")"
     head -c "$size" "$src" > "$out"
     [ "$(wc -c < "$out")" -eq "$size" ] || die "$out: short copy"
     return
   fi
+  ids="$(awk '$1 == "msg_ids" { print $2 }' "$manifest")"
+  [[ "$ids" =~ ^[1-9][0-9]*$ ]] || die "$manifest: no msg_ids line"
+  if [ ! -f "$unit" ]; then
+    : > "$unit"
+    # The subscriptions first, then the segments, each in file order.
+    for want_kind in subscription segment; do
+      while read -r kind off len; do
+        [ "$kind" = "$want_kind" ] || continue
+        # head stops tail early on purpose; the byte count below checks the copy instead.
+        set +o pipefail
+        tail -c +"$((off + 1))" "$src" | head -c "$len" >> "$unit"
+        set -o pipefail
+      done < "$manifest"
+    done
+    [ "$(wc -c < "$unit")" -eq "$(awk '$1 == "subscription" || $1 == "segment" { n += $3 } END { print n }' "$manifest")" ] \
+      || die "$unit: short copy"
+  fi
   cp "$src" "$out"
   size="$(wc -c < "$out")"
   while [ "$size" -lt "$want" ]; do
-    while read -r kind off len; do
-      [ "$kind" = segment ] || continue
-      # head stops tail early on purpose; the byte count below checks the copy instead.
-      set +o pipefail
-      tail -c +"$((off + 1))" "$src" | head -c "$len" >> "$out"
-      set -o pipefail
-      size=$((size + len))
-      [ "$size" -lt "$want" ] || break
-    done < "$manifest"
+    # Message ids are 16 bits; sfr reads at most 4096 subscriptions.
+    [ $(((r + 1) * ids)) -le 4096 ] || die "$out: $want bytes needs more than 4096 subscriptions"
+    # awk stops od early on purpose once the log is long enough; its own status is checked.
+    set +o pipefail
+    od -An -v -tu1 -w4096 "$unit" | LC_ALL=C awk -v add="$((r * ids))" -v limit="$((want - size))" \
+      -f scripts/benchmark/remap_msg_ids.awk >> "$out"
+    [ "${PIPESTATUS[1]}" -eq 0 ] || die "$out: remapping the message ids failed"
+    set -o pipefail
+    size="$(wc -c < "$out")"
+    r=$((r + 1))
   done
-  [ "$(wc -c < "$out")" -eq "$size" ] || die "$out: short copy"
 }
 
 "$sfr" keygen --evaluation-only --out "$work/key" > /dev/null
@@ -147,7 +168,7 @@ case "$arch:$machine" in
 esac
 echo "benchmark: $version; binary $arch, machine $machine; $runs run(s) per log"
 hardware
-echo "note: the large_* logs are built for size only from the golden VTOL flight ($src) and the whole-record segments of it in $manifest: large_10mb is the flight cut at a record boundary; large_50mb and large_100mb are one copy of the flight followed by its segments repeated (concatenated, timestamps restart). They are not real flights."
+echo "note: the large_* logs are built for size only from the golden VTOL flight ($src) and the whole-record segments of it in $manifest: large_10mb is the flight cut at a record boundary; large_50mb and large_100mb are one copy of the flight followed by its subscriptions and segments repeated, each repetition under new message ids so every subscription's timestamps keep increasing. They are not real flights."
 echo "| log | bytes | seal median (s) | verify median (ms) | seal peak RSS (KB) |"
 echo "|---|---|---|---|---|"
 status=0

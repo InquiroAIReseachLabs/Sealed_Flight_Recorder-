@@ -7,10 +7,13 @@ usage: make_segments.py <flight.ulg> <repo-relative path of the flight>         
 
 A segment is a run of whole records from the flight's data section (from its first 'A' record to
 the end) that holds no 'A', 'I' or 'M' record (subscriptions and info, which may appear once
-only), cut at record boundaries into pieces of at most MAX_SEGMENT bytes. benchmark.sh writes one
-full copy of the flight, then appends the segments in order, again and again, until the log
-reaches the requested size. Every byte comes from the flight; nothing is rewritten, so the
-timestamps restart with each repetition.
+only), cut at record boundaries into pieces of at most MAX_SEGMENT bytes. The manifest also lists
+every subscription ('A') record and the number of message ids the flight uses. benchmark.sh writes
+one full copy of the flight; then, for each repetition, it writes every subscription again under
+new message ids (the old ones plus the repetition number times that count) and the segments with
+each data record's message id raised the same way, until the log reaches the requested size.
+Every subscription's timestamps so keep increasing, as the ULog specification requires; every
+other byte comes from the flight unchanged.
 """
 import hashlib
 import struct
@@ -56,14 +59,19 @@ def manifest(path, rel):
         end = e
     if start is not None:
         segments.append((start, end - start))
+    subs = [(p, e - p) for p, t, e in records if t == "A"]
+    msg_ids = 1 + max(struct.unpack_from("<H", b, p + 4)[0] for p, _ in subs)
     lines = [
         "# Segments of the golden VTOL flight that scripts/benchmark.sh repeats to build its large",
         "# logs. Written by scripts/benchmark/make_segments.py; do not edit by hand.",
         "# segment <offset> <length>: whole records of the data section, no 'A', 'I' or 'M' record.",
+        "# subscription <offset> <length>: each 'A' record. msg_ids: one more than the highest id.",
         f"source {rel}",
         f"sha256 {hashlib.sha256(b).hexdigest()}",
         f"size {len(b)}",
+        f"msg_ids {msg_ids}",
     ]
+    lines += [f"subscription {o} {n}" for o, n in subs]
     lines += [f"segment {o} {n}" for o, n in segments]
     return "\n".join(lines) + "\n"
 
