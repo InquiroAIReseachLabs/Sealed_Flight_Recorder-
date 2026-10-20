@@ -771,33 +771,111 @@ pub fn certificate_fingerprint(der: &[u8]) -> String {
 
 /// A plain-language reason for a webpki error.
 fn why(e: &Error) -> String {
-    match e {
-        Error::UnknownIssuer => "the chain does not reach a supplied trust anchor".into(),
+    let s: &str = match e {
+        Error::UnknownIssuer => "the chain does not reach a supplied trust anchor",
         Error::CertExpired { .. } => {
-            "a certificate had expired at the verification time (the verifier's clock, or --at)".into()
+            "a certificate had expired at the verification time (the verifier's clock, or --at)"
         }
         Error::CertNotValidYet { .. } => {
             "a certificate was not yet valid at the verification time (the verifier's clock, or --at)"
-                .into()
         }
-        Error::CertRevoked => "a certificate in the chain is revoked by a supplied CRL".into(),
-        Error::RequiredEkuNotFoundContext(_) => format!(
-            "a certificate in the chain restricts its extended key usage and does not list the sfr record-signing usage {SFR_RECORD_SIGNING_TEXT}"
-        ),
-        Error::CaUsedAsEndEntity => "the signer certificate is a CA certificate".into(),
+        Error::CertRevoked => "a certificate in the chain is revoked by a supplied CRL",
+        Error::RequiredEkuNotFoundContext(_) => {
+            return format!(
+                "a certificate in the chain restricts its extended key usage and does not list the sfr record-signing usage {SFR_RECORD_SIGNING_TEXT}"
+            );
+        }
+        Error::EmptyEkuExtension => {
+            "a certificate has an extended key usage extension that lists no usage"
+        }
+        Error::CaUsedAsEndEntity => "the signer certificate is a CA certificate",
         Error::EndEntityUsedAsCa => {
-            "an intermediate certificate is not a CA certificate (basicConstraints)".into()
+            "an intermediate certificate is not a CA certificate (basicConstraints)"
         }
-        Error::InvalidSignatureForPublicKey => "a certificate's signature does not verify".into(),
-        Error::InvalidCrlSignatureForPublicKey => "a CRL's signature does not verify".into(),
+        Error::PathLenConstraintViolated => {
+            "a CA certificate's pathLenConstraint does not allow the intermediate certificates below it"
+        }
+        Error::InvalidSignatureForPublicKey => "a certificate's signature does not verify",
+        Error::InvalidCrlSignatureForPublicKey => "a CRL's signature does not verify",
+        Error::SignatureAlgorithmMismatch => {
+            "a certificate names one signature algorithm outside its signed part and another inside"
+        }
         Error::UnsupportedSignatureAlgorithmContext(_)
         | Error::UnsupportedSignatureAlgorithmForPublicKeyContext(_)
         | Error::UnsupportedCrlSignatureAlgorithmContext(_)
         | Error::UnsupportedCrlSignatureAlgorithmForPublicKeyContext(_) => {
-            "a certificate or CRL is not signed with Ed25519, the only algorithm sfr accepts".into()
+            "a certificate or CRL is not signed with Ed25519, the only algorithm sfr accepts"
         }
-        other => format!("{other:?}"),
-    }
+        Error::BadDer | Error::TrailingData(_) => "the DER encoding is malformed",
+        Error::BadDerTime => "a time in it is not a valid DER time",
+        Error::InvalidCertValidity => "a certificate's notAfter is before its notBefore",
+        Error::InvalidSerialNumber => {
+            "a certificate's serial number is not a positive integer of at most 20 octets"
+        }
+        Error::InvalidCrlNumber => {
+            "a CRL's number is not a non-negative integer of at most 20 octets"
+        }
+        Error::UnsupportedCertVersion => "a certificate is not X.509 version 3",
+        Error::UnsupportedCrlVersion => "a CRL is not version 2",
+        Error::MalformedExtensions | Error::ExtensionValueInvalid => {
+            "a certificate or CRL has a malformed extension"
+        }
+        Error::UnsupportedCriticalExtension => {
+            "a certificate has a critical extension sfr does not read"
+        }
+        Error::MalformedNameConstraint
+        | Error::InvalidNetworkMaskConstraint
+        | Error::UnsupportedNameType => "a CA certificate has a name constraint sfr cannot read",
+        Error::NameConstraintViolation => {
+            "a certificate's name is outside a name constraint of a CA above it"
+        }
+        Error::MalformedDnsIdentifier | Error::CertNotValidForName(_) => {
+            "a certificate has a malformed or unexpected name"
+        }
+        Error::IssuerNotCrlSigner => {
+            "a CRL's issuer certificate is not allowed to sign CRLs (keyUsage cRLSign)"
+        }
+        Error::UnknownRevocationStatus => {
+            "a certificate in the chain has no current CRL among those given"
+        }
+        Error::CrlExpired { .. } => "a CRL is past its nextUpdate",
+        Error::UnsupportedDeltaCrl => "a delta CRL; sfr reads only complete CRLs",
+        Error::UnsupportedIndirectCrl => {
+            "an indirect CRL; sfr reads only CRLs of the issuer that signs them"
+        }
+        Error::UnsupportedCrlIssuingDistributionPoint
+        | Error::UnsupportedRevocationReasonsPartitioning => {
+            "a CRL scoped by its issuingDistributionPoint; sfr reads only complete CRLs"
+        }
+        Error::UnsupportedRevocationReason => {
+            "a CRL entry gives a revocation reason sfr does not read"
+        }
+        Error::MaximumNameConstraintComparisonsExceeded
+        | Error::MaximumPathBuildCallsExceeded
+        | Error::MaximumPathDepthExceeded
+        | Error::MaximumSignatureChecksExceeded => {
+            "the chain is too long or too branched to check within the verifier's limits"
+        }
+        _ => "the certificates or CRLs could not be checked",
+    };
+    s.to_string()
+}
+
+/// Whether `der` can be a trust anchor at all (webpki reads its subject, key and name
+/// constraints); `verify` checks each anchor file as it is loaded so a failure names the file.
+pub fn check_anchor_der(der: &[u8]) -> Result<(), String> {
+    anchor_from_trusted_cert(&CertificateDer::from(der))
+        .map(|_| ())
+        .map_err(|e| why(&e))
+}
+
+/// Whether `der` is a CRL `sfr` reads ([`parse_crl`]) and webpki can load; `verify` checks each
+/// CRL file as it is loaded so a failure names the file.
+pub fn check_crl_der(der: &[u8]) -> Result<(), String> {
+    parse_crl(der)?;
+    OwnedCertRevocationList::from_der(der)
+        .map(|_| ())
+        .map_err(|e| why(&e))
 }
 
 /// How `check_chain` treats revocation.
@@ -836,6 +914,8 @@ pub struct CrlUsed {
     pub this_update: String,
     /// `nextUpdate`, `YYYY-MM-DDTHH:MM:SSZ`.
     pub next_update: String,
+    /// `nextUpdate` minus `thisUpdate`, seconds: how long the issuer stands behind the CRL.
+    pub window: i64,
 }
 
 impl CrlUsed {
@@ -845,6 +925,7 @@ impl CrlUsed {
             number: c.number_text(),
             this_update: c.this_update_text(),
             next_update: c.next_update_text(),
+            window: c.next_update.saturating_sub(c.this_update),
         }
     }
 
@@ -866,6 +947,8 @@ pub struct ChainOk {
     pub crls: Vec<CrlUsed>,
     /// Whether revocation was checked.
     pub crl_check: bool,
+    /// The `--max-crl-age` in effect, seconds.
+    pub max_crl_age: i64,
     /// Whether the anchor the chain reached is an intermediate CA, accepted only because of
     /// `--allow-partial-chain`: nothing above it was checked.
     pub partial: bool,
@@ -1041,6 +1124,7 @@ pub fn check_chain(
             Vec::new()
         },
         crl_check: mode == CrlCheck::Required,
+        max_crl_age: policy.max_crl_age,
         partial: anchors.get(index).is_some_and(|a| intermediate_anchor(a)),
     })
 }
@@ -1082,6 +1166,64 @@ fn no_crl_message(issuers: &[Vec<u8>], current: &[CrlInfo]) -> String {
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_webpki_error_reads_as_a_sentence_not_a_variant_name() {
+        let errors = [
+            Error::BadDer,
+            Error::BadDerTime,
+            Error::CaUsedAsEndEntity,
+            Error::CertRevoked,
+            Error::EmptyEkuExtension,
+            Error::EndEntityUsedAsCa,
+            Error::ExtensionValueInvalid,
+            Error::InvalidCertValidity,
+            Error::InvalidCrlNumber,
+            Error::InvalidNetworkMaskConstraint,
+            Error::InvalidSerialNumber,
+            Error::InvalidCrlSignatureForPublicKey,
+            Error::InvalidSignatureForPublicKey,
+            Error::IssuerNotCrlSigner,
+            Error::MalformedDnsIdentifier,
+            Error::MalformedExtensions,
+            Error::MalformedNameConstraint,
+            Error::MaximumNameConstraintComparisonsExceeded,
+            Error::MaximumPathBuildCallsExceeded,
+            Error::MaximumPathDepthExceeded,
+            Error::MaximumSignatureChecksExceeded,
+            Error::NameConstraintViolation,
+            Error::PathLenConstraintViolated,
+            Error::SignatureAlgorithmMismatch,
+            Error::UnknownIssuer,
+            Error::UnknownRevocationStatus,
+            Error::UnsupportedCertVersion,
+            Error::UnsupportedCriticalExtension,
+            Error::UnsupportedCrlIssuingDistributionPoint,
+            Error::UnsupportedCrlVersion,
+            Error::UnsupportedDeltaCrl,
+            Error::UnsupportedIndirectCrl,
+            Error::UnsupportedNameType,
+            Error::UnsupportedRevocationReason,
+            Error::UnsupportedRevocationReasonsPartitioning,
+        ];
+        for e in errors {
+            let text = why(&e);
+            let debug = format!("{e:?}");
+            assert!(!text.contains(&debug), "{debug}: {text}");
+            assert!(
+                text.starts_with(|c: char| c.is_ascii_lowercase()),
+                "{debug}: {text}"
+            );
+            assert!(
+                !text.split(' ').any(|w| w.len() > 1
+                    && w.starts_with(|c: char| c.is_ascii_uppercase())
+                    && w.chars().skip(1).any(|c| c.is_ascii_uppercase())
+                    && w.chars().any(|c| c.is_ascii_lowercase())
+                    && !w.contains("CRL")),
+                "{debug}: {text}"
+            );
+        }
+    }
 
     /// The DER of a CRL in `testdata/pki/`.
     fn crl(name: &str) -> Vec<u8> {

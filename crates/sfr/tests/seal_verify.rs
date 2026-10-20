@@ -1963,3 +1963,142 @@ fn a_not_read_note_is_shown_in_the_report_and_the_table_when_r4_passes() {
     report_facts::check(&record, &report);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// By default `verify` checks integrity, not the verdict: a sound record whose rules failed exits
+/// 0. With `--require-pass` it also requires the verdict PASS or WARN, and exits 1 for FAIL or NO
+/// ARMED FLIGHT, saying so.
+#[test]
+fn require_pass_makes_verify_fail_on_a_failing_or_empty_verdict() {
+    let dir = scratch();
+    let (key, public) = keygen(&dir.join("k"));
+    let cases = [
+        (
+            "testdata/synthetic/cut_control.ulg",
+            "synthetic_cut_control",
+            "PASS",
+            0,
+        ),
+        (
+            "testdata/sitl/v1.17.0/mc_flight_1.ulg",
+            "v1.17.0_mc_flight_1",
+            "WARN",
+            0,
+        ),
+        (
+            "testdata/synthetic/cut_after_arm.ulg",
+            "synthetic_cut_after_arm",
+            "FAIL",
+            1,
+        ),
+        (
+            "testdata/falsepass/never_armed_failsafe.ulg",
+            "",
+            "NO ARMED FLIGHT",
+            1,
+        ),
+    ];
+    for (log, name, status, want) in cases {
+        let out = dir.join(status.replace(' ', "_"));
+        let baseline = if name.is_empty() {
+            "testdata/falsepass/never_armed_failsafe.params".to_string()
+        } else {
+            format!("testdata/baselines/{name}.params")
+        };
+        let (record, _) = seal(log, &baseline, &key, &out);
+        let run = |extra: &[&str]| {
+            let mut a = vec![
+                "verify",
+                "--allow-evaluation-key",
+                record.as_str(),
+                "--pubkey",
+                public.as_str(),
+                "--no-report",
+            ];
+            a.extend_from_slice(extra);
+            sfr(&a)
+        };
+        let plain = run(&[]);
+        assert_eq!(plain.status.code(), Some(0), "{status}: {}", text(&plain));
+        let strict = run(&["--require-pass"]);
+        assert_eq!(
+            strict.status.code(),
+            Some(want),
+            "{status}: {}",
+            text(&strict)
+        );
+        assert!(
+            text(&strict).contains(&format!(
+                "verdict   {status} (--require-pass: PASS or WARN required"
+            )),
+            "{status}: {}",
+            text(&strict)
+        );
+        let json = run(&["--require-pass", "--json"]);
+        assert_eq!(json.status.code(), Some(want), "{status}: {}", text(&json));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A record named after a Windows device (CON, PRN, AUX, NUL, COM1 to COM9, LPT1 to LPT9, in any
+/// case, before the first dot) is refused, so every record can be copied anywhere; names that only
+/// start like one are fine. A place for the record that cannot be checked (an `--out` that is a
+/// file) is refused before any work, with nothing written.
+#[test]
+fn reserved_record_names_and_uncheckable_output_paths_are_refused_early() {
+    let dir = scratch();
+    let (key, _) = keygen(&dir.join("k"));
+    let log = std::fs::read(root().join("testdata/synthetic/cut_control.ulg")).unwrap();
+    let seal_as = |name: &str, out: &Path| {
+        let path = dir.join(name);
+        std::fs::write(&path, &log).unwrap();
+        sfr(&[
+            "seal",
+            path.to_str().unwrap(),
+            "--rules",
+            RULES,
+            "--baseline",
+            "testdata/baselines/synthetic_cut_control.params",
+            "--key",
+            &key,
+            "--evaluation-only",
+            "--out",
+            out.to_str().unwrap(),
+            "--seal-time",
+            SEAL_TIME,
+        ])
+    };
+    for name in [
+        "CON.ulg",
+        "nul.ulg",
+        "Com1.ulg",
+        "lpt9.flight.ulg",
+        "AUX .ulg",
+    ] {
+        let out = dir.join(format!("out_{}", name.replace(' ', "_")));
+        let o = seal_as(name, &out);
+        assert_eq!(o.status.code(), Some(4), "{name}: {}", text(&o));
+        assert!(
+            text(&o).contains("is a device name on Windows"),
+            "{name}: {}",
+            text(&o)
+        );
+        assert!(!out.exists(), "{name}: nothing written");
+    }
+    for name in ["CONSOLE.ulg", "COM0.ulg", "LPT10.ulg", "nul_flight.ulg"] {
+        let out = dir.join(format!("ok_{name}"));
+        let o = seal_as(name, &out);
+        assert_eq!(o.status.code(), Some(0), "{name}: {}", text(&o));
+    }
+    // --out names a regular file: the record's place cannot be checked.
+    let file = dir.join("not_a_dir");
+    std::fs::write(&file, b"x").unwrap();
+    let o = seal_as("flight.ulg", &file);
+    assert_eq!(o.status.code(), Some(4), "{}", text(&o));
+    assert!(
+        text(&o).contains("cannot check") && text(&o).contains("nothing written"),
+        "{}",
+        text(&o)
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), b"x");
+    std::fs::remove_dir_all(dir).unwrap();
+}

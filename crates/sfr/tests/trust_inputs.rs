@@ -137,9 +137,34 @@ fn tpm2_tools_come_from_an_absolute_directory_never_from_path() {
         text(&o)
     );
     assert!(!marker.exists());
-    // The configured absolute directory is the one used.
+    // A directory others can write to is refused, by any user.
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o777)).unwrap();
     let o = keygen(&[("SFR_TPM2_TOOLS_DIR", fake.to_str().unwrap())]);
     assert_eq!(o.status.code(), Some(4), "{}", text(&o));
-    assert!(marker.exists(), "the configured directory's tool ran");
+    assert!(
+        text(&o).contains("SFR_TPM2_TOOLS_DIR") && text(&o).contains("only root can change"),
+        "{}",
+        text(&o)
+    );
+    assert!(!marker.exists(), "a tool in a writable directory ran");
+    // A closed directory is used if root owns it and everything above it, as when this test runs
+    // as root under a sticky /tmp; otherwise it is refused as not root's.
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let o = keygen(&[("SFR_TPM2_TOOLS_DIR", fake.to_str().unwrap())]);
+    assert_eq!(o.status.code(), Some(4), "{}", text(&o));
+    let root_owned = fake
+        .ancestors()
+        .all(|p| std::fs::metadata(p).is_ok_and(|m| m.uid() == 0));
+    if root_owned {
+        assert!(
+            marker.exists(),
+            "the configured directory's tool ran: {}",
+            text(&o)
+        );
+    } else {
+        assert!(text(&o).contains("not root"), "{}", text(&o));
+        assert!(!marker.exists(), "a tool in a directory not root's ran");
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }

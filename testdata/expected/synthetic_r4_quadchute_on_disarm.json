@@ -213,7 +213,7 @@
         "quadchute in flight at boot_us 5000000: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure false"
       ],
       "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), no quadchute (fixed wing straight to multicopter) in flight, and no failsafe_flags flag that the current nav_state requires true in flight; other failsafe_flags flags true in flight are warnings",
-      "found": "true in flight 0 time(s), quadchute 1 time(s)",
+      "found": "quadchute 1 time(s)",
       "id": "R4",
       "name": "no failsafe in flight",
       "status": "FAIL"

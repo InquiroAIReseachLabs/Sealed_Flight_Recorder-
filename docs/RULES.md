@@ -80,7 +80,7 @@ The parameters in effect at every ARM equal the baseline, and none changes in fl
 - **Quadchute:** the VTOL state goes from fixed wing straight to multicopter, with no transition between. It fails R4 whether or not PX4 raised `failsafe`, which it does only in some modes. On other vehicles a `vehicle_type` change is not a quadchute.
 - **Versions:** in v1.14 `failsafe` is true for any failsafe action, a warning included; from v1.15 only for an action other than none or a warning. Flag names change between versions, which changes the detail text only.
 
-**PASS** `never true in flight`. **WARN** `never true in flight; warning: failsafe_flags <names> true in flight`. **FAIL** `true in flight N time(s)`, plus `, quadchute Q time(s)`, `, required failsafe_flags <names> true in flight` and `, hazard failsafe_flags <names> true for the whole flight` if any; one line per failsafe (`failsafe in flight at boot_us <t>: <flags>`) and per quadchute (with `failsafe_flags.vtol_fixed_wing_system_failure` true, false or `not logged`). **N/A** no armed flight.
+**PASS** `never true in flight`. **WARN** `never true in flight; warning: failsafe_flags <names> true in flight`. **FAIL** names what failed, each part only when it happened, joined by `, `: `true in flight N time(s)` (`vehicle_status.failsafe`), `quadchute Q time(s)`, `required failsafe_flags <names> true in flight`, `hazard failsafe_flags <names> true for the whole flight`; one line per failsafe (`failsafe in flight at boot_us <t>: <flags>`) and per quadchute (with `failsafe_flags.vtol_fixed_wing_system_failure` true, false or `not logged`). **N/A** no armed flight.
 
 The golden logs `failsafe_gps_loss` and `failsafe_battery_empty` fail on a failsafe and `vtol_quadchute` on a quadchute.
 

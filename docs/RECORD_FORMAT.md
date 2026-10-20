@@ -133,7 +133,7 @@ Each event has these members, then the members of its kind (`event_json` in `cra
 | `LOG_MESSAGE` | `level` (integer, 0 to 4), `text`; and `text_hex` (the raw bytes in hex) only when the text is not valid UTF-8, in which case `text` has each bad sequence replaced by U+FFFD |
 | `LOG_DROPOUT` | `duration_ms` (integer) |
 
-The names in `reason_name`, `old_name` and `new_name` depend on the PX4 version (`reason_name` and `nav_state_name` in `crates/sfr-core/src/events.rs`) and are null outside v1.14 to v1.17 or for a value the version does not name. SPEC B1.5 defines when each event occurs and how events are ordered.
+The names in `reason_name`, `old_name` and `new_name` depend on the PX4 version (`reason_name` and `nav_state_name` in `crates/sfr-core/src/events.rs`) and are null outside v1.14 to v1.17 or for a value the version does not name. SPEC B1.5 defines when each event occurs and how events are ordered. `reason` is the value PX4 logged in `latest_arming_reason` or `latest_disarming_reason`, and `reason_name` names it by `arm_disarm_reason_t` in PX4's `src/lib/events/enums.json`, the type Commander casts into those fields at every tag v1.14.0 to v1.17.0. The `ARM_DISARM_REASON_*` constants in `VehicleStatus.msg` number the reasons differently from 6 on (6 is SAFETY_BUTTON there, 7 AUTO_DISARM_LAND) and are not what PX4 logs: a log's 6 is the automatic disarm after landing (`auto_disarm_land`), as the golden landings show.
 
 #### Event field `initial`
 
