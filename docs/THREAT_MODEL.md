@@ -56,6 +56,30 @@ Twelve of these attacks worked against an earlier build. `scripts/claims_audit/t
 | Spoofed MAVLink source ids | **not detected**: R7 checks the ids the log recorded | command sources, below |
 | False seal time in the past, or re-signing a record with another time | **not detected**: no trusted time source | above |
 
+## Inputs that decide the verdict
+
+Every input that can change a rule result or the verify verdict, who supplies it, what follows if it is wrong, and what `sfr` does about it. Rule results are computed from what the log declares about itself; [VALIDATION.md](VALIDATION.md) lists the false passes that remain.
+
+| Input | Supplied by | If it is wrong | Mitigation |
+|---|---|---|---|
+| `vehicle_status` arming state, flight mode and failsafe | log | R4 and R5 judge the wrong flight | field types must be PX4's (else the rule FAILs and names the field); every instance is read; a log with no ARM and no DISARM is NO ARMED FLIGHT, not PASS. A consistent rewrite before sealing is not detected. |
+| `failsafe_flags` | log | R4 misses a failsafe | required flags come from the flight mode's requirement masks, with PX4's types; missing data FAILs R4; other flags true in flight WARN |
+| `is_vtol`, transition fields, `vehicle_type`, `system_type` | log | R6 skips a VTOL | a VTOL `system_type` with `is_vtol` false FAILs R6 |
+| Parameter records | log | R3 compares the wrong values | compared at every ARM in file order; a change in flight WARNs |
+| `ver_sw_release`, `ver_sw` | log | R2 matches a false version | the R2 line labels the version self-reported |
+| `vehicle_command` source ids | log | R7 passes a forged sender | **not detected**; the R7 line says the ids are self-reported |
+| Message formats and subscriptions | log | a field read with the wrong type or layout | types pinned to PX4's message definitions; a field declared twice is refused; records `sfr` cannot attribute are counted as skipped in the record |
+| Rules file | operator | a narrow scope passes more logs | embedded in the signed record; R3 and R7 state their scope; ignoring every parameter needs `--allow-ignore-all`, which is recorded |
+| Baseline | operator | R2 and R3 compare against the wrong reference | its SHA-256 is in the record and in the R2 and R3 lines, and R2 calls it operator-supplied. A baseline made from the same log passes by construction. |
+| `--allow-untested-version`, `--seal-time` | operator | a version outside the tested range, or a false time | the flag is in the signed record and the report; the seal time is labeled claimed |
+| Signing key and declared custody | sealer | a record signed by someone else, or a file key called hardware | the key is named by fingerprint; custody is unattested unless a certificate chain to the verifier's trust anchor attests it |
+| Public key or trust anchor | verifier | a forged record verifies | the verifier must get it from its owner over a trusted channel |
+| CRLs (`--crl`, `--no-crl-check`) | verifier | a revoked signer verifies | a CRL that names the signer fails verification; a CRL withheld from the verifier cannot be detected offline |
+| `--at`, `--allow-evaluation-key`, `--require-hardware-key` | verifier | a looser check than intended | `--at` prints a `time` line; an accepted evaluation key prints `EVALUATION KEY` first; `--require-hardware-key` only refuses more |
+| The log given to `verify --ulog` | verifier | none: a different log fails | the rules run again on it, and the results and status must equal the sealed ones |
+| Results and status in the record | record | a forged verdict | without `--ulog`, R1 to R7 must each appear once and the status must follow from them; with `--ulog`, they are derived again from the log |
+| The report `.sfr.md` | record | a forged report | rendered again from the verified record and compared byte for byte |
+
 ## Disarm to seal
 
 Sealing on the companion computer right after disarm shrinks the window in which the log can be changed. [INTEGRATION_NOTES.md](INTEGRATION_NOTES.md) has a post-disarm example.

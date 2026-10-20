@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Independent oracle for Sealed Flight Record event extraction and core rules.
+"""Test-only oracle for Sealed Flight Record event extraction and core rules, on pyulog.
 
-Written only from docs/SPEC.md B1.5/B1.6/B1.7, docs/RECORD_FORMAT.md (sealed topic digests)
-and the PX4 message definitions.
+What it is: a second implementation of the event extraction and of R1, R4, R5, R6 and R7, in
+Python, that reads logs with pyulog (the PX4 project's ULog parser) instead of sfr's own parser
+and shares no code with sfr. It follows docs/SPEC.md B1.5/B1.6/B1.7, docs/RECORD_FORMAT.md (sealed
+topic digests), docs/RULES.md and the PX4 message definitions. It is maintained in the same
+repository by the same people as sfr, and it was changed together with sfr when the rules
+changed, so it is a check on the parsing and on the arithmetic of the rules, not an independent
+reading of what the rules should be. It is never part of sfr or a release
+(scripts/testdata/requirements-dev.txt pins pyulog for tests only).
 Usage: python3 -I oracle.py <log.ulg> <rules.toml> [--required vehicle_status,failsafe_flags]
        [--ptime literal|max] [--param-index all|data] [--debug]
 

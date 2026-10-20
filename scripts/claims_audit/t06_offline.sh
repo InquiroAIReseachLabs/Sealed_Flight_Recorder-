@@ -12,7 +12,7 @@ echo "--- keygen, seal, verify (with --ulog) inside unshare -n, under strace -f 
 unshare -n strace -f -qq -e trace=%network -o $W/strace.txt sh -c "
   $SFR keygen --evaluation-only --out $W/key > /dev/null &&
   $SFR seal testdata/sitl/v1.17.0/vtol_transition.ulg --rules examples/rules.default.toml --baseline testdata/baselines/v1.17.0_vtol_transition.params --key $W/key/sfr.key --evaluation-only --out $W/out > $W/seal.txt; echo \"seal exit \$?\";
-  $SFR verify $W/out/vtol_transition.sfr --pubkey $W/key/sfr.pub --allow-evaluation-key --ulog testdata/sitl/v1.17.0/vtol_transition.ulg | grep -E '^(Integrity|Flight rules)'; echo \"verify exit \${PIPESTATUS:-\$?}\""
+  $SFR verify $W/out/vtol_transition.sfr --pubkey $W/key/sfr.pub --allow-evaluation-key --ulog testdata/sitl/v1.17.0/vtol_transition.ulg | grep -E '^(Integrity|Rule checks)'; echo \"verify exit \${PIPESTATUS:-\$?}\""
 echo
 echo "network system calls traced (socket, connect, bind, send, recv, ...): $(grep -c -E '^[0-9]+ +[a-z_0-9]+\(' $W/strace.txt)  (lines that are only signal notices: $(grep -c -E 'SIG[A-Z]+ ' $W/strace.txt))"
 echo

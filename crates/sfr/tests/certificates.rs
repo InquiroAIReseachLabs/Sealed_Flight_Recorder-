@@ -379,7 +379,7 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             out.contains("Integrity: FAILED: certificate chain:") && out.contains(why),
             "{case}: {out}"
         );
-        assert!(out.contains("Flight rules: UNKNOWN"), "{case}: {out}");
+        assert!(out.contains("Rule checks: UNKNOWN"), "{case}: {out}");
         assert!(!out.contains("VERIFIED"), "{case}: {out}");
     }
     // The revoked signer passes only when revocation is not checked at all: the CRL is what

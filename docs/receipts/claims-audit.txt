@@ -1,30 +1,33 @@
-claims audit: 2026-10-20T02:55:41Z on Linux 6.18.44-fc-v139 x86_64, 4 CPUs, Intel(R) Xeon(R) Processor @ 2.10GHz
-commit: 874c096a096011260669b1e7b90bfe88ddfbcf78
-subject: Merge pull request #33 from InquiroAIReseachLabs/claude/charming-brahmagupta-3xi2az-a9-t12
+claims audit: 2026-10-20T06:33:48Z on Linux 6.18.44-fc-v139 x86_64, 4 CPUs, Intel(R) Xeon(R) Processor @ 2.10GHz
+commit: a6cb16a200879ebd2060b788aefc1cc6612f55a8
 
-
-T1   Quickstart, cold start (Rust install + clone + build + seal + verify) PASS
-T2   Seal and verify each golden log with --pubkey                  PASS
-T3   Tamper tests (24 cases)                                        PASS
+T1    Quickstart, cold start (Rust install + clone + build + seal + verify) PASS
+T2    Seal and verify each golden log with --pubkey                  PASS
+T3    Tamper tests (24 cases)                                        PASS
 T4-T5 No trusted key; PX4 versions; malformed and foreign formats    PASS
-T6   Offline: empty network namespace, strace                       PASS
-T7   Determinism: same inputs, same bytes                           PASS
-T8   Rules R1 to R7, one failing fixture each                       PASS
-T9   Reproducible build, twice from clean and another directory     PASS
-T10  Key custody: SoftHSM, swtpm, chain, revoked certificate        PASS
-T11  Public text scan                                               FAIL (exit 1)  [on commit 874c096: internal wording found in test comments, one threat-model sentence, a design page, a receipt and the T12 script; removed in the change that adds this file; the same test then passes, see below]
-T12  Twelve attacks: succeed on the earlier build, fail on this one PASS
+T6    Offline: empty network namespace, strace                       PASS
+T7    Determinism: same inputs, same bytes                           PASS
+T8    Rules R1 to R7, one failing fixture each                       PASS
+T9    Reproducible build, twice from clean and another directory     PASS
+T10   Key custody: SoftHSM, swtpm, chain, revoked certificate        PASS
+T11   Public text scan                                               PASS
+T12a  Twelve attacks: succeed on the earlier build, fail on this one PASS
+T12b  False-pass corpus: every crafted log and control as stated     PASS
+T13   pyulog differential on every golden and false-pass log         PASS
 -    The audited checkout was not modified by the tests             PASS
 
-logs: /tmp/audit/run1/logs
+Run with: scripts/claims_audit.sh --earlier <sfr at 4031c96> --earlier-falsepass <sfr at 27dedad>, SFR_ORACLE_PYTHON set to a Python with scripts/testdata/requirements-dev.txt installed (pyulog 1.2.4, numpy 2.2.6).
+This receipt is added in the change after the audited commit; that change touches only this file and the Results section of docs/CLAIMS_AUDIT.md.
 
-T11 re-run on the tree of the change that removes that wording (scripts/claims_audit/t11_text_scan.sh): 0 hits for internal wording, personal information and codenames; 0 unreviewed strong-claim words; PASS.
-
-T1 cold start (empty home, new Rust toolchain, clone, build, seal, verify): 77 s, on Linux 6.18.44 x86_64, 4 CPUs, Intel Xeon @ 2.10GHz, 15 GiB memory. Deviation: https://sh.rustup.rs returned 403 from this network, so the same installer (rustup-init) was fetched from static.rust-lang.org.
+T1 cold start (empty home, new Rust toolchain, clone, build, seal, verify): 68 s, on Linux 6.18.44 x86_64, 4 CPUs, Intel Xeon @ 2.10GHz. Deviations: https://sh.rustup.rs was not reachable from this network, so the same installer (rustup-init) was fetched from static.rust-lang.org; the README clones the default branch, so T1 fetched and checked out the audited commit, and checked that its clone is that commit.
 T9 scope: one machine, the pinned toolchain; the binary and the tarball were identical across two clean builds and across a clone in another directory.
 T5 observation: a log whose last 100 bytes were zeroed, and a log with 64 bytes of 0xFF inside the data section, are sealed without a warning; the seal covers the bytes as they are. A log cut in the middle of a message, a log with garbage appended, an empty file, random bytes, a text file, an ArduPilot .bin and a MAVLink .tlog are refused with exit 3 and nothing written. A PX4 version outside 1.14 to 1.17 is refused unless --allow-untested-version, and the flag is then in the signed record and the report.
+T8: each of R1 to R7 has a fixture that fails it while every other rule is PASS, WARN or N/A.
+T11: 0 hits for internal wording, personal information and codenames; 0 unreviewed strong-claim words.
+T12b: 15 crafted logs and 15 positive controls, each with the result testdata/falsepass/cases.json states; the directory is what scripts/testdata/make_falsepass.py writes.
+T13: sfr and the pyulog oracle agree on all 14 golden logs and all 30 false-pass logs (0 differences).
 
-T12 (earlier build = commit 4031c96, before the fixes; current build = commit 874c096):
+T12a (earlier build = commit 4031c96, before the fixes; current build = the audited commit):
 ID       ATTACK                                 EARLIER    CURRENT    RESULT
 T12.01   backdated seal time, lapsed cert       succeeded  failed     as expected
 T12.02   seal time in the verifier's future     succeeded  failed     as expected
@@ -38,4 +41,3 @@ T12.09   forged report, other name              succeeded  failed     as expecte
 T12.10   U+202E in a file name                  succeeded  failed     as expected
 T12.11   leaf moved to another section          succeeded  failed     as expected
 T12.12   code-signing cert as signer            succeeded  failed     as expected
-

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# T2 Seal and verify each golden log with --pubkey (and --ulog); record the Integrity and Flight rules lines.
+# T2 Seal and verify each golden log with --pubkey (and --ulog); record the Integrity and Rule checks lines.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 R=$A_REPO; SFR=$A_SFR; W=$A_WORK/t02; rm -rf $W; mkdir -p $W
@@ -23,9 +23,9 @@ for e in $GOLDEN; do
   rec=$W/out/$(basename ${log%.ulg}).sfr; [ $name = pyulog_sample ] && rec=$W/out/$name/sample.sfr
   rec=$(ls $W/out/$name/*.sfr | head -1)
   out=$(cd $R && $SFR verify $rec --pubkey $W/key/sfr.pub --allow-evaluation-key --ulog $log 2>&1); vc=$?
-  integ=$(grep -m1 '^Integrity' <<< "$out"); rules_line=$(grep -m1 '^Flight rules' <<< "$out")
+  integ=$(grep -m1 '^Integrity' <<< "$out"); rules_line=$(grep -m1 '^Rule checks' <<< "$out")
   res=FAIL; if [ $vc -eq 0 ] && [[ "$integ" == "Integrity: VERIFIED (record and log)" ]]; then res=PASS; pass=$((pass+1)); else fail=$((fail+1)); fi
-  printf '%-40s %-5s %-30s %-34s %s\n' "$name" "$sc" "${integ#Integrity: }" "${rules_line#Flight rules: }" "$res"
+  printf '%-40s %-5s %-30s %-34s %s\n' "$name" "$sc" "${integ#Integrity: }" "${rules_line#Rule checks: }" "$res"
   echo "    cmd: $cmd_seal" >> $W/commands.txt
   echo "    cmd: sfr verify out/$name/*.sfr --pubkey key/sfr.pub --allow-evaluation-key --ulog $log   (exit $vc)" >> $W/commands.txt
 done

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""T8 Rules R1 to R7: one sentence each, and a fixture that makes each one fail. Needs the key T2 made."""
+"""T8 Rules R1 to R7: one sentence each, and a fixture that makes that rule fail and no other rule fail.
+Needs the key T2 made."""
 import os, re, shutil, struct, subprocess, sys
 R=os.environ["A_REPO"]; SFR=os.environ["A_SFR"]; AW=os.environ["A_WORK"]; W=AW+"/t08"; shutil.rmtree(W, ignore_errors=True); os.makedirs(W)
 KEY=AW+"/t02/key"
@@ -16,19 +17,28 @@ VT="testdata/sitl/v1.17.0/vtol_transition.ulg"; VB="testdata/baselines/v1.17.0_v
 print("""Rules, one sentence each (from docs/RULES.md and SPEC B1.5):
  R1 Every topic the rules file requires, and the core topics and fields the rules read, must have data in the log.
  R2 The firmware version (and git hash, when the baseline gives one) in the log must equal the baseline's.
- R3 The parameters at log start must equal the baseline's, name for name and value for value.
- R4 The vehicle must never be in a failsafe, and a VTOL must never quadchute, between arming and disarming.
- R5 Every arm must be followed by a disarm, and the log must not end armed.
+ R3 The parameters in effect at every arm must equal the baseline's, name for name and value for value, and none may change in flight.
+ R4 The vehicle must never be in a failsafe, no failsafe flag the flight mode requires may be true, and a VTOL must never quadchute, between arming and disarming.
+ R5 Every arm must be followed by a disarm, on every vehicle_status instance, and the log must not end armed.
  R6 Every VTOL transition that starts must end, and none may be aborted.
  R7 (optional) Every command in the log must come from a MAVLink system and component listed in the rules file.
 """)
 results=[]
+def statuses(o):
+    return {f"R{i}": (line(o,f"R{i}").split()+["?","?"])[1] for i in range(1,8)}
 def check(rid, desc, tag, log, rules, baseline, extra=()):
     rc,o=seal(tag,log,rules,baseline,extra)
-    l=line(o,rid); ok=bool(re.match(rf"{rid}\s+FAIL",l))
+    l=line(o,rid); st=statuses(o)
+    # The fixture must fail its rule and no other: every other rule PASS, WARN or N/A.
+    others=sorted(r for r,v in st.items() if r!=rid and v=="FAIL")
+    ok=bool(re.match(rf"{rid}\s+FAIL",l)) and not others
     print(f"[{rid}] fixture: {desc}\n  command: sfr seal {log} --rules {rules} --baseline {baseline} ...   exit {rc}\n  {l}")
-    for d in [x for x in o.splitlines() if x.startswith("      ") or x.startswith("              -")][:2]: print("   "+d.strip()[:150])
-    print("  => rule FAILS as required" if ok else "  => PROBLEM: rule did not fail"); results.append((rid,ok))
+    ls=o.splitlines(); at=next((i for i,x in enumerate(ls) if x.startswith(rid+" ")),len(ls))
+    for d in [x for x in ls[at+1:at+3] if x.startswith("              -")]: print("   "+d.strip()[:150])
+    print("  other rules:", " ".join(f"{r} {v}" for r,v in st.items() if r!=rid))
+    print("  => this rule FAILS and no other does, as required" if ok else
+          f"  => PROBLEM: {'other rules fail too: '+', '.join(others) if others else 'the rule did not fail'}")
+    results.append((rid,ok))
 # a clean control
 rc,o=seal("control",VT,DR,VB); print("[control] golden vtol_transition: exit",rc,"; R-lines:", " | ".join(line(o,f"R{i}").split()[0]+" "+line(o,f"R{i}").split()[1] for i in range(1,8)))
 # R1
@@ -48,20 +58,22 @@ open(W+"/r3.params","w").write(b3)
 check("R3","baseline changes one parameter (MPC_XY_VEL_MAX) from the flown value","r3",VT,DR,W+"/r3.params")
 # R4 golden
 check("R4","golden log failsafe_gps_loss (GPS loss failsafe in flight)","r4","testdata/sitl/v1.17.0/failsafe_gps_loss.ulg",DR,"testdata/baselines/v1.17.0_failsafe_gps_loss.params")
-# R5: cut the VTOL log at a message boundary while armed
-src=open(f"{R}/{VT}","rb").read()
+# R5: cut a multicopter log at a message boundary while armed (a VTOL log cut mid-transition
+# would fail R6 too)
+MC="testdata/sitl/v1.17.0/mc_flight_1.ulg"; MB="testdata/baselines/v1.17.0_mc_flight_1.params"
+src=open(f"{R}/{MC}","rb").read()
 pos=16; msgs=[]
 while pos+3<=len(src):
     size=struct.unpack("<H",src[pos:pos+2])[0]; msgs.append((pos,3+size,src[pos+2:pos+3])); pos+=3+size
 dm=[m for m in msgs if m[2]==b"D"]
 cut=None
 for frac in (0.3,0.25,0.35,0.4,0.2):
-    c=dm[int(len(dm)*frac)][0]; open(W+"/r5.ulg","wb").write(src[:c]); rc,o=seal("r5probe",W+"/r5.ulg",DR,VB)
+    c=dm[int(len(dm)*frac)][0]; open(W+"/r5.ulg","wb").write(src[:c]); rc,o=seal("r5probe",W+"/r5.ulg",DR,MB)
     if re.match(r"R5\s+FAIL",line(o,"R5")): cut=c; break
     shutil.rmtree(W+"/r5probe",ignore_errors=True)
 print("R5 fixture cut offset:",cut)
 shutil.rmtree(W+"/r5probe",ignore_errors=True)
-check("R5","the golden VTOL log cut at a message boundary while armed (the log ends armed)","r5",W+"/r5.ulg",DR,VB)
+check("R5","the golden mc_flight_1 log cut at a message boundary while armed (the log ends armed)","r5",W+"/r5.ulg",DR,MB)
 # R6 golden
 check("R6","golden log vtol_transition_abort (a transition aborted)","r6","testdata/sitl/v1.17.0/vtol_transition_abort.ulg",DR,"testdata/baselines/v1.17.0_vtol_transition_abort.params")
 # R7 golden + own rules

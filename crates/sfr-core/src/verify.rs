@@ -108,20 +108,20 @@ pub fn integrity_line(v: &Verified) -> String {
     )
 }
 
-/// The `Flight rules:` line of `sfr verify` for a record that verified: the sealed overall
+/// The `Rule checks:` line of `sfr verify` for a record that verified: the sealed overall
 /// status, with the ids of the rules that failed.
-pub fn flight_rules_line(v: &Verified) -> String {
+pub fn rule_checks_line(v: &Verified) -> String {
     if v.status == "NO ARMED FLIGHT" {
         format!(
-            "Flight rules: {} (the log has no ARM and no DISARM, so no flight was checked; not a PASS)",
+            "Rule checks: {} (the log has no ARM and no DISARM, so no flight was checked; not a PASS)",
             v.status
         )
     } else if !v.failed_rules.is_empty() {
-        format!("Flight rules: {} ({})", v.status, v.failed_rules.join(", "))
+        format!("Rule checks: {} ({})", v.status, v.failed_rules.join(", "))
     } else if !v.warned_rules.is_empty() {
-        format!("Flight rules: {} ({})", v.status, v.warned_rules.join(", "))
+        format!("Rule checks: {} ({})", v.status, v.warned_rules.join(", "))
     } else {
-        format!("Flight rules: {}", v.status)
+        format!("Rule checks: {}", v.status)
     }
 }
 
@@ -147,12 +147,12 @@ pub fn report_line(checked: Option<&str>) -> String {
 /// The `Integrity:` line of `sfr verify` given neither `--pubkey` nor `--trust-anchor`.
 pub const INTEGRITY_NOT_CHECKED: &str = "Integrity: NOT CHECKED (no trusted key given)";
 
-/// The `Flight rules:` line of `sfr verify` for a record that was refused ([`REFUSED_PREFIX`]).
-pub const FLIGHT_RULES_REFUSED: &str =
-    "Flight rules: UNKNOWN (the record was refused, so its rule results are not accepted)";
+/// The `Rule checks:` line of `sfr verify` for a record that was refused ([`REFUSED_PREFIX`]).
+pub const RULE_CHECKS_REFUSED: &str =
+    "Rule checks: UNKNOWN (the record was refused, so its rule results are not accepted)";
 
-/// The `Flight rules:` line of `sfr verify` for a record that did not verify.
-pub const FLIGHT_RULES_UNKNOWN: &str = "Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)";
+/// The `Rule checks:` line of `sfr verify` for a record that did not verify.
+pub const RULE_CHECKS_UNKNOWN: &str = "Rule checks: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)";
 
 /// What `sfr verify` prints for a record that verified, after any evaluation key line.
 ///
@@ -175,7 +175,7 @@ pub fn verified_text(
     format!(
         "{}\n{}\nrecord    {record_path}\nreport    {report}\ntrust     {trust}\n{time}custody   {custody}\nkey       {}\nmerkle    {} ({} leaves)\ncrypto    {} (crate versions)\nseal time {} ({SEAL_TIME_CLAIM})\nevents    {}\n",
         integrity_line(v),
-        flight_rules_line(v),
+        rule_checks_line(v),
         v.fingerprint,
         v.merkle_root,
         v.leaf_count,
@@ -309,9 +309,9 @@ pub fn failed_text(m: &Mismatch, claimed: Option<&ClaimedSeal>) -> String {
         t.push_str(&format!("  and {} more\n", m.also.len() - 20));
     }
     t.push_str(if is_refusal(m) {
-        FLIGHT_RULES_REFUSED
+        RULE_CHECKS_REFUSED
     } else {
-        FLIGHT_RULES_UNKNOWN
+        RULE_CHECKS_UNKNOWN
     });
     t.push('\n');
     t.push_str(&claimed_lines(claimed));

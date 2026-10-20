@@ -154,6 +154,24 @@ jobs:
           python3 -I scripts/benchmark/make_segments.py --check scripts/benchmark/vtol_transition.segments \
             testdata/sitl/v1.17.0/vtol_transition.ulg testdata/sitl/v1.17.0/vtol_transition.ulg
 
+  oracle-differential:
+    name: sfr and the pyulog oracle agree, run now, on every golden and false-pass log
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain and the test-only Python packages (hash-pinned); build sfr
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --require-hashes -r scripts/testdata/requirements-dev.txt
+          cargo build --locked -p sfr
+      - name: Differential test (scripts/testdata/oracle_differential.py); any difference fails
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/venv/bin/python" -I scripts/testdata/oracle_differential.py target/debug/sfr | tee oracle-differential.log
+          tail -1 oracle-differential.log >> "$GITHUB_STEP_SUMMARY"
+
   fuzz:
     name: fuzz ulog_ingest, sfr_verify and rules_parse for 60 s each (SPEC B1.10)
     runs-on: ubuntu-24.04

@@ -1136,7 +1136,7 @@ fn seal_key_sources_and_seal_time_are_checked() {
 }
 
 /// `verify` reports integrity and the flight rules on separate lines: a record that verifies and
-/// whose rules failed is `Integrity: VERIFIED` and `Flight rules: FAIL (<ids>)`, exit 0, in text
+/// whose rules failed is `Integrity: VERIFIED` and `Rule checks: FAIL (<ids>)`, exit 0, in text
 /// and in JSON.
 #[test]
 fn integrity_and_flight_rules_are_reported_apart() {
@@ -1147,7 +1147,7 @@ fn integrity_and_flight_rules_are_reported_apart() {
     let out = String::from_utf8_lossy(&o.stdout).to_string();
     assert!(
         out.starts_with(
-            "EVALUATION KEY: not for operational use\nIntegrity: VERIFIED (record)\nFlight rules: FAIL (R7)\n"
+            "EVALUATION KEY: not for operational use\nIntegrity: VERIFIED (record)\nRule checks: FAIL (R7)\n"
         ),
         "{out}"
     );
@@ -1177,7 +1177,7 @@ fn integrity_and_flight_rules_are_reported_apart() {
         key,
     ]);
     assert!(
-        String::from_utf8_lossy(&o.stdout).contains("\nFlight rules: WARN (R4)\n"),
+        String::from_utf8_lossy(&o.stdout).contains("\nRule checks: WARN (R4)\n"),
         "{}",
         text(&o)
     );
@@ -1198,7 +1198,7 @@ fn integrity_and_flight_rules_are_reported_apart() {
     let out = String::from_utf8_lossy(&o.stdout).to_string();
     assert!(out.contains("\nIntegrity: FAILED: "), "{out}");
     assert!(
-        out.contains("\nFlight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)\n"),
+        out.contains("\nRule checks: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)\n"),
         "{out}"
     );
     // The key and custody it names are shown, marked as unproven claims.
@@ -1220,7 +1220,7 @@ fn verify_without_a_trusted_key_says_the_signer_is_not_checked() {
     let out = String::from_utf8_lossy(&o.stdout).to_string();
     for part in [
         "Integrity: NOT CHECKED (no trusted key given)\n",
-        "Flight rules: UNKNOWN (the record's integrity was not checked)\n",
+        "Rule checks: UNKNOWN (the record's integrity was not checked)\n",
         "key       sha256:1ab979d4bed49693df5e1482cfb3a5432a6dd632de3c95dc24f7c9896c7eec45 (named by the record, not proven)\n",
         "custody   unattested (declared file-evaluation)\n",
         "through a channel you trust",

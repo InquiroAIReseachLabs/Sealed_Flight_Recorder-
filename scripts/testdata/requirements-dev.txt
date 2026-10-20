@@ -1,0 +1,11 @@
+# Test-only Python packages for the pyulog oracle (scripts/testdata/oracle.py) and the
+# differential test (scripts/testdata/oracle_differential.py). Never part of sfr or a release.
+# Install, outside the repository: python3 -m venv ~/sfr-venv &&
+#   ~/sfr-venv/bin/pip install --require-hashes -r scripts/testdata/requirements-dev.txt
+# then SFR_ORACLE_PYTHON=~/sfr-venv/bin/python scripts/validate.sh
+# The hashes are of the x86_64 Linux wheels for CPython 3.12 and 3.13.
+pyulog==1.2.4 \
+    --hash=sha256:6830f2c2649a77b00c318a3e519fe87badc8c5f45b8c21cf17a279600d5f3db6
+numpy==2.2.6 \
+    --hash=sha256:fd83c01228a688733f1ded5201c678f0c53ecc1006ffbc404db9f7a899ac6249 \
+    --hash=sha256:1bc23a79bfabc5d056d106f9befb8d50c31ced2fbc70eedb8155aec74a45798f

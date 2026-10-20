@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerates the golden test data and checks it against the independent oracle.
+# Regenerates the golden test data and checks it against the pyulog oracle (oracle.py).
 #
 #   scripts/testdata/regenerate.sh baselines   # testdata/baselines/*.params   (needs pyulog)
 #   scripts/testdata/regenerate.sh oracle      # testdata/expected/oracle/*    (needs pyulog, numpy)
@@ -8,8 +8,9 @@
 #   scripts/testdata/regenerate.sh list        # one "name log-path" line per golden log
 #
 # The expected files are sfr's own `seal --dry-run --json` output. They count as reviewed
-# only while `compare` reports 0 differences against the oracle, which is written from
-# docs/SPEC.md on pyulog and shares no code with sfr.
+# only while `compare` reports 0 differences against the oracle, a test-only second
+# implementation on pyulog that shares no code with sfr (its header says what it is). `compare`
+# reads the committed oracle outputs; scripts/testdata/oracle_differential.py runs both now.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 

@@ -7,7 +7,9 @@ EVALUATION KEY: not for operational use
 
 **Status: WARN**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0. This report is generated from the record gz\_quadtailsitter\_transition\.sfr alone.
 
-## Rules
+## Rule checks
+
+Results are computed from data the log declares about itself; see VALIDATION.md.
 
 | Rule | Status | Name | Found |
 |---|---|---|---|
