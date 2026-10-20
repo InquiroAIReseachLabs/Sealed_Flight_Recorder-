@@ -47,7 +47,7 @@ An access entry holds the record's root, the recipient's key fingerprint, what w
 
 ## Standards
 
-RFC 6962 and RFC 9162, RFC 8785 (canonical leaves, unchanged), the `age` format, C2SP `tlog-cosignature` and witness specifications, and the record format.
+RFC 6962 and RFC 9162, RFC 8785 (canonical leaves, unchanged), the `age` format, C2SP `tlog-cosignature` v1.1.0 and `tlog-witness` v1.1.0, and the record format.
 
 ## Failure modes
 

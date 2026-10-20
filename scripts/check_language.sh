@@ -155,6 +155,13 @@ scan_codenames() {
   return 0
 }
 scan_claims() { scan_public "$1" "$CLAIM_RE"; }
+# A record shows integrity and a signer: never call it or its log authentic, or a flight "end to
+# end sealed" ("authentication", as in TLS server authentication, is another word).
+OVERCLAIM_RE='\bauthentic\b|\bend[ -]to[ -]end[ -]sealed\b'
+scan_overclaims() { scan_public "$1" "$OVERCLAIM_RE"; }
+# The SWGDE documents 06-F-001-2.0 and 18-F-002-2.0 are drafts: cited only on a line that says so.
+SWGDE_RE='\b(06-F-001|18-F-002)\b'
+scan_swgde() { scan_public "$1" "$SWGDE_RE" 's/.*\bdrafts?\b.*//I'; }
 scan_production() { scan_public "$1" "$PRODUCTION_RE" "$PRODUCTION_ALLOW"; }
 # Case matters for legal forms ("inc" and "corp" are ordinary in code words), so grep -i is undone.
 scan_companies() {
@@ -262,12 +269,21 @@ if [ "${1:-}" = "--self-test" ]; then
   for n in 1 2 3 4; do printf '%s\n' "$out" | grep -q "^docs/INTERNAL.md:$n:" || { echo "FAIL: self-test: internal wording on line $n missed"; exit 1; }; done
   printf '%s\n' "$out" | grep -q '^internal.rs:1:' || { echo "FAIL: self-test: internal wording in a source file missed"; exit 1; }
   printf '%s\n' "$out" | grep -q 'INTERNAL_OK' && { echo "FAIL: self-test: ordinary wording flagged as internal: $out"; exit 1; }
+  printf 'The record is authentic.\nAn end-to-end sealed flight.\nAuthentic logs only.\n' > "$tmp/docs/OVER.md"
+  printf 'TLS server authentication is refused.\n' > "$tmp/docs/OVER_OK.md"
+  out="$(scan_overclaims "$tmp" || true)"
+  for n in 1 2 3; do printf '%s\n' "$out" | grep -q "^docs/OVER.md:$n:" || { echo "FAIL: self-test: overclaim on line $n missed"; exit 1; }; done
+  printf '%s\n' "$out" | grep -q 'OVER_OK' && { echo "FAIL: self-test: authentication flagged: $out"; exit 1; }
+  printf 'Follows SWGDE 06-F-001-2.0.\nSee 18-F-002-2.0, approved.\nSWGDE 18-F-002-2.0 is a draft.\n' > "$tmp/docs/SWGDE.md"
+  out="$(scan_swgde "$tmp" || true)"
+  for n in 1 2; do printf '%s\n' "$out" | grep -q "^docs/SWGDE.md:$n:" || { echo "FAIL: self-test: SWGDE cite on line $n missed"; exit 1; }; done
+  printf '%s\n' "$out" | grep -q '^docs/SWGDE.md:3:' && { echo "FAIL: self-test: a cite that says draft was flagged"; exit 1; }
   for scan in scan_codenames scan_claims scan_production scan_companies; do
     out="$($scan "$tmp" || true)"
     printf '%s\n' "$out" | grep -q -E 'FINE.md|SPEC.md' && { echo "FAIL: self-test: $scan flagged an allowed or exempt file: $out"; exit 1; }
   done
 
-  echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing; weapon and strike terms; public-doc codenames, claim words, production, legal forms; pending wording; internal wording)"
+  echo "PASS: language self-test (em-dash in tracked, untracked, and .rs files; forbidden terms; compliance phrasing; weapon and strike terms; public-doc codenames, claim words, production, legal forms, authentic and end to end sealed, SWGDE drafts; pending wording; internal wording)"
   exit 0
 fi
 
@@ -288,6 +304,22 @@ if hits="$(scan_compliance "$root")"; then
   echo "PASS: no compliance claims (SPEC B1.12)"
 else
   echo "FAIL: compliance claim found (SPEC B1.12):"
+  printf '%s\n' "$hits"
+  status=1
+fi
+
+if hits="$(scan_overclaims "$root")"; then
+  echo "PASS: no authentic or end to end sealed wording in a public doc"
+else
+  echo "FAIL: a public doc calls a record authentic or a flight end to end sealed:"
+  printf '%s\n' "$hits"
+  status=1
+fi
+
+if hits="$(scan_swgde "$root")"; then
+  echo "PASS: SWGDE 06-F-001 and 18-F-002 cited only as drafts"
+else
+  echo "FAIL: SWGDE 06-F-001 or 18-F-002 cited without saying it is a draft:"
   printf '%s\n' "$hits"
   status=1
 fi
