@@ -10,7 +10,7 @@ description = "Sealed Flight Record engine: ingest, events, rules, record, Merkl
 path = "src/lib.rs"
 
 [dependencies]
-# Cryptography on every target (SPEC B1.10 Crypto): SHA-256, Ed25519, and the supplementary BLAKE3
+# Cryptography on every target (SPEC B1.10 Crypto): SHA-256, Ed25519, and the BLAKE3 index
 # digest of the raw log bytes (never anchors trust).
 sha2 = { workspace = true }
 ed25519-dalek = { workspace = true }
@@ -20,7 +20,7 @@ toml = { workspace = true }
 
 # On aarch64 blake3's NEON code is C, which needs a C cross compiler; with no_neon it is Rust
 # only, so rust-lld links every target with no C toolchain (scripts/build_release.sh). The
-# digest is the same; only the speed of the supplementary BLAKE3 digest changes.
+# digest is the same; only the speed of the BLAKE3 index digest changes.
 [target.'cfg(target_arch = "aarch64")'.dependencies]
 blake3 = { workspace = true, features = ["no_neon"] }
 

@@ -217,6 +217,26 @@ fn hardware_key(uri: &str) -> Result<Box<dyn Signer>, Failure> {
     key.map_err(|e| fail(exit_code::USAGE, format!("--key-uri: {e}")))
 }
 
+/// The warning for a key file that other users can read or write, or `None`. A key file is
+/// written with mode 0600 by `keygen`; a file that group or other can access may have been read by
+/// someone else, and the private key is all that makes a record the sealer's.
+fn key_file_mode_warning(path: &str) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path).ok()?.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Some(format!(
+                "sfr: warning: key file {path} has mode {mode:04o}: group or other users can access it, \
+                 and the key may have been copied. Run `chmod 600 {path}`, and make a new key if anyone else could read it"
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    None
+}
+
 fn file_name(path: &str) -> String {
     Path::new(path)
         .file_name()
@@ -496,7 +516,13 @@ fn table(
     for (k, v) in [
         ("log", format!("{} ({} bytes)", id.file_name, id.size)),
         ("sha256", sfr_core::hex(&id.sha256)),
-        ("blake3", sfr_core::hex(&id.blake3)),
+        (
+            "blake3",
+            format!(
+                "{} (index only, adds no security)",
+                sfr_core::hex(&id.blake3)
+            ),
+        ),
         ("firmware", firmware),
         ("crypto", crates_line(crypto)),
     ] {
@@ -604,6 +630,9 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             ));
         }
         let text = Zeroizing::new(read_text(path, "key file", exit_code::USAGE)?);
+        if let Some(warning) = key_file_mode_warning(path) {
+            let _ = writeln!(io::stderr().lock(), "{}", terminal_safe(&warning));
+        }
         let der = Zeroizing::new(
             pem_decode(&text, "PRIVATE KEY")
                 .map_err(|e| fail(exit_code::USAGE, format!("key file {path}: {e}")))?,

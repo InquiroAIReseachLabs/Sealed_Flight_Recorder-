@@ -205,7 +205,7 @@ sfr seal --dry-run: v1.0 evaluation release; nothing is signed or written
 
 log       mc_flight_1.ulg (8536869 bytes)
 sha256    6e7b6956c20422aa9f31a13e7f074e80cba85760928fd895eed941e9492823fc
-blake3    260e044bc265ffd85abb243382d5eb555a65b696ec797438828562d49827467f
+blake3    260e044bc265ffd85abb243382d5eb555a65b696ec797438828562d49827467f (index only, adds no security)
 firmware  1.17.0 (d6f12ad1c4f70ad3230afd7d86e971421e02fef4)
 crypto    blake3 1.8.7, ed25519-dalek 3.0.0, sha2 0.11.1 (crate versions)
 

@@ -193,7 +193,7 @@ pub struct LogSummary {
     pub size: u64,
     /// SHA-256, lowercase hex.
     pub sha256: String,
-    /// BLAKE3, lowercase hex (supplementary).
+    /// BLAKE3, lowercase hex: an index for finding the file, not part of the seal.
     pub blake3: String,
     /// Firmware version and git hash, or `unknown`.
     pub firmware: String,
@@ -444,7 +444,13 @@ fn table(ing: &Ingested, eval: &Evaluation, rules: &Rules, baseline: &Baseline) 
     for (k, v) in [
         ("log", format!("{} ({} bytes)", id.file_name, id.size)),
         ("sha256", sfr_core::hex(&id.sha256)),
-        ("blake3", sfr_core::hex(&id.blake3)),
+        (
+            "blake3",
+            format!(
+                "{} (index only, adds no security)",
+                sfr_core::hex(&id.blake3)
+            ),
+        ),
         ("firmware", firmware),
         ("crypto", crates_line(&RustCrypto)),
     ] {

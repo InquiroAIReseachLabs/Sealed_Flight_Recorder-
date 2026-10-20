@@ -71,7 +71,7 @@ These are reported, not a rule failure: R3 compares the parameters at log start 
 - Size (bytes): 15797162
 - Firmware: 1\.17\.0 (git d6f12ad1c4f70ad3230afd7d86e971421e02fef4)
 - SHA-256: `56524cc22d68b3125648386600b3dfa0811a08c65d3912613279be91c96f46a1`
-- BLAKE3 (supplementary): `a01cacdb446d5fcfb0901d9371983315fa91b7935a7739d7f6aa98e3122d227c`
+- BLAKE3 (index only, adds no security): `a01cacdb446d5fcfb0901d9371983315fa91b7935a7739d7f6aa98e3122d227c`
 - VTOL: false
 - MAV_TYPE: 2
 

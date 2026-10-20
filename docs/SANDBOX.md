@@ -124,7 +124,7 @@ When nothing was written: `{ sealed: false, exitCode: 3 or 4, message, text }`, 
 | `sealed_topic_instances` | the sealed topic instances differ | `sealed`, `found` |
 | `config` | the configuration's firmware or watched parameters differ | `field`, `sealed`, `found` |
 | `log` | the log's firmware or vehicle differs | `field`, `sealed`, `found` |
-| `log_digest` | the log's SHA-256, BLAKE3 or size differs | `field`, `sealed`, `found`, `note` |
+| `log_digest` | the log's SHA-256 or size differs, or its BLAKE3 index (which adds no security: SHA-256 is the seal) | `field`, `sealed`, `found`, `note` |
 | `log_unparseable` | the log's digest matches but it no longer parses | `note` |
 | `merkle_root` | a leaf changed after sealing | `sealed` (recorded root), `found` (computed root) |
 | `merkle_leaf_count` | the leaf count differs | `sealed`, `found` |
