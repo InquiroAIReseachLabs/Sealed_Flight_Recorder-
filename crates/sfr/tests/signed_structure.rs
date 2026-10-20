@@ -1,5 +1,5 @@
-//! The signed structure of a record (SPEC B1.7, schema 3 and later): every Merkle leaf is hashed with the
-//! tag of its section, and the signature covers the tree size and the number of leaves in each
+//! The signed structure of a record (SPEC B1.7, schema 3 and later): every Merkle leaf is hashed with
+//! the tag of its section, and the signature covers the tree size and the number of leaves in each
 //! section. Before schema 3, a leaf moved between sections left the root and the signature valid;
 //! only the structural checks of the sections noticed.
 // A panicking test is a failing test, so tests may use expect and unwrap.

@@ -181,9 +181,9 @@ The signature is pure Ed25519 (RFC 8032, no prehash) over that payload, stored a
 1. The size is at most `MAX_RECORD_BYTES`.
 2. `schema_version` is `4`. Any other value is rejected, never guessed at; `sfr` names an unknown version when the file parses within the value subset, even if not canonical, and otherwise reports the parse error.
 3. The bytes are canonical, and the object holds exactly the thirteen fields.
-4. Every `results` element is an object whose `id` is a rule id, in strictly increasing order; every `sealed_topics` element is an object with a string `topic` and an integer `multi_id`, in strictly increasing order; event `i` has `seq` `i`.
+4. Every `results` element is an object whose `id` is a rule id, in strictly increasing order, with a `status` of `PASS`, `WARN`, `FAIL` or `N/A`; R1 to R7 each appear exactly once, and any other id is X1 to X5; every `sealed_topics` element is an object with a string `topic` and an integer `multi_id`, in strictly increasing order; event `i` has `seq` `i`.
 5. `merkle` holds exactly its four members, the algorithm is `sha256-rfc6962`, and `leaf_count`, `root` and `sections` equal the values recomputed from the leaves.
-6. `rules.text` and `rules.sha256` are strings, and `rules.sha256` is the SHA-256 of `rules.text`.
+6. `rules.text` and `rules.sha256` are strings, `rules.sha256` is the SHA-256 of `rules.text`, and `rules.text` is a rules file `sfr` reads.
 7. `status` is a string equal to the status computed from the results.
 8. `seal.key_fingerprint` is a string, the fingerprint of the given public key.
 9. `signature` holds exactly `algorithm` `ed25519` and `value`; `value` is 128 and `merkle.root` 64 lowercase hex digits; the signature over the payload, built from the recorded root and the leaf counts the arrays hold, verifies under the given key.
@@ -258,7 +258,7 @@ They need:
 - **OpenSSL 3.0 or later** for the signature: `openssl pkeyutl -rawin` (Ed25519 over the raw message) arrived in OpenSSL 3.0, and 1.1.1 has no `-rawin` (not run). The commands were also run with OpenSSL `3.0.13`. LibreSSL and other programs installed as `openssl` were not tested. The docs job in `.github/workflows/ci.yml` prints the version it runs.
 - **b3sum** for BLAKE3 (`cargo install b3sum --locked`, or a package); CI installs b3sum `1.8.7`, the version of the `blake3` crate `sfr` uses.
 - **coreutils** (`sha256sum`, `wc`), `grep`, `sed` and **bash**, whose `printf` turns hex into bytes.
-- **Python 3**, standard library only, for the Merkle root and the structural checks.
+- **Python 3.11 or later**, standard library only, for the reference verifier (step 4).
 
 The commands write only into `try/`.
 
@@ -327,129 +327,16 @@ Signature Verified Successfully
 
 `openssl pkeyutl -verify` exits 0 and prints `Signature Verified Successfully` only for a good signature by that key; for any other it prints `Signature Verification Failure` and exits 1.
 
-### 4. Structure, order, digests and the Merkle root
+### 4. Every standalone check: the reference verifier
 
-This script does every standalone check above except the signature and the key fingerprint, which steps 2 and 3 do: canonical form, field set, member types, leaf order, rules digest, status, custody value, and the Merkle root and leaf count recomputed from the content.
+`tools/reference_verifier/sfr_ref_verify.py` is a separate program, written from this page alone: it imports nothing from `sfr`, needs only the Python 3.11+ standard library, and implements Ed25519 itself (RFC 8032). It does every standalone check above: strict JSON, canonical form, field set and member types, results R1 to R7 exactly once each with known statuses, leaf order, rules digest, the overall status, the flags, custody value, the Merkle root, the key fingerprint and the signature. Its header lists what it does not check: certificate chains and CRLs, the custody policy (it accepts an evaluation key), the report, the log, and the rules file beyond its TOML syntax and ignore list. Its test vectors (`tools/reference_verifier/vectors/`, written by `make_vectors.py`) include records built to trip a lenient JSON reader; `crates/sfr/tests/reference_verifier.rs` requires it and `sfr verify` to give each vector the verdict `expected.json` lists.
 
 ```sh doc-test
-mkdir -p try
-cat > try/sfr_check.py <<'EOF'
-# sfr_check.py: standalone checks of a schema 4 record, without sfr (docs/RECORD_FORMAT.md).
-# Everything but the signature, which openssl checks. Python 3 standard library only.
-import hashlib, json, re, sys
-
-def quote(s):
-    esc = {'"': '\\"', "\\": "\\\\", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
-    return '"' + "".join(esc.get(c) or ("\\u%04x" % ord(c) if ord(c) < 0x20 else c) for c in s) + '"'
-
-def jcs(v):  # RFC 8785 for the record's subset: null, booleans, safe integers, strings, arrays, objects
-    if v is None or isinstance(v, bool):
-        return {None: "null", True: "true", False: "false"}[v]
-    if isinstance(v, int) and abs(v) <= 2**53 - 1:
-        return str(v)
-    if isinstance(v, str):
-        return quote(v)
-    if isinstance(v, list):
-        return "[" + ",".join(jcs(x) for x in v) + "]"
-    if isinstance(v, dict):  # keys in UTF-16 code unit order
-        keys = sorted(v, key=lambda k: k.encode("utf-16-be"))
-        return "{" + ",".join(quote(k) + ":" + jcs(v[k]) for k in keys) + "}"
-    raise ValueError("not in the record's value subset: %r" % (v,))
-
-def unique(pairs):
-    if len({k for k, _ in pairs}) != len(pairs):
-        raise ValueError("duplicate key")
-    return dict(pairs)
-
-def no_float(text):
-    raise ValueError("floating-point number " + text)
-
-def sha256(b):
-    return hashlib.sha256(b).digest()
-
-def mth(h):  # RFC 6962 Merkle tree hash of leaf hashes
-    if len(h) == 1:
-        return h[0]
-    k = 1
-    while k * 2 < len(h):
-        k *= 2
-    return sha256(b"\x01" + mth(h[:k]) + mth(h[k:]))
-
-def check(path):
-    raw = open(path, "rb").read()
-    r = json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_float=no_float, parse_constant=no_float)
-    if r.get("schema_version") != 4:
-        return "unknown schema_version %r; this checker knows 4 only" % r.get("schema_version")
-    if jcs(r).encode("utf-8") != raw:
-        return "not in canonical form"
-    fields = {"schema_version", "tool", "seal", "log", "config", "baseline", "rules", "results",
-              "sealed_topics", "events", "status", "merkle", "signature"}
-    if set(r) != fields:
-        return "fields differ from the schema: %s" % sorted(set(r) ^ fields)
-    obj = lambda v, *keys: isinstance(v, dict) and all(k in v for k in keys)
-    if not (obj(r["seal"], "key_custody", "key_fingerprint", "time_utc", "crypto_crates")
-            and obj(r["merkle"]) and obj(r["signature"], "value") and obj(r["rules"], "text", "sha256")
-            and all(isinstance(x, list) for x in (r["results"], r["sealed_topics"], r["events"]))):
-        return "a field is missing or of the wrong type"
-    seal = r["seal"]
-    if not (all(isinstance(seal[k], str) for k in ("key_custody", "key_fingerprint", "time_utc"))
-            and isinstance(seal["crypto_crates"], list)
-            and all(obj(c, "name", "version") and isinstance(c["name"], str) and isinstance(c["version"], str)
-                    for c in seal["crypto_crates"])):
-        return "a seal member is missing or of the wrong type"
-    ids = [re.fullmatch(r"([A-Z])([1-9][0-9]*)", x["id"]) if obj(x, "id") and isinstance(x["id"], str) else None
-           for x in r["results"]]
-    if not all(ids) or [(m[1], int(m[2])) for m in ids] != sorted({(m[1], int(m[2])) for m in ids}):
-        return "results are not in strictly increasing rule-id order"
-    if not all(obj(t, "topic", "multi_id") and isinstance(t["topic"], str) and type(t["multi_id"]) is int
-               for t in r["sealed_topics"]):
-        return "a sealed topic has no topic and multi_id"
-    topics = [(t["topic"], t["multi_id"]) for t in r["sealed_topics"]]
-    if topics != sorted(set(topics)):
-        return "sealed topics are not in strictly increasing topic and multi_id order"
-    if [e.get("seq") if isinstance(e, dict) else None for e in r["events"]] != list(range(len(r["events"]))):
-        return "events are not in sequence order"
-    text, digest = r["rules"]["text"], r["rules"]["sha256"]
-    if not (isinstance(text, str) and isinstance(digest, str)) or digest != sha256(text.encode("utf-8")).hex():
-        return "rules.sha256 does not match rules.text"
-    st = [(x.get("id"), x.get("status")) if obj(x) else (None, None) for x in r["results"]]
-    want = ("FAIL" if any(s == "FAIL" for _, s in st) else "NO ARMED FLIGHT" if ("R5", "N/A") in st
-            else "WARN" if any(s == "WARN" for _, s in st) else "PASS")
-    if r["status"] != want:
-        return "status disagrees with the results"
-    if seal["key_custody"] not in ("pkcs11-token", "tpm-sealed", "file-evaluation"):
-        return "unknown key custody"
-    if not all(isinstance(seal.get(k), bool) for k in ("allow_untested_version", "allow_ignore_all")):
-        return "seal.allow_untested_version and seal.allow_ignore_all must be booleans"
-    context = {"schema_version": r["schema_version"], "tool": r["tool"], "seal": r["seal"]}
-    # Each section's leaves carry the section's tag byte, in the hash and in the signed counts.
-    sections = [("seal_context", 1, [context]), ("log", 2, [r["log"]]), ("config", 3, [r["config"]]),
-                ("baseline", 4, [r["baseline"]]), ("rules", 5, [r["rules"]]), ("results", 6, r["results"]),
-                ("sealed_topics", 7, r["sealed_topics"]), ("events", 8, r["events"])]
-    leaves = [(tag, x) for _, tag, xs in sections for x in xs]
-    root = mth([sha256(b"\x00" + bytes([tag]) + jcs(x).encode("utf-8")) for tag, x in leaves]).hex()
-    counts = {name: len(xs) for name, _, xs in sections}
-    if r["merkle"] != {"algorithm": "sha256-rfc6962", "leaf_count": len(leaves), "root": root, "sections": counts}:
-        return "merkle differs: computed root %s over %d leaves" % (root, len(leaves))
-    sig = r["signature"]
-    if set(sig) != {"algorithm", "value"} or sig["algorithm"] != "ed25519" \
-            or not (isinstance(sig["value"], str) and re.fullmatch(r"[0-9a-f]{128}", sig["value"])):
-        return "signature must hold exactly algorithm ed25519 and a value of 128 lowercase hex digits"
-    print("structure, order, rules digest and status: ok")
-    print("merkle root %s over %d leaves: matches the record" % (root, len(leaves)))
-    return None
-
-problem = check(sys.argv[1])
-if problem:
-    print("FAILED: " + problem)
-    sys.exit(1)
-EOF
-python3 -I try/sfr_check.py examples/reports/vtol_transition.sfr
+python3 -I tools/reference_verifier/sfr_ref_verify.py examples/reports/vtol_transition.sfr examples/reports/sfr.pub
 ```
 
 ```text doc-output
-structure, order, rules digest and status: ok
-merkle root cb0183bc5b2bb55bd02c2d2a2f592cb10f60c36520d2ab22f8701c3e66ff9375 over 34 leaves: matches the record
+VERIFIED
 ```
 
 Steps 2 and 3 show the record is unchanged since the holder of that key signed it. Step 1 shows the log is the one it was sealed from.
@@ -462,11 +349,11 @@ Change the command id of the first COMMAND event in `examples/reports/vtol_trans
 mkdir -p try
 sed 's/"command":211,/"command":311,/' examples/reports/vtol_transition.sfr > try/changed.sfr
 rc=0
-python3 -I try/sfr_check.py try/changed.sfr || rc=$?
+python3 -I tools/reference_verifier/sfr_ref_verify.py try/changed.sfr examples/reports/sfr.pub || rc=$?
 echo "exit $rc"
 ```
 
 ```text doc-output
-FAILED: merkle differs: computed root 78ad1b57928f3c6ab6dc6407ead4012b77ed6fd96e3c84f1d9f782515640587f over 34 leaves
+FAILED: merkle differs from the leaves: root 78ad1b57928f3c6ab6dc6407ead4012b77ed6fd96e3c84f1d9f782515640587f over 34 leaves
 exit 1
 ```

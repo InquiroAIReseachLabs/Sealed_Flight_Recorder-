@@ -50,6 +50,8 @@ run "the dev-helper feature does not build in a release profile" check_dev_helpe
 run "fuzz targets type-check (fuzz/ is not in the workspace)" \
   cargo check --manifest-path fuzz/Cargo.toml --locked --bins --quiet
 run "golden files agree with the independent oracle" scripts/testdata/regenerate.sh compare
+run "reference verifier vectors (tools/reference_verifier)" python3 -I tools/reference_verifier/sfr_ref_verify.py --self-test
+run "reference verifier vectors are what their generator writes" python3 -I tools/reference_verifier/make_vectors.py --check
 run "test certificates match their script (testdata/pki)" scripts/testdata/make_test_pki.sh --check
 
 # 3. No networking or async-runtime crates; no std::net (SPEC B1.10, "No network").
@@ -92,7 +94,7 @@ check_script_syntax() {
   sh -n scripts/run_demo.sh || { echo "  sh -n: scripts/run_demo.sh"; ok=1; }
   python3 -I -c 'import ast, sys
 for f in sys.argv[1:]:
-    ast.parse(open(f).read(), f)' scripts/claims_audit/*.py || { echo "  python parse: scripts/claims_audit"; ok=1; }
+    ast.parse(open(f).read(), f)' scripts/claims_audit/*.py tools/reference_verifier/*.py || { echo "  python parse: scripts/claims_audit"; ok=1; }
   return $ok
 }
 run "every script parses" check_script_syntax
