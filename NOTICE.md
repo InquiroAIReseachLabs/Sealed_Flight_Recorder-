@@ -44,7 +44,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## Direct dependencies
 
-The crates `sfr` depends on directly, with the licenses `cargo deny --all-features list` reports (`Cargo.lock` pins the versions). Each crate's source carries its license text, and the SBOM of each build lists every crate in the graph with its license.
+The crates `sfr` depends on directly, with the licenses `cargo deny --all-features list` reports (`Cargo.lock` pins the versions; `deny.toml` lists the licenses allowed). Each crate's source carries its license text, and the SBOM of each build lists every crate in the graph with its license.
 
 | Crate | Version | License |
 |---|---|---|
@@ -53,5 +53,4 @@ The crates `sfr` depends on directly, with the licenses `cargo deny --all-featur
 | `getrandom` | 0.4.3 | MIT OR Apache-2.0 |
 | `sha2` | 0.11.1 | MIT OR Apache-2.0 |
 | `toml` | 0.9.12 | MIT OR Apache-2.0 |
-| `wasm-bindgen` | 0.2.129 | MIT OR Apache-2.0 |
 | `zeroize` | 1.9.1 | Apache-2.0 OR MIT |

@@ -4,10 +4,9 @@
 # (pinned nightly and cargo-fuzz), the release-build verify timing gate, the armv7 job (QEMU),
 # the release jobs (static builds twice from clean, SBOMs, demo image under docker, aarch64 and
 # armv7 records under QEMU, benchmark, SHA256SUMS), the release and post-release workflows
-# themselves (they run on a tag, after a release, and by hand), and the sandbox browser gate (wasm-bindgen-cli
-# and three browsers), and the hardware key custody job (SoftHSM v2 and swtpm: scripts/hardware_keys.sh);
-# scripts/build_release.sh, scripts/run_demo.sh, scripts/build_site.sh with
-# tests/browser/sandbox.test.mjs, and docs/RELEASE.md run those by hand. Exits non-zero on any FAIL.
+# themselves (they run on a tag, after a release, and by hand), and the hardware key custody job (SoftHSM v2
+# and swtpm: scripts/hardware_keys.sh);
+# scripts/build_release.sh, scripts/run_demo.sh and docs/RELEASE.md run those by hand. Exits non-zero on any FAIL.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,11 +33,18 @@ run "forbid(unsafe_code) in every crate root" check_forbid_unsafe
 # 2. Formatting, lints as errors, tests, all --locked (SPEC B1.10, "Code quality").
 run "rustfmt --check" cargo fmt --all --check
 run "clippy -D warnings" cargo clippy --workspace --all-targets --locked --quiet -- -D warnings
-# rust-toolchain.toml lists no cross targets; the wasm32 target is added here, as the sandbox CI job does.
-run "wasm32 target installed" rustup target add wasm32-unknown-unknown
-run "clippy -D warnings, sfr-wasm for wasm32 (the page's bindings)" \
-  cargo clippy -p sfr-wasm --target wasm32-unknown-unknown --locked --quiet -- -D warnings
 run "cargo test --locked" cargo test --workspace --locked --quiet
+# The dev-helper feature (tests only: SFR_PKCS11_HELPER names the PKCS#11 helper) must never
+# build in a release profile.
+check_dev_helper_refused_in_release() {
+  local out
+  if out="$(cargo check --release --locked -p sfr --features dev-helper --quiet 2>&1)"; then
+    echo "  cargo check --release --features dev-helper succeeded"; return 1
+  fi
+  grep -q "the dev-helper feature is for test builds only" <<<"$out" \
+    || { echo "$out" | tail -5; return 1; }
+}
+run "the dev-helper feature does not build in a release profile" check_dev_helper_refused_in_release
 # fuzz/ is outside the workspace, so the commands above never compile its targets; the fuzz CI job
 # does, on nightly. A type check on the pinned toolchain catches a changed engine API at once.
 run "fuzz targets type-check (fuzz/ is not in the workspace)" \
@@ -69,7 +75,6 @@ run "no private key self-test" scripts/check_no_private_keys.sh --self-test
 run "no private key in the repository" scripts/check_no_private_keys.sh
 run "no email address self-test" scripts/check_no_emails.sh --self-test
 run "no email address in the repository" scripts/check_no_emails.sh
-run "engine bundle check self-test" scripts/check_engine_bundle.sh --self-test
 run "release signing self-test" scripts/release_sign.sh --self-test
 # The release workflows: their rules, the hygiene scan of
 # every release file, and the whole offline signing flow with eight attacks on it. The hygiene

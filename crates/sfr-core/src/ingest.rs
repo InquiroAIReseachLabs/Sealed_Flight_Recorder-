@@ -148,7 +148,8 @@ pub struct LogIdentity {
     pub size: u64,
     /// SHA-256 of the raw bytes.
     pub sha256: [u8; 32],
-    /// BLAKE3 of the raw bytes: an index for finding the file, not part of the seal.
+    /// BLAKE3 of the raw bytes: sealed and checked by `verify --ulog` (a mismatch fails), but it adds
+    /// no security beyond `sha256`, which the seal rests on.
     pub blake3: [u8; 32],
     /// Firmware.
     pub firmware: Firmware,

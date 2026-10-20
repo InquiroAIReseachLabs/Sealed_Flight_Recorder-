@@ -194,6 +194,34 @@ fn check_signer_purpose(cert: &[u8]) -> Result<(), String> {
 
 /// id-ce-cRLNumber, 2.5.29.20, as DER contents.
 const CRL_NUMBER: &[u8] = &[0x55, 0x1d, 0x14];
+/// id-ce-deltaCRLIndicator, 2.5.29.27: a delta CRL lists only changes to a base CRL.
+const DELTA_CRL_INDICATOR: &[u8] = &[0x55, 0x1d, 0x1b];
+/// id-ce-issuingDistributionPoint, 2.5.29.28.
+const ISSUING_DISTRIBUTION_POINT: &[u8] = &[0x55, 0x1d, 0x1c];
+/// id-ce-certificateIssuer, 2.5.29.29: a CRL entry for a certificate of another issuer.
+const CERTIFICATE_ISSUER: &[u8] = &[0x55, 0x1d, 0x1d];
+
+/// One extension: OID contents, critical, extnValue contents.
+type Extension<'a> = (&'a [u8], bool, &'a [u8]);
+
+/// The extensions of a SEQUENCE OF Extension.
+fn extensions(mut exts: &[u8]) -> Result<Vec<Extension<'_>>, String> {
+    let bad = || "not a CRL this verifier reads: an extension".to_string();
+    let mut out = Vec::new();
+    while let Some((_, ext, rest)) = element(exts) {
+        let (_, id, after_id) = element(ext).ok_or_else(bad)?;
+        let (critical, after) = if after_id.first() == Some(&0x01) {
+            let (_, flag, after) = element(after_id).ok_or_else(bad)?;
+            (flag.first().is_some_and(|&b| b != 0), after)
+        } else {
+            (false, after_id)
+        };
+        let (_, value, _) = element(after).ok_or_else(bad)?;
+        out.push((id, critical, value));
+        exts = rest;
+    }
+    Ok(out)
+}
 
 /// The whole DER element (tag, length and contents) at the start of `der`, and the bytes after it.
 fn whole_element(der: &[u8]) -> Option<(&[u8], &[u8])> {
@@ -405,21 +433,65 @@ pub fn parse_crl(der: &[u8]) -> Result<CrlInfo, String> {
     let next_update = der_time(t, contents)?;
     r = after;
     if r.first() == Some(&0x30) {
-        r = element(r).ok_or_else(|| bad("revokedCertificates"))?.2;
+        let (_, mut entries, after) = element(r).ok_or_else(|| bad("revokedCertificates"))?;
+        // An entry that names another certificate issuer makes the CRL indirect; an entry
+        // extension marked critical that this verifier does not read would change what the
+        // entry means. Both are refused, not ignored.
+        while let Some((_, entry, rest)) = element(entries) {
+            let after_serial = element(entry).ok_or_else(|| bad("a revoked entry"))?.2;
+            let after_date = element(after_serial)
+                .ok_or_else(|| bad("a revoked entry"))?
+                .2;
+            if after_date.first() == Some(&0x30) {
+                let (_, exts, _) = element(after_date).ok_or_else(|| bad("entry extensions"))?;
+                for (id, critical, _) in extensions(exts)? {
+                    if id == CERTIFICATE_ISSUER {
+                        return Err(bad(
+                            "an indirect CRL (an entry names another certificate issuer); sfr reads only CRLs of the issuer that signs them",
+                        ));
+                    }
+                    if critical {
+                        return Err(bad(&format!(
+                            "an entry extension {} is marked critical and sfr does not read it",
+                            oid_text(id)
+                        )));
+                    }
+                }
+            }
+            entries = rest;
+        }
+        r = after;
     }
     let mut number: Option<Vec<u8>> = None;
     if r.first() == Some(&0xa0) {
         let (_, wrapped, _) = element(r).ok_or_else(|| bad("extensions"))?;
-        let (_, mut exts, _) = element(wrapped).ok_or_else(|| bad("extensions"))?;
-        while let Some((_, ext, rest)) = element(exts) {
-            let (_, id, after_id) = element(ext).ok_or_else(|| bad("extension"))?;
-            let after_id = if after_id.first() == Some(&0x01) {
-                element(after_id).ok_or_else(|| bad("extension"))?.2
-            } else {
-                after_id
-            };
+        let (_, exts, _) = element(wrapped).ok_or_else(|| bad("extensions"))?;
+        for (id, critical, value) in extensions(exts)? {
+            if id == DELTA_CRL_INDICATOR {
+                return Err(bad(
+                    "a delta CRL (deltaCRLIndicator); sfr reads only complete CRLs",
+                ));
+            }
+            if id == ISSUING_DISTRIBUTION_POINT {
+                // IssuingDistributionPoint: [3] onlySomeReasons, [4] indirectCRL.
+                let (_, mut fields, _) =
+                    element(value).ok_or_else(|| bad("issuingDistributionPoint"))?;
+                while let Some((tag, contents, rest)) = element(fields) {
+                    if tag == 0x84 && contents.first().is_some_and(|&b| b != 0) {
+                        return Err(bad(
+                            "an indirect CRL (issuingDistributionPoint indirectCRL); sfr reads only CRLs of the issuer that signs them",
+                        ));
+                    }
+                    if tag == 0x83 || tag == 0xa3 {
+                        return Err(bad(
+                            "a CRL that covers only some revocation reasons (issuingDistributionPoint onlySomeReasons)",
+                        ));
+                    }
+                    fields = rest;
+                }
+                continue;
+            }
             if id == CRL_NUMBER {
-                let (_, value, _) = element(after_id).ok_or_else(|| bad("cRLNumber"))?;
                 let (t, n, _) = element(value).ok_or_else(|| bad("cRLNumber"))?;
                 if t != 0x02
                     || n.is_empty()
@@ -436,8 +508,14 @@ pub fn parse_crl(der: &[u8]) -> Result<CrlInfo, String> {
                 {
                     return Err(bad("two cRLNumber extensions"));
                 }
+                continue;
             }
-            exts = rest;
+            if critical {
+                return Err(bad(&format!(
+                    "the extension {} is marked critical and sfr does not read it",
+                    oid_text(id)
+                )));
+            }
         }
     }
     Ok(CrlInfo {
@@ -601,6 +679,22 @@ pub enum CrlCheck {
     Off,
 }
 
+/// The longest a CRL may have been out by default (`verify --max-crl-age`): seven days between
+/// its `thisUpdate` and the verification time.
+pub const DEFAULT_MAX_CRL_AGE_SECONDS: i64 = 7 * 24 * 3600;
+
+/// How `verify --trust-anchor` judges a chain besides the certificates themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainPolicy {
+    /// Whether revocation is checked.
+    pub crl_check: CrlCheck,
+    /// The oldest a current CRL may be, in seconds from its `thisUpdate` to the verification
+    /// time.
+    pub max_crl_age: i64,
+    /// Whether a trust anchor may be an intermediate CA (`--allow-partial-chain`).
+    pub allow_partial_chain: bool,
+}
+
 /// One CRL that was used: the current CRL of an issuer in the chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrlUsed {
@@ -642,6 +736,9 @@ pub struct ChainOk {
     pub crls: Vec<CrlUsed>,
     /// Whether revocation was checked.
     pub crl_check: bool,
+    /// Whether the anchor the chain reached is an intermediate CA, accepted only because of
+    /// `--allow-partial-chain`: nothing above it was checked.
+    pub partial: bool,
 }
 
 /// Checks the signer certificate and its intermediates against the trust anchors and CRLs, at
@@ -659,8 +756,21 @@ pub fn check_chain(
     anchors: &[Vec<u8>],
     crls: &[Vec<u8>],
     verification_time: i64,
-    mode: CrlCheck,
+    policy: &ChainPolicy,
 ) -> Result<ChainOk, String> {
+    let mode = policy.crl_check;
+    // A trust anchor that is not its own issuer is an intermediate CA: a chain that stops there
+    // leaves everything above it unchecked, so it needs --allow-partial-chain.
+    let intermediate_anchor = |der: &[u8]| certificate_names(der).is_some_and(|(i, s)| i != s);
+    if !policy.allow_partial_chain
+        && let Some(a) = anchors.iter().find(|a| intermediate_anchor(a))
+    {
+        return Err(format!(
+            "the trust anchor {} is an intermediate CA (issued by {}), not a root; give the root, or add --allow-partial-chain to stop the chain there",
+            certificate_fingerprint(a),
+            certificate_names(a).map_or_else(String::new, |(i, _)| name_text(&i))
+        ));
+    }
     let signer_der = CertificateDer::from(signer);
     let ee = EndEntityCert::try_from(&signer_der)
         .map_err(|e| format!("signer certificate: {}", why(&e)))?;
@@ -705,6 +815,16 @@ pub fn check_chain(
                     c.issuer_text(),
                     c.number_text(),
                     c.next_update_text(),
+                    format_utc(verification_time)
+                ));
+            }
+            if verification_time.saturating_sub(c.this_update) > policy.max_crl_age {
+                return Err(format!(
+                    "the current CRL of {} (number {}) has thisUpdate {}, more than --max-crl-age {} s before the verification time {}; give a newer CRL from the issuer",
+                    c.issuer_text(),
+                    c.number_text(),
+                    c.this_update_text(),
+                    policy.max_crl_age,
                     format_utc(verification_time)
                 ));
             }
@@ -779,6 +899,7 @@ pub fn check_chain(
             Vec::new()
         },
         crl_check: mode == CrlCheck::Required,
+        partial: anchors.get(index).is_some_and(|a| intermediate_anchor(a)),
     })
 }
 

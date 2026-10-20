@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check_language.sh: enforce the SPEC B1.12 language rules that a script can enforce.
 #
-#   1. No em-dash (U+2014) in Markdown, the sandbox page, scripts, or Rust sources (the
+#   1. No em-dash (U+2014) in Markdown, scripts, or Rust sources (the
 #      .sfr.md report and CLI tables are generated from Rust string literals).
 #   2. No weapon or strike terminology in any text file (language gate). This
 #      script is the one file exempt, because it holds the list.

@@ -166,8 +166,10 @@ fn bad_key_uris_and_a_missing_helper_are_key_errors_and_write_nothing() {
         &[("SFR_PKCS11_HELPER", "/nonexistent/sfr-pkcs11-helper")],
     );
     assert_eq!(o.status.code(), Some(4), "{}", text(&o));
+    // Without the dev-helper feature the variable is ignored: the helper beside sfr runs (and
+    // fails on the missing module), or is missing there; the named path is never run.
     assert!(
-        text(&o).contains("cannot run /nonexistent/sfr-pkcs11-helper"),
+        !text(&o).contains("/nonexistent/sfr-pkcs11-helper"),
         "{}",
         text(&o)
     );

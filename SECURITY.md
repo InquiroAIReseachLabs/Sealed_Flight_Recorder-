@@ -10,7 +10,7 @@ Include the `sfr --version` output or the commit, and the smallest input that sh
 
 - The `sfr` command line and the `sfr-core` engine: a changed record that still verifies, a log change that `--ulog` misses, a signature or key accepted when it should be refused, a crash, hang or memory exhaustion on any input.
 - The record format and verification steps in `docs/RECORD_FORMAT.md`, where following them as written would accept a changed record.
-- The engine bundle built from `crates/sfr-wasm`, and the scripts in `scripts/` that build and sign releases.
+- The scripts in `scripts/` that build and sign releases.
 
 ## Out of scope
 

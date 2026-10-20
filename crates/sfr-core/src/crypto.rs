@@ -170,7 +170,7 @@ pub mod rustcrypto {
         }
     }
 
-    /// A seed held in this process: an evaluation key file or the sandbox's in-memory key
+    /// A seed held in this process: an evaluation key file
     /// (custody `file-evaluation`), or a seed just unsealed from a TPM (custody `tpm-sealed`,
     /// [`FileKey::unsealed_from_tpm`]).
     pub struct FileKey {
