@@ -1,6 +1,5 @@
 claims audit: 2026-10-20T02:55:41Z on Linux 6.18.44-fc-v139 x86_64, 4 CPUs, Intel(R) Xeon(R) Processor @ 2.10GHz
 commit: 874c096a096011260669b1e7b90bfe88ddfbcf78
-subject: Merge pull request #33 from InquiroAIReseachLabs/claude/charming-brahmagupta-3xi2az-a9-t12
 
 
 T1   Quickstart, cold start (Rust install + clone + build + seal + verify) PASS
