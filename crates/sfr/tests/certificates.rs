@@ -114,6 +114,23 @@ fn verify_anchor(record: &Path, anchor: &str, crls: &[&str]) -> Output {
     verify_anchor_with(record, anchor, crls, &[])
 }
 
+/// `sfr verify --trust-anchor`, with `--at` when `at` is given.
+fn verify_anchor_at(record: &Path, anchor: &str, crls: &[&str], at: Option<&str>) -> Output {
+    match at {
+        Some(at) => verify_anchor_with(record, anchor, crls, &["--at", at]),
+        None => verify_anchor(record, anchor, crls),
+    }
+}
+
+/// This machine's clock as an RFC 3339 time `offset` seconds from now.
+fn now_plus(offset: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    sfr_core::seal::format_utc(now + offset)
+}
+
 /// [`verify_anchor`] with more command-line words, such as `--no-crl-check`.
 fn verify_anchor_with(record: &Path, anchor: &str, crls: &[&str], more: &[&str]) -> Output {
     let anchor = pki(anchor);
@@ -155,8 +172,18 @@ fn a_chain_to_the_trust_anchor_verifies_and_names_the_anchor() {
         assert!(out.contains("Integrity: VERIFIED (record)"), "{out}");
         assert!(
             out.contains(&format!(
-                "trust     certificate chain to the trust anchor {anchor} at the seal time; 2 CRL(s) checked\n"
+                "trust     certificate chain to the trust anchor {anchor} at the verification time; 2 CRL(s) checked\n"
             )),
+            "{out}"
+        );
+        // The time the chain was judged at is printed, and the seal time is labelled a claim.
+        assert!(
+            out.contains("time      20")
+                && out.contains("(verifier clock); certificate validity was checked at this time, not at the claimed seal time\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("seal time 2026-10-18T15:00:00Z (claimed by the sealer, not proven)\n"),
             "{out}"
         );
         // Each CRL used is printed: its issuer, number, thisUpdate and nextUpdate.
@@ -210,7 +237,7 @@ fn a_chain_to_the_trust_anchor_verifies_and_names_the_anchor() {
 
 #[test]
 fn every_rejection_the_spec_lists_fails_with_its_reason() {
-    for (case, seed, cert, chain, time, anchor, crls, why) in [
+    for (case, seed, cert, chain, time, anchor, crls, at, why) in [
         (
             "revoked by a supplied CRL",
             SIGNER_REVOKED,
@@ -219,6 +246,7 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             SEAL_TIME,
             "root.pem",
             &BOTH_CRLS[..],
+            None,
             "revoked by a supplied CRL",
         ),
         (
@@ -229,7 +257,8 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             SEAL_TIME,
             "root.pem",
             &BOTH_CRLS[..],
-            "had expired at the seal time",
+            None,
+            "had expired at the verification time",
         ),
         (
             "not yet valid at the seal time",
@@ -238,8 +267,10 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             Some("inter.pem"),
             "2025-06-01T00:00:00Z",
             "root.pem",
-            &BOTH_CRLS[..],
-            "not yet valid at the seal time",
+            // Judged as of that time, the 2026 CRLs would be from the future: give the ones current then.
+            &["root_2025.crl", "inter_stale.crl"][..],
+            Some("2025-06-01T00:00:00Z"),
+            "not yet valid at the verification time",
         ),
         (
             "no code signing usage",
@@ -249,6 +280,7 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             SEAL_TIME,
             "root.pem",
             &BOTH_CRLS[..],
+            None,
             "lacks extended key usage code signing",
         ),
         (
@@ -259,6 +291,7 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             SEAL_TIME,
             "other_root.pem",
             &BOTH_CRLS[..],
+            None,
             "does not reach a supplied trust anchor",
         ),
         (
@@ -269,12 +302,13 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             SEAL_TIME,
             "root.pem",
             &BOTH_CRLS[..],
+            None,
             "does not reach a supplied trust anchor",
         ),
     ] {
         let (o, record) = seal(seed, Some(cert), chain, time);
         assert_eq!(o.status.code(), Some(0), "{case}: {}", text(&o));
-        let v = verify_anchor(&record, anchor, crls);
+        let v = verify_anchor_at(&record, anchor, crls, at);
         assert_eq!(v.status.code(), Some(1), "{case}: {}", text(&v));
         let out = text(&v);
         assert!(
@@ -574,7 +608,7 @@ fn every_issuer_in_the_chain_needs_a_crl_unless_checking_is_switched_off() {
 }
 
 #[test]
-fn a_crl_past_its_next_update_fails_against_the_verifiers_clock() {
+fn a_crl_past_its_next_update_fails_against_the_verification_time() {
     // Issue 24, F2: nextUpdate was ignored, so a stale CRL alone was accepted. The record is
     // sealed in mid-June 2025, when this CRL was current, and the claimed time must not help it.
     let (o, record) = seal(
@@ -588,7 +622,7 @@ fn a_crl_past_its_next_update_fails_against_the_verifiers_clock() {
     assert_eq!(v.status.code(), Some(1), "{}", text(&v));
     let out = text(&v);
     assert!(
-        out.contains("Integrity: FAILED: certificate chain: the current CRL of CN=sfr test inter (number 0) is out of date: its nextUpdate 2025-07-01T00:00:00Z is not after the verifier's clock, 20"),
+        out.contains("Integrity: FAILED: certificate chain: the current CRL of CN=sfr test inter (number 0) is out of date: its nextUpdate 2025-07-01T00:00:00Z is not after the verification time 20"),
         "{out}"
     );
     assert!(!out.contains("VERIFIED"), "{out}");
@@ -637,4 +671,127 @@ fn a_crl_of_another_issuer_never_displaces_the_issuers_own() {
     assert_eq!(v.status.code(), Some(0), "{}", text(&v));
     assert!(!stdout(&v).contains("other_root"), "{}", text(&v));
     assert!(stdout(&v).contains("2 CRL(s) checked\n"), "{}", text(&v));
+}
+
+#[test]
+fn a_backdated_seal_time_cannot_put_an_expired_certificate_back_in_its_window() {
+    // signer_lapsed.pem was valid 2025-02-01 to 2025-12-31 and is expired now, but its window lies
+    // inside inter's and root's, so a seal time of 2025-06-01 puts the whole chain "in window". The
+    // seal time is the sealer's claim: the key holder wrote it, so it must decide nothing.
+    let backdated = "2025-06-01T00:00:00Z";
+    let (o, record) = seal(
+        SIGNER_LAPSED,
+        Some("signer_lapsed.pem"),
+        Some("inter.pem"),
+        backdated,
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let v = verify_anchor(&record, "root.pem", &BOTH_CRLS);
+    assert_eq!(v.status.code(), Some(1), "{}", text(&v));
+    let out = text(&v);
+    assert!(
+        out.contains("Integrity: FAILED: certificate chain:")
+            && out.contains("had expired at the verification time"),
+        "{out}"
+    );
+    assert!(!out.contains("VERIFIED"), "{out}");
+    // Asking, explicitly and on the record, for the verification to be made as of mid-2025
+    // judges the same record at that time, and says so. The CRLs are judged at that time too:
+    // the ones current in June 2025 pass, the 2026 ones would be from the future.
+    let crls_then = ["root_2025.crl", "inter_stale.crl"];
+    let v = verify_anchor_at(&record, "root.pem", &crls_then, Some(backdated));
+    assert_eq!(v.status.code(), Some(0), "{}", text(&v));
+    let out = String::from_utf8_lossy(&v.stdout);
+    assert!(
+        out.contains(
+            "time      2025-06-01T00:00:00Z (--at); certificate validity was checked at this time, not at the claimed seal time\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("seal time 2025-06-01T00:00:00Z (claimed by the sealer, not proven)"),
+        "{out}"
+    );
+    let v = verify_anchor_at(&record, "root.pem", &BOTH_CRLS, Some(backdated));
+    assert_eq!(v.status.code(), Some(1), "{}", text(&v));
+    assert!(
+        text(&v).contains(
+            "has thisUpdate 2026-06-01T00:00:00Z, after the verification time 2025-06-01T00:00:00Z"
+        ),
+        "{}",
+        text(&v)
+    );
+    let json = verify_anchor_with(
+        &record,
+        "root.pem",
+        &crls_then,
+        &["--at", backdated, "--json"],
+    );
+    let json = String::from_utf8_lossy(&json.stdout);
+    assert!(
+        json.contains("\"seal_time_claimed_utc\": \"2025-06-01T00:00:00Z\"")
+            && json.contains("\"verification_time_utc\": \"2025-06-01T00:00:00Z\"")
+            && json.contains("\"verification_time_source\": \"--at\""),
+        "{json}"
+    );
+}
+
+#[test]
+fn a_seal_time_in_the_verifiers_future_is_refused_with_or_without_a_certificate() {
+    // One day ahead of this machine's clock, with a certificate that is valid then (until 2036).
+    let tomorrow = now_plus(86_400);
+    let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), &tomorrow);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let pubkey = record.with_file_name("sfr.pub");
+    std::fs::write(
+        &pubkey,
+        sfr_core::keys::public_key_pem(&sfr_core::crypto::Signer::public_key(
+            &sfr_core::crypto::rustcrypto::FileKey::from_seed(&[SIGNER; 32], "k"),
+        )),
+    )
+    .unwrap();
+    let r = record.to_str().unwrap();
+    let (root, root_crl, inter_crl) = (pki("root.pem"), pki("root.crl"), pki("inter.crl"));
+    let trust_sets: [Vec<&str>; 2] = [
+        vec![
+            "--trust-anchor",
+            &root,
+            "--crl",
+            &root_crl,
+            "--crl",
+            &inter_crl,
+        ],
+        vec!["--pubkey", pubkey.to_str().unwrap()],
+    ];
+    for args in trust_sets {
+        let mut a = vec!["verify", r];
+        a.extend(args.iter().copied());
+        let v = sfr(&a);
+        assert_eq!(v.status.code(), Some(1), "{args:?}: {}", text(&v));
+        let out = text(&v);
+        assert!(
+            out.contains("Integrity: FAILED: the seal time claimed by the sealer")
+                && out.contains("is later than the verification time")
+                && out.contains("300 s of clock skew"),
+            "{args:?}: {out}"
+        );
+        assert!(!out.contains("VERIFIED"), "{args:?}: {out}");
+        // A verification time the verifier chooses, after the claimed time, accepts it.
+        let later = now_plus(2 * 86_400);
+        let mut with_at = a.clone();
+        with_at.extend(["--at", &later]);
+        let v = sfr(&with_at);
+        assert_eq!(v.status.code(), Some(0), "{args:?}: {}", text(&v));
+    }
+    // The skew allowance is stated and small: a few minutes ahead still verifies.
+    let (_, ahead) = seal(
+        SIGNER,
+        Some("signer.pem"),
+        Some("inter.pem"),
+        &now_plus(120),
+    );
+    assert_eq!(
+        verify_anchor(&ahead, "root.pem", &BOTH_CRLS).status.code(),
+        Some(0)
+    );
 }

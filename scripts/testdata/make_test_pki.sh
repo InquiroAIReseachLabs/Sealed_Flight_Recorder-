@@ -26,6 +26,8 @@
 #   inter_older.crl   CRL issued by inter, number 0, listing nothing: older than inter.crl
 #   inter_stale.crl   CRL issued by inter, number 0, listing nothing, valid 2025-06-01 to
 #                     2025-07-01: older than inter.crl and past its nextUpdate
+#   root_2025.crl     CRL issued by root, number 0, listing nothing, valid 2025-06-01 to
+#                     2025-07-01: with inter_stale.crl, the CRLs current in mid-June 2025
 #   inter_same.crl    CRL issued by inter with the same number as inter.crl (1) and other content
 #   other_root.crl    CRL issued by the unrelated other_root, number 99, listing nothing
 set -euo pipefail
@@ -147,6 +149,7 @@ EOF
   gencrl inter 00 "$work/index.empty" 20260101000000Z 20460101000000Z inter_older.crl
   gencrl inter 00 "$work/index.empty" 20250601000000Z 20250701000000Z inter_stale.crl
   gencrl inter 01 "$work/index.empty" 20260601000000Z 20460101000000Z inter_same.crl
+  gencrl root 00 "$work/index.empty" 20250601000000Z 20250701000000Z root_2025.crl
   gencrl other_root 63 "$work/index.empty" 20260601000000Z 20460101000000Z other_root.crl
 }
 

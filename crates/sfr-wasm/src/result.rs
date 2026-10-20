@@ -321,7 +321,7 @@ pub fn seal_json(s: &SealOutput) -> String {
             .field("keyFingerprint", Value::str(s.key_fingerprint.clone()))
             .field("keyCustody", Value::str(s.key_custody.clone()))
             .field("keyLabel", Value::str(s.key_label.clone()))
-            .field("sealedUtc", Value::str(s.sealed_utc.clone()))
+            .field("sealTimeClaimedUtc", Value::str(s.sealed_utc.clone()))
             .field("eventCount", Value::count(s.event_count as u64))
             .field("log", log)
             .field("results", Value::Array(results))
@@ -349,7 +349,7 @@ pub fn verify_json(v: &VerifyOutput) -> String {
             .field("keyCustody", opt_str(&v.custody))
             .field("keyFingerprint", s(|x| x.fingerprint.clone()))
             .field("cryptoCrates", s(|x| x.crypto_crates.clone()))
-            .field("sealedUtc", s(|x| x.sealed_utc.clone()))
+            .field("sealTimeClaimedUtc", s(|x| x.sealed_utc.clone()))
             .field("status", s(|x| x.status.clone()))
             .field(
                 "failedRules",

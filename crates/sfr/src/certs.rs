@@ -5,11 +5,12 @@
 //! stack of every build (SPEC B1.10 Crypto). Only Ed25519 certificates and CRLs are accepted.
 //!
 //! A chain is valid when the signer certificate, through the record's intermediates, reaches a
-//! supplied trust anchor; every certificate is valid at the record's seal time; the signer
-//! certificate carries extended key usage code signing; and no certificate in the path is listed
-//! in a supplied CRL. A listed serial counts as revoked whatever its revocation date, because the
-//! seal time is the sealer's own statement: a key holder who backdates a seal must not escape a
-//! revocation. There is no online check (no OCSP, no CRL download), by design.
+//! supplied trust anchor; every certificate is valid at the verification time, which is the
+//! verifier's clock or the time given with `--at` and never the record's seal time (the sealer's
+//! own claim: a key holder could set it inside a certificate's window); the signer certificate
+//! carries extended key usage code signing; and no certificate in the path is listed in a
+//! supplied CRL. A listed serial counts as revoked whatever its revocation date, for the same
+//! reason. There is no online check (no OCSP, no CRL download), by design.
 
 use rustls_pki_types::{
     AlgorithmIdentifier, CertificateDer, InvalidSignature, SignatureVerificationAlgorithm,
@@ -451,8 +452,13 @@ pub fn certificate_fingerprint(der: &[u8]) -> String {
 fn why(e: &Error) -> String {
     match e {
         Error::UnknownIssuer => "the chain does not reach a supplied trust anchor".into(),
-        Error::CertExpired { .. } => "a certificate had expired at the seal time".into(),
-        Error::CertNotValidYet { .. } => "a certificate was not yet valid at the seal time".into(),
+        Error::CertExpired { .. } => {
+            "a certificate had expired at the verification time (the verifier's clock, or --at)".into()
+        }
+        Error::CertNotValidYet { .. } => {
+            "a certificate was not yet valid at the verification time (the verifier's clock, or --at)"
+                .into()
+        }
         Error::CertRevoked => "a certificate in the chain is revoked by a supplied CRL".into(),
         Error::RequiredEkuNotFoundContext(_) => {
             "the signer certificate lacks extended key usage code signing".into()
@@ -525,22 +531,21 @@ pub struct ChainOk {
     pub crl_check: bool,
 }
 
-/// Checks the signer certificate and its intermediates against the trust anchors and CRLs.
-/// Certificates are judged at `seal_time` (Unix seconds); the CRLs are judged at `now`, the
-/// verifier's clock, because a CRL's `nextUpdate` says how long its issuer stands behind it and
-/// the sealer's claimed time says nothing about that.
+/// Checks the signer certificate and its intermediates against the trust anchors and CRLs, at
+/// `verification_time` (Unix seconds): the verifier's clock or `--at`, never the record's claimed
+/// seal time. The CRLs are judged at the same time: a CRL's `nextUpdate` says how long its issuer
+/// stands behind it, and the sealer's claimed time says nothing about that.
 ///
 /// With [`CrlCheck::Required`], every issuer of the signer certificate and of the intermediates
 /// needs a current CRL (the highest `cRLNumber` among the CRLs given for it), which must be
-/// neither past its `nextUpdate` nor from the future of `now`; a CRL of any other issuer counts
-/// for nothing.
+/// neither past its `nextUpdate` nor from the future of `verification_time`; a CRL of any other
+/// issuer counts for nothing.
 pub fn check_chain(
     signer: &[u8],
     intermediates: &[Vec<u8>],
     anchors: &[Vec<u8>],
     crls: &[Vec<u8>],
-    seal_time: i64,
-    now: i64,
+    verification_time: i64,
     mode: CrlCheck,
 ) -> Result<ChainOk, String> {
     let signer_der = CertificateDer::from(signer);
@@ -583,22 +588,22 @@ pub fn check_chain(
     let used: Vec<CrlUsed> = relevant.iter().map(|c| CrlUsed::of(c)).collect();
     if mode == CrlCheck::Required {
         for c in &relevant {
-            if c.next_update <= now {
+            if c.next_update <= verification_time {
                 return Err(format!(
-                    "the current CRL of {} (number {}) is out of date: its nextUpdate {} is not after the verifier's clock, {}",
+                    "the current CRL of {} (number {}) is out of date: its nextUpdate {} is not after the verification time {}",
                     c.issuer_text(),
                     c.number_text(),
                     c.next_update_text(),
-                    format_utc(now)
+                    format_utc(verification_time)
                 ));
             }
-            if c.this_update > now.saturating_add(CRL_FUTURE_SKEW_SECONDS) {
+            if c.this_update > verification_time.saturating_add(CRL_FUTURE_SKEW_SECONDS) {
                 return Err(format!(
-                    "the current CRL of {} (number {}) has thisUpdate {}, after the verifier's clock, {}",
+                    "the current CRL of {} (number {}) has thisUpdate {}, after the verification time {}",
                     c.issuer_text(),
                     c.number_text(),
                     c.this_update_text(),
-                    format_utc(now)
+                    format_utc(verification_time)
                 ));
             }
         }
@@ -620,13 +625,13 @@ pub fn check_chain(
                 .with_depth(RevocationCheckDepth::Chain)
                 // A certificate whose issuer has no current CRL here is an error, not "not revoked".
                 .with_status_policy(UnknownStatusPolicy::Deny)
-                // nextUpdate is judged above, against the verifier's clock; webpki would use the
-                // time the certificates are judged at.
+                // nextUpdate is judged above, against the verification time.
                 .with_expiration_policy(ExpirationPolicy::Ignore)
                 .build(),
         ),
     };
-    let secs = u64::try_from(seal_time).map_err(|_| "verification time before 1970".to_string())?;
+    let secs = u64::try_from(verification_time)
+        .map_err(|_| "verification time before 1970".to_string())?;
     let time = UnixTime::since_unix_epoch(Duration::from_secs(secs));
     let path = ee
         .verify_for_usage(
