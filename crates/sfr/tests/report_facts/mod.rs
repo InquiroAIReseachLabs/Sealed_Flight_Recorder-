@@ -74,14 +74,12 @@ fn hidden(c: char) -> bool {
     .any(|&(a, b)| (a..=b).contains(&c))
 }
 
-/// Text as the report must write it: control characters as spaces, a hidden character as its
-/// marker, and a backslash before every ASCII punctuation character (the marker's included).
-fn esc(t: &str) -> String {
+/// Text as the report must write it: a control or hidden character as its marker, and a
+/// backslash before every ASCII punctuation character (the marker's included).
+pub fn esc(t: &str) -> String {
     let mut out = String::new();
     for c in t.chars() {
-        let shown = if c.is_control() {
-            " ".to_string()
-        } else if hidden(c) {
+        let shown = if c.is_control() || hidden(c) {
             format!("<U+{:04X}>", c as u32)
         } else {
             c.to_string()
@@ -200,40 +198,75 @@ fn r3_parts(line: &str) -> (String, String, String) {
     (n.to_string(), b.to_string(), fl.to_string())
 }
 
-/// A file name as a shell argument `sfr` reads as that file, built here independently of the
-/// renderer: `./` before a leading `-`; `$'...'` with three-digit octal byte escapes when the
-/// name holds a control character; single quotes when it holds anything outside
-/// `[A-Za-z0-9._/-]`.
-pub fn shell_arg(name: &str) -> String {
+/// A file name as a shell argument `sfr` reads as that file in POSIX sh, bash and PowerShell,
+/// built here independently of the renderer: `./` before a leading `-`; `None` when the name
+/// holds a control or hidden character, an ASCII single quote, or one of the quotes PowerShell
+/// also ends a string at (U+2018 to U+201B); bare when it starts with a letter or `./` and holds
+/// only `[A-Za-z0-9._/-]`; else in single quotes.
+pub fn shell_arg(name: &str) -> Option<String> {
     let mut n = name.to_string();
     if n.starts_with('-') {
         n.insert_str(0, "./");
     }
-    let odd = |c: char| c.is_control() || hidden(c);
-    if n.chars().any(odd) {
-        let body: String = n
-            .chars()
-            .map(|c| match c {
-                '\'' => "\\'".to_string(),
-                '\\' => "\\\\".to_string(),
-                c if odd(c) => c
-                    .to_string()
-                    .bytes()
-                    .map(|b| format!("\\{b:03o}"))
-                    .collect(),
-                c => c.to_string(),
-            })
-            .collect();
-        return format!("$'{body}'");
+    if n.is_empty()
+        || n.chars().any(|c| {
+            c.is_control()
+                || hidden(c)
+                || ['\'', '\u{2018}', '\u{2019}', '\u{201a}', '\u{201b}'].contains(&c)
+        })
+    {
+        return None;
     }
     let bare = n
         .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b));
-    if bare && !n.is_empty() {
-        n
-    } else {
-        format!("'{}'", n.split('\'').collect::<Vec<_>>().join("'\\''"))
-    }
+        .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b))
+        && (n.as_bytes()[0].is_ascii_alphabetic() || n.starts_with("./"));
+    Some(if bare { n } else { format!("'{n}'") })
+}
+
+/// The two lines that set `record` and `log` in POSIX sh: `printf` with octal escapes for every
+/// byte but `[A-Za-z0-9._/-]`, and a trailing `x` that keeps a final newline.
+fn posix_lines(record: &str, log: &str) -> Vec<String> {
+    [("record", record), ("log", log)]
+        .iter()
+        .map(|(v, n)| {
+            let n = if n.starts_with('-') {
+                format!("./{n}")
+            } else {
+                n.to_string()
+            };
+            let f: String = n
+                .bytes()
+                .map(|b| {
+                    if b.is_ascii_alphanumeric() || b"._/-".contains(&b) {
+                        (b as char).to_string()
+                    } else {
+                        format!("\\{b:03o}")
+                    }
+                })
+                .collect();
+            format!("{v}=\"$(printf '{f}x')\"; {v}=\"${{{v}%x}}\"")
+        })
+        .collect()
+}
+
+/// The two lines that set `$record` and `$log` in PowerShell, from their UTF-8 bytes.
+fn powershell_lines(record: &str, log: &str) -> Vec<String> {
+    [("record", record), ("log", log)]
+        .iter()
+        .map(|(v, n)| {
+            let n = if n.starts_with('-') {
+                format!("./{n}")
+            } else {
+                n.to_string()
+            };
+            let b: Vec<String> = n.bytes().map(|b| format!("0x{b:02X}")).collect();
+            format!(
+                "${v} = [Text.Encoding]::UTF8.GetString([byte[]]({}))",
+                b.join(", ")
+            )
+        })
+        .collect()
 }
 
 /// Checks every fact of `md` against `record`. Panics with the first mismatch.
@@ -595,31 +628,61 @@ pub fn check(record: &Value, md: &str) {
         "With the public key whose fingerprint is {fp} saved as `sfr.pub`, in the directory that holds the record and the log:"
     ));
     l.expect("");
-    let fence = l.next();
-    assert!(
-        fence.len() >= 3 && fence.chars().all(|c| c == '`'),
-        "code fence"
-    );
-    let command = l.next();
-    assert_eq!(
-        command,
-        format!(
-            "sfr verify {} --pubkey sfr.pub{} --ulog {}",
-            shell_arg(&format!("{stem}.sfr")),
-            // A record that declares an evaluation key is accepted only when asked.
-            if plain(f(seal, "key_custody")) == "file-evaluation" {
-                " --allow-evaluation-key"
-            } else {
-                ""
-            },
-            shell_arg(&file)
-        )
-    );
-    assert!(
-        !command.contains(fence),
-        "the fence is longer than any backtick run in the command"
-    );
-    l.expect(fence);
+    // A record that declares an evaluation key is accepted only when asked.
+    let allow = if plain(f(seal, "key_custody")) == "file-evaluation" {
+        " --allow-evaluation-key"
+    } else {
+        ""
+    };
+    let record_name = format!("{stem}.sfr");
+    match (shell_arg(&record_name), shell_arg(&file)) {
+        (Some(record), Some(log)) => {
+            let fence = l.next();
+            assert!(
+                fence.len() >= 3 && fence.chars().all(|c| c == '`'),
+                "code fence"
+            );
+            let command = l.next();
+            assert_eq!(
+                command,
+                format!("sfr verify {record} --pubkey sfr.pub{allow} --ulog {log}")
+            );
+            assert!(
+                !command.contains(fence),
+                "the fence is longer than any backtick run in the command"
+            );
+            l.expect(fence);
+        }
+        _ => {
+            l.expect(&format!(
+                "The file names hold a character that cannot be written safely in one command for \
+                 every shell (a control character, a character that hides text, or a single \
+                 quote), so the command takes them from shell variables. The log's file name, \
+                 with each such character shown as a marker: {}. Set the variables `record` and \
+                 `log` to the file names in your shell, then run the command.",
+                esc(&file)
+            ));
+            for (title, lines) in [
+                ("POSIX sh, bash:", posix_lines(&record_name, &file)),
+                ("PowerShell:", powershell_lines(&record_name, &file)),
+                (
+                    "Then:",
+                    vec![format!(
+                        "sfr verify \"$record\" --pubkey sfr.pub{allow} --ulog \"$log\""
+                    )],
+                ),
+            ] {
+                l.expect("");
+                l.expect(title);
+                l.expect("");
+                l.expect("```");
+                for line in &lines {
+                    l.expect(line);
+                }
+                l.expect("```");
+            }
+        }
+    }
     l.expect("");
     l.expect("Without `--ulog`, `sfr verify` checks the record alone.");
     assert_eq!(l.peek(), None, "nothing after the verify section");

@@ -48,7 +48,7 @@ Twelve of these attacks worked against an earlier build. `scripts/claims_audit/t
 | Seal a log from an untested PX4 version and hide it | `seal` refuses without `--allow-untested-version`; with it the flag is signed in the record | `an_untested_px4_version_is_refused_unless_allowed_and_then_recorded` |
 | Move a leaf to another section without the key (a result into `sealed_topics`, an event into `results`) | leaves are hashed with a section tag, so the root changes | `a_leaf_moved_to_another_section_changes_the_root_and_fails_the_signature` (`crates/sfr/tests/signed_structure.rs`) |
 | Change the tree size or a section's leaf count | the signed payload holds both, and `merkle.sections` must match the arrays | `the_signature_covers_the_shape_of_the_tree`, `a_wrong_sections_count_is_named` (`crates/sfr/tests/signed_structure.rs`) |
-| Log text or file name built to forge report content or a shell command | punctuation is escaped and file names are quoted in the report | `hostile_log_text_and_file_names_give_a_literal_report_and_a_working_verify_command` |
+| Log text or file name built to forge report content or a shell command | punctuation is escaped, control characters are shown as markers, and file names are quoted for POSIX sh, bash and PowerShell (or set from their bytes when no quoting is safe in all three) | `hostile_log_text_and_file_names_give_a_literal_report_and_a_working_verify_command` |
 | A log built to exhaust memory or time | input limits (exit 3) and fuzzing | [LIMITS.md](LIMITS.md) |
 | Edit the log between disarm and sealing | **not detected** | narrowed by sealing at once, below |
 | False log from a compromised flight stack or sealing machine | **not detected** | out of scope |
