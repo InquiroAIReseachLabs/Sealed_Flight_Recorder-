@@ -10,7 +10,7 @@ Only the record, `<name>.sfr`, is signed. The Ed25519 signature covers its Merkl
 
 `sfr verify` prints `Integrity: VERIFIED` only after it checks the signature against a key you gave it (`--pubkey`) or a key whose certificate chains to a trust anchor you gave it (`--trust-anchor`). Given neither, it prints `Integrity: NOT CHECKED` and exits 4. A record signed with an evaluation key is `Integrity: REFUSED` unless you pass `--allow-evaluation-key`.
 
-A verified record, signed by the key with this fingerprint, holds these rule results, this configuration and these events, and its report is the one it renders. With `--ulog`, the log matches too (by the SHA-256 of the whole file; the BLAKE3 digest beside it is an index and adds no security), and the embedded rules and baseline give the same results from it.
+A verified record, signed by the key with this fingerprint, holds these rule results, this configuration and these events, and its report is the one it renders. With `--ulog`, the log matches too (SHA-256 is the seal. BLAKE3 is a second digest and index field; a mismatch fails verification; it adds no security beyond SHA-256.), and the embedded rules and baseline give the same results from it.
 
 ## What a seal does not prove
 
@@ -126,11 +126,11 @@ The raw log digest already covers every topic. Sealed topic digests (`[sealed_to
 
 ## Command sources
 
-MAVLink source ids are self-reported unless message signing is on for the link. R7 shows which source the log recorded, not that the source was authentic.
+MAVLink source ids are self-reported unless message signing is on for the link. R7 shows which source the log recorded, not that the source was who it says it is.
 
 ## Cryptography
 
-On every target, `sfr` uses `sha2` (SHA-256), `ed25519-dalek` (Ed25519) and `blake3` (a second digest of the log: `verify --ulog` checks it and a mismatch fails, but it adds no security beyond SHA-256); `seal.crypto_crates` names each crate and version, and a record is byte-identical wherever it is sealed. These crates have no CMVP certificate, and `sfr` makes no claim under any cryptographic module standard or security regime.
+On every target, `sfr` uses `sha2` (SHA-256), `ed25519-dalek` (Ed25519) and `blake3` (SHA-256 is the seal. BLAKE3 is a second digest and index field; a mismatch fails verification; it adds no security beyond SHA-256.); `seal.crypto_crates` names each crate and version, and a record is byte-identical wherever it is sealed. These crates have no CMVP certificate, and `sfr` makes no claim under any cryptographic module standard or security regime.
 
 ## Sensitivity
 

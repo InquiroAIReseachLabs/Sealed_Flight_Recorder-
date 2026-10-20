@@ -76,7 +76,7 @@ A record holds exactly these thirteen fields (`RECORD_FIELDS` in `crates/sfr-cor
 
 | Member | Value |
 |---|---|
-| `blake3` | lowercase hex BLAKE3 of the whole file. `verify --ulog` checks it after `sha256`, and a mismatch fails verification like any other; it adds no security beyond SHA-256, the digest the seal rests on |
+| `blake3` | lowercase hex BLAKE3 of the whole file, checked by `verify --ulog` after `sha256`. SHA-256 is the seal. BLAKE3 is a second digest and index field; a mismatch fails verification; it adds no security beyond SHA-256. |
 | `file_name` | the file name, without directories |
 | `firmware` | `git`: the `ver_sw` info message, or null; `ver_sw_release`: that info message as `0x` and eight lowercase hex digits, or null; `version`: `major.minor.patch` with a `-rc`, `-beta`, `-alpha` or `-dev` suffix from its last byte (`version_string` in `crates/sfr-core/src/ingest.rs`), or null |
 | `sha256` | lowercase hex SHA-256 of the whole file |
@@ -158,7 +158,7 @@ The leaves, in this order (`leaves` in `crates/sfr-core/src/seal.rs`):
 
 `status`, `merkle` and `signature` are not leaves. `status` is bound because it must agree with the results.
 
-Each leaf carries its section's tag byte: `0x01` seal context, `0x02` `log`, `0x03` `config`, `0x04` `baseline`, `0x05` `rules`, `0x06` each result, `0x07` each sealed topic digest, `0x08` each event (`Section` in `crates/sfr-core/src/seal.rs`). A leaf's hash is SHA-256(`0x00` || tag || JCS(leaf)), where JCS(leaf) is its canonical bytes. The tag binds a leaf to its section: a result moved into `sealed_topics`, or an event into `results`, hashes differently and changes the root. An interior node's hash is SHA-256(`0x01` || left || right) over the two 32-byte child hashes. The tree is RFC 6962's: for `n` leaves, `n` above one, the left subtree holds the first `k` leaves, `k` the largest power of two strictly below `n`, and the right subtree the rest, recursively; a single leaf's tree hash is its leaf hash; nothing is duplicated. `merkle.leaf_count` is five plus the lengths of the three arrays. The unit test `roots_match_an_independent_rfc6962_computation` in `crates/sfr-core/src/merkle.rs` holds independently computed roots for one to seven leaves.
+Each leaf carries its section's tag byte: `0x01` seal context, `0x02` `log`, `0x03` `config`, `0x04` `baseline`, `0x05` `rules`, `0x06` each result, `0x07` each sealed topic digest, `0x08` each event (`Section` in `crates/sfr-core/src/seal.rs`). A leaf's hash is SHA-256(`0x00` || tag || JCS(leaf)), where JCS(leaf) is its canonical bytes. The tag binds a leaf to its section: a result moved into `sealed_topics`, or an event into `results`, hashes differently and changes the root. An interior node's hash is SHA-256(`0x01` || left || right) over the two 32-byte child hashes. The tree is RFC 6962's (RFC 9162 obsoletes RFC 6962 with the same tree shape; the leaf here adds the documented section tag above, and `merkle.algorithm` keeps the name `sha256-rfc6962`): for `n` leaves, `n` above one, the left subtree holds the first `k` leaves, `k` the largest power of two strictly below `n`, and the right subtree the rest, recursively; a single leaf's tree hash is its leaf hash; nothing is duplicated. `merkle.leaf_count` is five plus the lengths of the three arrays. The unit test `roots_match_an_independent_rfc6962_computation` in `crates/sfr-core/src/merkle.rs` holds independently computed roots for one to seven leaves.
 
 ## Signed payload and signature
 
