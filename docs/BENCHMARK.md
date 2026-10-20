@@ -48,9 +48,9 @@ As `scripts/benchmark.sh` checks them (SPEC B1.10):
 They are built for size only from the golden VTOL flight `testdata/sitl/v1.17.0/vtol_transition.ulg`, using the segments in `scripts/benchmark/vtol_transition.segments`: runs of whole records from the flight's data section that hold no subscription or info record, at most 1 MB each, written by `scripts/benchmark/make_segments.py` (which checks the flight's SHA-256 first).
 
 - `large_10mb`: the flight cut at the end of the first segment that reaches 10,000,000 bytes.
-- `large_50mb`, `large_100mb`: one full copy of the flight, then its segments appended in order, repeated until the log reaches 50,000,000 or 100,000,000 bytes.
+- `large_50mb`, `large_100mb`: one full copy of the flight, then its subscriptions and segments again and again until the log reaches 50,000,000 or 100,000,000 bytes. Repetition r carries every message id raised by r times the flight's count (`msg_ids` in the manifest; `scripts/benchmark/remap_msg_ids.awk`, run on `od` output), so each repetition is a new subscription of the same topic instances and every subscription's timestamps keep increasing, as the ULog specification requires. Every other byte is the flight's.
 
-Each overshoots its size by under 1 MB. Timestamps restart with each repetition, they are not real flights, and R5 may fail on them; the record is still written and timed. Each is sealed twice: with `examples/rules.default.toml`, and with the eight highest-rate topics of the flight in `[sealed_topics]` (`_sealed8`).
+Each overshoots its size by under 1 MB. They are not real flights, and R5 may fail on them; the record is still written and timed. Each is sealed twice: with `examples/rules.default.toml`, and with the eight highest-rate topics of the flight in `[sealed_topics]` (`_sealed8`).
 
 ## In CI
 

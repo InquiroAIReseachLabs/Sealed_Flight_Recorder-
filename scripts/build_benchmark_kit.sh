@@ -6,6 +6,7 @@
 #   sfr-<version>-benchmark/README.md                       docs/BENCHMARK.md: how to run it
 #   sfr-<version>-benchmark/scripts/benchmark.sh
 #   sfr-<version>-benchmark/scripts/benchmark/vtol_transition.segments
+#   sfr-<version>-benchmark/scripts/benchmark/remap_msg_ids.awk
 #   sfr-<version>-benchmark/scripts/testdata/golden_logs.sh
 #   sfr-<version>-benchmark/examples/rules.default.toml
 #   sfr-<version>-benchmark/testdata/                      every golden log with its license or
@@ -36,6 +37,7 @@ mkdir -p "$kit/scripts/benchmark" "$kit/scripts/testdata" "$kit/examples" "$kit/
 install -m 0644 docs/BENCHMARK.md "$kit/README.md"
 install -m 0755 scripts/benchmark.sh "$kit/scripts/"
 install -m 0644 scripts/benchmark/vtol_transition.segments "$kit/scripts/benchmark/"
+install -m 0644 scripts/benchmark/remap_msg_ids.awk "$kit/scripts/benchmark/"
 install -m 0644 scripts/testdata/golden_logs.sh "$kit/scripts/testdata/"
 install -m 0644 examples/rules.default.toml "$kit/examples/"
 # Every golden log and its notice, by the same list benchmark.sh reads.
