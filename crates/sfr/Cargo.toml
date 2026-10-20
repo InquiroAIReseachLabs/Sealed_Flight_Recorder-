@@ -17,9 +17,10 @@ getrandom = { workspace = true }
 rustls-webpki = { workspace = true }
 rustls-pki-types = { workspace = true }
 
-# The sandbox engine, held to the CLI's output in tests/sandbox.rs.
-[dev-dependencies]
-sfr-wasm = { path = "../sfr-wasm" }
+[features]
+# Test builds only: lets SFR_PKCS11_HELPER name the PKCS#11 helper. Off by default; a build with
+# it and without debug assertions (any release profile) fails to compile (src/main.rs).
+dev-helper = []
 
 [lints]
 workspace = true

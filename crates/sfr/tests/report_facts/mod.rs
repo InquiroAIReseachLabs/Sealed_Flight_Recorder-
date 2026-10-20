@@ -548,7 +548,7 @@ pub fn check(record: &Value, md: &str) {
     );
     assert_eq!(l.item("SHA-256"), hex_span(f(log, "sha256")));
     assert_eq!(
-        l.item("BLAKE3 (index only, adds no security)"),
+        l.item("BLAKE3 (checked by verify --ulog like SHA-256; adds no security beyond it)"),
         hex_span(f(log, "blake3"))
     );
     assert_eq!(l.item("VTOL"), ev(f(vehicle, "is_vtol")));

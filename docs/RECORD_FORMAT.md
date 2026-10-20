@@ -75,7 +75,7 @@ A record holds exactly these thirteen fields (`RECORD_FIELDS` in `crates/sfr-cor
 
 | Member | Value |
 |---|---|
-| `blake3` | lowercase hex BLAKE3 of the whole file: an index for finding the file, which adds no security. SHA-256 is the digest the seal rests on, and `verify --ulog` checks it first |
+| `blake3` | lowercase hex BLAKE3 of the whole file. `verify --ulog` checks it after `sha256`, and a mismatch fails verification like any other; it adds no security beyond SHA-256, the digest the seal rests on |
 | `file_name` | the file name, without directories |
 | `firmware` | `git`: the `ver_sw` info message, or null; `ver_sw_release`: that info message as `0x` and eight lowercase hex digits, or null; `version`: `major.minor.patch` with a `-rc`, `-beta`, `-alpha` or `-dev` suffix from its last byte (`version_string` in `crates/sfr-core/src/ingest.rs`), or null |
 | `sha256` | lowercase hex SHA-256 of the whole file |
@@ -255,7 +255,7 @@ These commands check the golden record `examples/reports/vtol_transition.sfr`, i
 
 They need:
 
-- **OpenSSL 3.0 or later** for the signature: `openssl pkeyutl -rawin` (Ed25519 over the raw message) arrived in OpenSSL 3.0, and 1.1.1 has no `-rawin` (not run). The commands were also run with OpenSSL `3.0.13`. LibreSSL and other programs installed as `openssl` were not tested.
+- **OpenSSL 3.0 or later** for the signature: `openssl pkeyutl -rawin` (Ed25519 over the raw message) arrived in OpenSSL 3.0, and 1.1.1 has no `-rawin` (not run). The commands were also run with OpenSSL `3.0.13`. LibreSSL and other programs installed as `openssl` were not tested. The docs job in `.github/workflows/ci.yml` prints the version it runs.
 - **b3sum** for BLAKE3 (`cargo install b3sum --locked`, or a package); CI installs b3sum `1.8.7`, the version of the `blake3` crate `sfr` uses.
 - **coreutils** (`sha256sum`, `wc`), `grep`, `sed` and **bash**, whose `printf` turns hex into bytes.
 - **Python 3.11 or later**, standard library only, for the reference verifier (step 4).
@@ -271,13 +271,13 @@ log=testdata/sitl/v1.17.0/vtol_transition.ulg
 ident=$(grep -o '"log":{"blake3":"[0-9a-f]\{64\}","file_name":"[^"\\]*","firmware":{[^}]*},"sha256":"[0-9a-f]\{64\}","size":"[0-9]*"' "$rec")
 field() { printf '%s' "$ident" | sed "s/.*\"$1\":\"\\([^\"]*\\)\".*/\\1/"; }
 same() { if [ "$2" = "$3" ]; then echo "$1 matches: $2"; else echo "$1 DIFFERS: record $2, file $3"; fi; }
-same "blake3 (index only)" "$(field blake3)" "$(b3sum --no-names "$log")"
+same blake3 "$(field blake3)" "$(b3sum --no-names "$log")"
 same sha256 "$(field sha256)" "$(sha256sum < "$log" | cut -d' ' -f1)"
 same size "$(field size)" "$(wc -c < "$log" | tr -d ' ')"
 ```
 
 ```text doc-output
-blake3 (index only) matches: 0af5378155f2d8dc440697a01096d4af50217c6eb33f93b3bef3d976a54adbfd
+blake3 matches: 0af5378155f2d8dc440697a01096d4af50217c6eb33f93b3bef3d976a54adbfd
 sha256 matches: 86d64e54d1261991f4035355550f64e017f8a486c5c665848d6e68ae67fc9bf3
 size matches: 24295307
 ```
