@@ -604,14 +604,48 @@ pub const HAZARD_FLAGS: [(&str, &str); 12] = [
     ("flight_time_limit_exceeded", "v1.14.0 to v1.17.0"),
 ];
 
+/// The longest gap between two `failsafe_flags` samples in flight before R4 warns, in
+/// microseconds. PX4 publishes `failsafe_flags` from
+/// `src/modules/commander/HealthAndArmingChecks/HealthAndArmingChecks.cpp` when the results change
+/// or `now > _failsafe_flags.timestamp + 500_ms`, and `Commander.cpp` runs those checks at most
+/// every 100 ms (`_last_health_and_arming_check + 100_ms`), so a gap reaches 600 ms at most; the
+/// logger records every publication (`add_topic("failsafe_flags")`, no interval). The same at every
+/// tag v1.14.0 to v1.17.0. The bound adds 400 ms for scheduling on a loaded flight computer; the
+/// golden logs' longest gap in flight is 600 ms.
+pub const FAILSAFE_FLAGS_MAX_GAP_US: u64 = 1_000_000;
+
+/// Gaps longer than [`FAILSAFE_FLAGS_MAX_GAP_US`] between consecutive `failsafe_flags` samples of
+/// one instance where the gap overlaps a flight: (count, longest, its start), over every instance.
+fn failsafe_flags_gaps(f: &FlightLog, armed: &[ArmedInterval]) -> Option<(usize, u64, u64)> {
+    let mut count = 0usize;
+    let mut longest: Option<(u64, u64)> = None;
+    for fs in std::iter::once(&f.failsafe_flags).chain(&f.failsafe_flags_others) {
+        let mut ts: Vec<u64> = fs.rows.iter().map(|r| r.id.ts).collect();
+        ts.sort_unstable();
+        for w in ts.iter().zip(ts.iter().skip(1)) {
+            let (a, b) = (*w.0, *w.1);
+            let gap = b - a;
+            let in_flight = armed
+                .iter()
+                .any(|i| a < i.disarm.unwrap_or(u64::MAX) && b > i.arm);
+            if gap > FAILSAFE_FLAGS_MAX_GAP_US && in_flight {
+                count += 1;
+                if longest.is_none_or(|(g, _)| gap > g) {
+                    longest = Some((gap, a));
+                }
+            }
+        }
+    }
+    longest.map(|(g, t)| (count, g, t))
+}
+
 /// Hazard-class flags ([`HAZARD_FLAGS`]) true on every `failsafe_flags` sample of a flight (an
 /// armed interval, through the sample that disarms), on any instance: (name, ARM time, samples).
 fn hazard_whole_flight(f: &FlightLog, armed: &[ArmedInterval]) -> Vec<(String, u64, usize)> {
     let mut out = Vec::new();
     let all = std::iter::once(&f.failsafe_flags).chain(&f.failsafe_flags_others);
     for fs in all {
-        let mut rows = fs.rows.clone();
-        rows.sort_by_key(|r| (r.id.ts, r.id.index));
+        let rows = crate::events::sorted_by_time(&fs.rows);
         for (i, def) in fs.flags.iter().enumerate() {
             if !HAZARD_FLAGS.iter().any(|(n, _)| *n == def.name) {
                 continue;
@@ -664,9 +698,8 @@ fn flags_in_flight(f: &FlightLog, armed: &[ArmedInterval]) -> BTreeMap<String, F
             .filter_map(|r| r.nav_state.map(|n| (r.id.ts, n)))
             .collect();
         nav.sort_by_key(|(t, _)| *t);
-        let mut rows = fs.rows.clone();
-        rows.sort_by_key(|r| (r.id.ts, r.id.index));
-        for row in &rows {
+        let rows = crate::events::sorted_by_time(&fs.rows);
+        for row in rows.iter() {
             let t = row.id.ts;
             if !in_flight_sample(armed, t) {
                 continue;
@@ -767,8 +800,7 @@ fn r4(f: &FlightLog) -> RuleResult {
             continue;
         };
         let fs = crate::events::flags_for_instance(f, instance);
-        let mut flag_rows = fs.rows.clone();
-        flag_rows.sort_by_key(|r| (r.id.ts, r.id.index));
+        let flag_rows = crate::events::sorted_by_time(&fs.rows);
         let mut active = false;
         let mut last_arm = None;
         let mut was_armed = false;
@@ -832,6 +864,16 @@ fn r4(f: &FlightLog) -> RuleResult {
     // SPEC B1.6: every failsafe_flags flag true in flight. One the mode in effect requires
     // fails R4 whether or not PX4 raised vehicle_status.failsafe; any other is a warning.
     let flags = flags_in_flight(f, &armed);
+    let gaps = failsafe_flags_gaps(f, &armed);
+    if let Some((n, g, t)) = gaps {
+        detail.push(|| {
+            format!(
+                "warning: failsafe_flags has {n} gap(s) over {} ms between samples in flight, the longest {} ms from boot_us {t}: R4 did not see the flags in those gaps",
+                FAILSAFE_FLAGS_MAX_GAP_US / 1000,
+                g / 1000
+            )
+        });
+    }
     let hazards = hazard_whole_flight(f, &armed);
     for (name, arm, n) in &hazards {
         detail.push(|| {
@@ -876,7 +918,7 @@ fn r4(f: &FlightLog) -> RuleResult {
             format!("not read: failsafe_flags.{name} is not a field PX4 defines at any supported release")
         });
     }
-    let warning = if warned.is_empty() {
+    let mut warning = if warned.is_empty() {
         String::new()
     } else {
         format!(
@@ -884,10 +926,17 @@ fn r4(f: &FlightLog) -> RuleResult {
             warned.join(", ")
         )
     };
+    if let Some((n, g, _)) = gaps {
+        warning.push_str(&format!(
+            "; warning: failsafe_flags {n} gap(s) over {} ms in flight, longest {} ms",
+            FAILSAFE_FLAGS_MAX_GAP_US / 1000,
+            g / 1000
+        ));
+    }
     let failed = failsafes + quadchutes + required.len() + hazard_names.len() > 0;
     let detail = detail.finish();
     if !failed {
-        let status = if warned.is_empty() {
+        let status = if warned.is_empty() && gaps.is_none() {
             Status::Pass
         } else {
             Status::Warn
@@ -1659,8 +1708,8 @@ mod tests {
                         instance: 0,
                         index: 0,
                     },
-                    active: vec![],
-                    mode_req: vec![],
+                    active: vec![].into(),
+                    mode_req: vec![].into(),
                 }],
                 ..FailsafeFlags::default()
             };
@@ -2334,8 +2383,8 @@ mod tests {
                             instance: 0,
                             index: i,
                         },
-                        active: vec![true_at.contains(&(i * 10))],
-                        mode_req: vec![0],
+                        active: vec![true_at.contains(&(i * 10))].into(),
+                        mode_req: vec![0].into(),
                     })
                     .collect(),
                 ..FailsafeFlags::default()
@@ -2365,6 +2414,98 @@ mod tests {
         // Before the ARM and after the disarm only: nothing.
         let r = r4(&flight("fd_motor_failure", &[0, 40]));
         assert_eq!(r.status, Status::Pass, "{}", r.found);
+    }
+
+    #[test]
+    fn r4_warns_on_a_failsafe_flags_gap_in_flight_over_the_bound() {
+        use crate::ingest::{FailsafeFlags, FailsafeRow, RowId};
+        let fields: Vec<String> = VEHICLE_STATUS_FIELDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // Armed from 1 s to 10 s; failsafe_flags samples at the given times (us).
+        let rows: Vec<_> = (0..12u64)
+            .map(|i| {
+                let mut r = vtol_row(
+                    i,
+                    if (1..=10).contains(&i) { 2 } else { 1 },
+                    false,
+                    false,
+                    1,
+                );
+                r.id.ts = i * 1_000_000;
+                r
+            })
+            .collect();
+        let flight = |times: &[u64]| FlightLog {
+            vehicle_status: rows.clone(),
+            vehicle_status_fields: fields.clone(),
+            failsafe_flags: FailsafeFlags {
+                flags: vec![crate::ingest::FlagDef::for_test("gcs_connection_lost")],
+                rows: times
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &ts)| FailsafeRow {
+                        id: RowId {
+                            ts,
+                            instance: 0,
+                            index: i as u64,
+                        },
+                        active: vec![false].into(),
+                        mode_req: vec![0].into(),
+                    })
+                    .collect(),
+                ..FailsafeFlags::default()
+            },
+            ..FlightLog::default()
+        };
+        // Every 500 ms, and a gap of exactly the bound: PASS.
+        let every = |step: u64| (0..=24u64).map(|i| i * step).collect::<Vec<_>>();
+        assert_eq!(r4(&flight(&every(500_000))).status, Status::Pass);
+        let mut at_bound = every(500_000);
+        at_bound.retain(|&t| t != 4_500_000);
+        at_bound.push(4_000_000);
+        at_bound.sort_unstable();
+        at_bound.dedup();
+        assert_eq!(r4(&flight(&at_bound)).status, Status::Pass);
+        // Two gaps over the bound in flight, the longer 2.5 s: WARN, with the count and the longest.
+        let gaps: Vec<u64> = every(500_000)
+            .into_iter()
+            .filter(|&t| {
+                !(3_100_000..5_400_000).contains(&t) && !(7_100_000..8_400_000).contains(&t)
+            })
+            .collect();
+        let r = r4(&flight(&gaps));
+        assert_eq!(r.status, Status::Warn, "{}", r.found);
+        assert!(
+            r.found.contains(
+                "warning: failsafe_flags 2 gap(s) over 1000 ms in flight, longest 2500 ms"
+            ),
+            "{}",
+            r.found
+        );
+        assert!(
+            r.detail
+                .iter()
+                .any(|d| d.contains("the longest 2500 ms from boot_us 3000000")),
+            "{:?}",
+            r.detail
+        );
+        // A gap that starts at the disarming sample (11 s) or later: not in flight, PASS. One
+        // that straddles it is in flight, as the window runs through that sample.
+        let longer = (0..=28u64).map(|i| i * 500_000).collect::<Vec<_>>();
+        let outside: Vec<u64> = longer
+            .iter()
+            .copied()
+            .filter(|&t| !(11_100_000..13_000_000).contains(&t))
+            .collect();
+        assert_eq!(r4(&flight(&outside)).status, Status::Pass);
+        let straddling: Vec<u64> = longer
+            .iter()
+            .copied()
+            .filter(|&t| !(10_600_000..12_000_000).contains(&t))
+            .collect();
+        assert_eq!(r4(&flight(&straddling)).status, Status::Warn);
     }
 
     #[test]

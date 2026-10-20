@@ -248,6 +248,8 @@ impl FlatField {
 pub struct Layout {
     /// Payload size in bytes (trailing top-level padding excluded, as the logger omits it).
     pub size: usize,
+    /// Payload size with the trailing top-level padding: the most a data record may hold.
+    pub padded_size: usize,
     /// Every flattened scalar field, in layout order.
     pub fields: Vec<FlatField>,
     /// Positions in `fields`, sorted by name (stable, so a repeated name finds its first
@@ -847,6 +849,16 @@ fn flatten(
         offset,
     };
     let size = fl.walk(top, "", 0, 0)?;
+    let padded_size = if top.len() == defs.len() {
+        size
+    } else {
+        Flattener {
+            formats,
+            out: Vec::new(),
+            offset,
+        }
+        .walk(defs, "", 0, 0)?
+    };
     let mut fields = fl.out;
     fields.shrink_to_fit();
     let mut by_name: Vec<usize> = (0..fields.len()).collect();
@@ -868,6 +880,7 @@ fn flatten(
     }
     let layout = Layout {
         size,
+        padded_size,
         fields,
         by_name,
     };
@@ -1235,6 +1248,19 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                 let payload = c.rest();
                 match subs.get_mut(&msg_id) {
                     Some(sub) => {
+                        // Longer than the format with its padding: bytes no field describes.
+                        if payload.len() > sub.layout.padded_size {
+                            return Err(malformed(
+                                start,
+                                format!(
+                                    "data record for `{}` instance {} (message id {msg_id}) has {} bytes, more than the {} its format declares",
+                                    sub.topic,
+                                    sub.multi_id,
+                                    payload.len(),
+                                    sub.layout.padded_size
+                                ),
+                            ));
+                        }
                         if payload.len() < sub.layout.size {
                             return Err(malformed(
                                 start,
@@ -1618,6 +1644,43 @@ pub(crate) mod tests {
         let e = refused("t:uint64_t timestamp;uint8_t[2] _padding;uint8_t _padding[0];uint8_t x;");
         assert!(
             e.contains("flattens to the field `_padding[0]` twice"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_data_record_longer_than_its_format_is_refused() {
+        // A format with trailing padding: the logger may omit the padding, so a record of the
+        // size without it, or with it, is read; one byte more is refused.
+        let fmt = "t:uint64_t timestamp;uint8_t x;uint8_t[3] _padding0;";
+        let log = |extra: usize| {
+            let mut row = [&5u64.to_le_bytes()[..], &[7]].concat();
+            row.resize(row.len() + extra, 0);
+            Builder::new(0)
+                .flags(&[])
+                .format(fmt)
+                .sub(0, 0, "t")
+                .data(0, &row)
+        };
+        for extra in [0, 3] {
+            read(&log(extra).bytes[..], &mut Collect::default()).expect("read");
+        }
+        let e = read(&log(4).bytes[..], &mut Collect::default()).expect_err("refused");
+        assert!(
+            e.to_string().contains(
+                "data record for `t` instance 0 (message id 0) has 13 bytes, more than the 12 its format declares"
+            ),
+            "{e}"
+        );
+        // Without padding, one byte more than the fields is refused.
+        let b = Builder::new(0)
+            .flags(&[])
+            .format("t:uint64_t timestamp;uint8_t x;")
+            .sub(0, 0, "t")
+            .data(0, &[&5u64.to_le_bytes()[..], &[7, 0]].concat());
+        let e = read(&b.bytes[..], &mut Collect::default()).expect_err("refused");
+        assert!(
+            e.to_string().contains("has 10 bytes, more than the 9"),
             "{e}"
         );
     }

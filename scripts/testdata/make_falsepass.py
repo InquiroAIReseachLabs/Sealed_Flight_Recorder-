@@ -404,6 +404,24 @@ def hazard_whole_flight(control):
     return flight(fs_kw=lambda i: {"geofence_breached": 1 if (in_flight(i) or i == 7) and (not control or i == 4) else 0})
 
 
+def failsafe_flags_gap(control):
+    """failsafe_flags samples at 3, 4 and 5 s, in flight, left out: the one at 4 s had
+    global_position_invalid true, which AUTO_LOITER requires clear, so a reader sees no flag at
+    all. The flags go unseen for 4 s in flight (PX4 publishes them at least every 600 ms). The
+    control keeps every sample: R4 fails on the flag."""
+    log = Log().firmware()
+    log.format("vehicle_status", VS).format("failsafe_flags", FS)
+    log.param_i("SYS_AUTOSTART", 4001).param_f("MPC_XY_VEL_MAX", 12.0)
+    log.sub(0, 0, "vehicle_status").sub(0, 1, "failsafe_flags")
+    for i in range(1, 9):
+        ts = i * S
+        if control or i not in (3, 4, 5):
+            log.data(1, {"timestamp": ts, "mode_req_global_position": 1 << 4,
+                         "global_position_invalid": 1 if i == 4 else 0})
+        log.data(0, vs_row(ts, in_flight(i)))
+    return log
+
+
 def unknown_messages(control):
     """A record of an unknown type and a data record for a message id never subscribed."""
     def extra(log, i):
@@ -552,6 +570,10 @@ RULES_R7 = "rules_r7_general.toml"
 RULES_R7_ALL = "rules_r7_all.toml"
 RULES_IGNORE_ALL = "rules_ignore_all.toml"
 RULES_X4 = "rules_x4.toml"
+RULES_IGNORE_UNION = "rules_ignore_union.toml"
+# One pattern per character a parameter name can start with: no pattern matches every name
+# alone, together they do.
+NAME_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
 
 RULE_FILES = {
     RULES: '''format = "sfr-rules/1"
@@ -581,6 +603,14 @@ ids = [211]
 
 [authorized_sources]
 sources = [{ system = 1, component = 1 }]
+''',
+    RULES_IGNORE_UNION: '''format = "sfr-rules/1"
+
+[required_topics]
+topics = ["vehicle_status", "failsafe_flags"]
+
+[parameters]
+ignore = [''' + ", ".join('"%s*"' % c for c in NAME_CHARS) + ''']
 ''',
     RULES_X4: '''format = "sfr-rules/1"
 
@@ -720,6 +750,17 @@ CASES = [
       "found": {"R4": "hazard failsafe_flags geofence_breached true for the whole flight"}},
      {"exit": 0, "status": "WARN", "results": {"R4": "WARN"},
       "found": {"R4": "warning: failsafe_flags geofence_breached true in flight"}}),
+    ("failsafe_flags_gap", "3.10",
+     "failsafe_flags samples left out in flight where a required flag was true",
+     failsafe_flags_gap, RULES, [],
+     {"exit": 0, "status": "WARN", "results": {"R4": "WARN"},
+      "found": {"R4": "warning: failsafe_flags 1 gap(s) over 1000 ms in flight, longest 4000 ms"}},
+     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
+      "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}}),
+    ("ignore_union", "3.8", "63 ignore patterns, one per first character, that together hide a parameter difference",
+     None, RULES_IGNORE_UNION, [],
+     {"exit": 4, "status": None, "results": {}},
+     {"exit": 1, "status": "FAIL", "results": {"R3": "FAIL"}}),
     ("clipping_decoy_field", "2.1",
      "a scalar field named accel_clipping[0] before the real accel_clipping array",
      clipping_decoy_field, RULES_X4, [],
@@ -779,7 +820,7 @@ def build(root):
         for control in (False, True):
             case = name + ("_control" if control else "")
             if builder is None:
-                # ignore_all: a plain flight with one parameter off baseline, sealed with the
+                # ignore_all and ignore_union: a plain flight with one parameter off baseline, sealed with the
                 # ignore-everything rules (the attack) or the plain rules (the control).
                 data = bytes(flight().out)
                 params = params_at_first_arm(data)

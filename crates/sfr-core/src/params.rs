@@ -230,6 +230,9 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, BaselineError> {
     })
 }
 
+/// The most sets of pattern positions [`Pattern::cover_every_name`] keeps for one name length.
+pub const MAX_COVER_STATES: usize = 100_000;
+
 /// A parameter name pattern: `*` matches any run of characters, everything else literally.
 /// The pieces between `*` are split once, when the pattern is made.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,6 +254,81 @@ impl Pattern {
             text: p.to_string(),
             parts: p.split('*').map(str::to_string).collect(),
         })
+    }
+
+    /// Whether the patterns together match every parameter name ([`valid_param_name`]: 1 to 16
+    /// of `A-Z`, `a-z`, `0-9`, `_`), so R3 would compare nothing. Exact: it looks for a name no
+    /// pattern matches, over every length, with each pattern as a set of positions (a glob
+    /// automaton). Characters a pattern does not name behave alike, so one stands for them all.
+    /// The search keeps at most [`MAX_COVER_STATES`] position sets per length; past that it
+    /// answers true, so `seal` asks for `--allow-ignore-all` rather than guess.
+    pub fn cover_every_name(patterns: &[Pattern]) -> bool {
+        if patterns.is_empty() {
+            return false;
+        }
+        if patterns.iter().any(Pattern::matches_everything) {
+            return true;
+        }
+        // Each pattern as tokens: Some(byte) a literal, None a `*`. At most 64 tokens, so a set
+        // of positions 0..=64 fits a u128.
+        let toks: Vec<Vec<Option<u8>>> = patterns
+            .iter()
+            .map(|p| p.text.bytes().map(|b| (b != b'*').then_some(b)).collect())
+            .collect();
+        let close = |t: &[Option<u8>], mut set: u128| {
+            for (i, tok) in t.iter().enumerate() {
+                if set & (1u128 << i) != 0 && tok.is_none() {
+                    set |= 1u128 << (i + 1);
+                }
+            }
+            set
+        };
+        let step = |t: &[Option<u8>], set: u128, c: u8| {
+            let mut next = 0u128;
+            for (i, tok) in t.iter().enumerate() {
+                if set & (1u128 << i) == 0 {
+                    continue;
+                }
+                match tok {
+                    Some(b) if *b == c => next |= 1u128 << (i + 1),
+                    None => next |= 1u128 << i,
+                    _ => {}
+                }
+            }
+            close(t, next)
+        };
+        let accepts = |t: &[Option<u8>], set: u128| set & (1u128 << t.len()) != 0;
+        let mut letters: Vec<u8> = toks.iter().flatten().flatten().copied().collect();
+        letters.sort_unstable();
+        letters.dedup();
+        if let Some(other) =
+            (0..=127u8).find(|b| (b.is_ascii_alphanumeric() || *b == b'_') && !letters.contains(b))
+        {
+            letters.push(other);
+        }
+        let mut frontier: std::collections::BTreeSet<Vec<u128>> =
+            std::iter::once(toks.iter().map(|t| close(t, 1)).collect()).collect();
+        for _ in 0..16 {
+            let mut next = std::collections::BTreeSet::new();
+            for state in &frontier {
+                for &c in &letters {
+                    let s: Vec<u128> = toks
+                        .iter()
+                        .zip(state)
+                        .map(|(t, &set)| step(t, set, c))
+                        .collect();
+                    if !toks.iter().zip(&s).any(|(t, &set)| accepts(t, set)) {
+                        return false;
+                    }
+                    next.insert(s);
+                }
+                if next.len() > MAX_COVER_STATES {
+                    return true;
+                }
+            }
+            frontier = next;
+        }
+        true
     }
 
     /// Whether the pattern matches every name: it is `*` only (one or more).
@@ -288,6 +366,50 @@ impl Pattern {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn patterns_cover_every_name_only_when_no_name_escapes_them_all() {
+        let ps =
+            |v: &[&str]| -> Vec<Pattern> { v.iter().map(|p| Pattern::new(p).unwrap()).collect() };
+        let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_";
+        let prefixes: Vec<String> = chars.chars().map(|c| format!("{c}*")).collect();
+        let suffixes: Vec<String> = chars.chars().map(|c| format!("*{c}")).collect();
+        let refs =
+            |v: &[String]| -> Vec<Pattern> { v.iter().map(|p| Pattern::new(p).unwrap()).collect() };
+        assert!(Pattern::cover_every_name(&ps(&["*"])));
+        assert!(Pattern::cover_every_name(&ps(&["MPC_*", "**"])));
+        assert!(!Pattern::cover_every_name(&ps(&[])));
+        assert!(!Pattern::cover_every_name(&ps(&["MPC_*", "*_P"])));
+        // One pattern per first character, or per last character: every name, together.
+        assert!(Pattern::cover_every_name(&refs(&prefixes)));
+        assert!(Pattern::cover_every_name(&refs(&suffixes)));
+        // Without one of them, a name starting (or ending) with that character escapes.
+        for skip in [0usize, 26, 62] {
+            let mut v = prefixes.clone();
+            v.remove(skip);
+            assert!(!Pattern::cover_every_name(&refs(&v)), "{skip}");
+            let mut v = suffixes.clone();
+            v.remove(skip);
+            assert!(!Pattern::cover_every_name(&refs(&v)), "{skip}");
+        }
+        // Names with an `_` and names without one: every name.
+        assert!(!Pattern::cover_every_name(&ps(&["*_*", "A*"])));
+        let mut v = prefixes.clone();
+        v.retain(|p| p != "_*");
+        v.push("*_*".into());
+        assert!(Pattern::cover_every_name(&refs(&v)));
+        // What the search says agrees with matching every name of up to two characters.
+        let small = ps(&["A*", "*B", "*_*", "C"]);
+        let mut escaped = false;
+        for a in chars.chars() {
+            escaped |= !small.iter().any(|p| p.matches(&a.to_string()));
+            for b in chars.chars() {
+                escaped |= !small.iter().any(|p| p.matches(&format!("{a}{b}")));
+            }
+        }
+        assert!(escaped);
+        assert!(!Pattern::cover_every_name(&small));
+    }
 
     const GOOD: &str = "# Onboard parameters for Vehicle 1\n#\n# Firmware: 1.17.0 D6F12AD\n#\n# Vehicle-Id Component-Id Name Value Type\n1\t1\tBAT_LOW_THR\t0.150000005960464478\t9\r\n1\t1\tCOM_DISARM_LAND\t2\t9\n1\t1\tNAV_DLL_ACT\t0\t6\n";
 

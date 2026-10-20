@@ -1194,3 +1194,52 @@ fn a_complete_crl_is_never_superseded_by_a_scoped_one() {
         }
     }
 }
+
+/// A trust anchor is checked before it is used: valid at the verification time, a CA
+/// (basicConstraints cA TRUE), allowed to sign certificates (keyUsage keyCertSign), and with a
+/// pathLenConstraint, if any, that allows the chain given. Each defective anchor is the test
+/// root issued again with the same key and subject, so the chain would otherwise verify.
+#[test]
+fn an_expired_non_ca_non_signing_or_too_short_trust_anchor_is_refused() {
+    let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let good = verify_anchor(&record, "root.pem", &BOTH_CRLS);
+    assert_eq!(good.status.code(), Some(0), "{}", text(&good));
+    for (anchor, why) in [
+        ("root_expired.pem", "is not valid at the verification time"),
+        (
+            "root_not_ca.pem",
+            "has basicConstraints cA FALSE, so it is not a CA certificate",
+        ),
+        (
+            "root_no_certsign.pem",
+            "has a keyUsage without keyCertSign, so it may not sign certificates",
+        ),
+        (
+            "root_pathlen0.pem",
+            "has pathLenConstraint 0, which allows 0 intermediate CA certificate(s) below it; the chain gives 1",
+        ),
+    ] {
+        let o = verify_anchor(&record, anchor, &BOTH_CRLS);
+        assert_eq!(o.status.code(), Some(1), "{anchor}: {}", text(&o));
+        assert!(
+            text(&o).contains("the trust anchor CN=sfr test root (sha256:")
+                && text(&o).contains(why),
+            "{anchor}: want `{why}` in {}",
+            text(&o)
+        );
+        assert!(!text(&o).contains("Integrity: VERIFIED"), "{anchor}");
+    }
+    // The expired root is valid at a verification time inside its window.
+    let o = verify_anchor_at(
+        &record,
+        "root_expired.pem",
+        &BOTH_CRLS,
+        Some("2020-06-01T00:00:00Z"),
+    );
+    assert!(
+        !text(&o).contains("is not valid at the verification time"),
+        "{}",
+        text(&o)
+    );
+}

@@ -442,10 +442,21 @@ pub fn attribute_failsafe(
     named
 }
 
-fn sorted_flag_rows(fs: &FailsafeFlags) -> Vec<FailsafeRow> {
-    let mut rows = fs.rows.clone();
-    rows.sort_by_key(|r| (r.id.ts, r.id.index));
-    rows
+fn sorted_flag_rows(fs: &FailsafeFlags) -> std::borrow::Cow<'_, [FailsafeRow]> {
+    sorted_by_time(&fs.rows)
+}
+
+/// `failsafe_flags` rows by (timestamp, index). Rows come in file order, and each
+/// subscription's timestamps never go back (the reader refuses that), so they are usually in
+/// order already and are borrowed; only otherwise are they copied and sorted.
+pub fn sorted_by_time(rows: &[FailsafeRow]) -> std::borrow::Cow<'_, [FailsafeRow]> {
+    if rows.is_sorted_by_key(|r| (r.id.ts, r.id.index)) {
+        std::borrow::Cow::Borrowed(rows)
+    } else {
+        let mut v = rows.to_vec();
+        v.sort_by_key(|r| (r.id.ts, r.id.index));
+        std::borrow::Cow::Owned(v)
+    }
 }
 
 struct Builder {
@@ -1065,8 +1076,8 @@ mod tests {
                 instance: 0,
                 index,
             },
-            active: active.to_vec(),
-            mode_req: vec![0; active.len()],
+            active: active.into(),
+            mode_req: vec![0; active.len()].into(),
         }
     }
 
@@ -1237,8 +1248,8 @@ mod tests {
                         instance: 0,
                         index: 0,
                     },
-                    active: vec![true, true, false],
-                    mode_req: vec![0, 0, 0],
+                    active: vec![true, true, false].into(),
+                    mode_req: vec![0, 0, 0].into(),
                 },
                 FailsafeRow {
                     id: RowId {
@@ -1246,8 +1257,8 @@ mod tests {
                         instance: 0,
                         index: 1,
                     },
-                    active: vec![true, true, true],
-                    mode_req: vec![0, 1 << 4, 0],
+                    active: vec![true, true, true].into(),
+                    mode_req: vec![0, 1 << 4, 0].into(),
                 },
             ],
         };
@@ -1383,8 +1394,8 @@ mod tests {
                         instance: 0,
                         index: 0,
                     },
-                    active: vec![false; 256],
-                    mode_req: vec![0; 256],
+                    active: vec![false; 256].into(),
+                    mode_req: vec![0; 256].into(),
                 },
                 FailsafeRow {
                     id: RowId {
@@ -1392,8 +1403,8 @@ mod tests {
                         instance: 0,
                         index: 1,
                     },
-                    active: vec![true; 256],
-                    mode_req: vec![0; 256],
+                    active: vec![true; 256].into(),
+                    mode_req: vec![0; 256].into(),
                 },
             ],
         };

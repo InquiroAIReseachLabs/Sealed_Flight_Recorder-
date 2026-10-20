@@ -354,7 +354,18 @@ pub fn check(record: &Value, md: &str) {
     }
     // Schema 4: the ignore-everything line exactly when the record says the flag was given.
     if seal.get("allow_ignore_all") == Some(&Value::Bool(true)) {
-        l.expect(sfr_core::report::IGNORE_ALL_LINE);
+        // One `*`-only pattern, or patterns that match every name only together.
+        let rules_text = plain(f(o(f(r, "rules"), "rules"), "text"));
+        let star_only = rules_text
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .any(|p| !p.is_empty() && p.bytes().all(|b| b == b'*'));
+        l.expect(if star_only {
+            "**R3 ignores every parameter.** Sealed with `--allow-ignore-all`: an ignore pattern in the rules file matches every parameter name, so R3 compared none."
+        } else {
+            "**R3 ignores every parameter.** Sealed with `--allow-ignore-all`: the ignore patterns in the rules file together match every parameter name, so R3 compared none."
+        });
         l.expect("");
     }
     // Schema 5: where a log that ends in the middle of a record stops, when it does.
@@ -411,13 +422,19 @@ pub fn check(record: &Value, md: &str) {
     for res in results {
         let res = o(res, "result");
         let status = plain(f(res, "status"));
-        if status != "FAIL" && status != "WARN" {
+        // FAIL and WARN show every detail line; any other status only the lines that name a
+        // field the rule did not read.
+        let shown: Vec<&Value> = a(res, "detail")
+            .iter()
+            .filter(|d| status == "FAIL" || status == "WARN" || plain(d).starts_with("not read: "))
+            .collect();
+        if status != "FAIL" && status != "WARN" && shown.is_empty() {
             continue;
         }
         l.expect(&format!("### {} {status}", ev(f(res, "id"))));
         l.expect("");
         assert_eq!(l.item("Expected"), ev(f(res, "expected")));
-        for d in a(res, "detail") {
+        for d in shown {
             l.expect(&format!("- {}", ev(d)));
         }
         l.expect("");

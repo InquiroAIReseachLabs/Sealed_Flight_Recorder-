@@ -70,6 +70,35 @@ fn truncated_line_of(log: &Obj) -> Result<Option<String>, ReportError> {
     }
 }
 
+/// The start of a detail line that names an input field the rule did not read (R4's
+/// `not read: failsafe_flags.<name> ...`). The report and the table show such lines whatever
+/// the rule's status, not only for FAIL and WARN.
+pub const NOT_READ_PREFIX: &str = "not read: ";
+
+/// The report line of a record sealed with `--allow-ignore-all` whose ignore patterns match
+/// every parameter name together, though none of them does alone.
+pub const IGNORE_ALL_UNION_LINE: &str = "**R3 ignores every parameter.** Sealed with `--allow-ignore-all`: \
+the ignore patterns in the rules file together match every parameter name, so R3 compared none.";
+
+/// [`IGNORE_ALL_LINE`] when one ignore pattern of the record's rules file matches every name
+/// (or the file cannot be read here), else [`IGNORE_ALL_UNION_LINE`].
+pub fn ignore_all_line(record: &Value) -> &'static str {
+    let text = match record {
+        Value::Object(r) => match r.get("rules") {
+            Some(Value::Object(rules)) => match rules.get("text") {
+                Some(Value::Str(t)) => Some(t.as_str()),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    match text.and_then(|t| crate::rules::parse_rules(t).ok()) {
+        Some(rules) if !rules.ignore_has_star_only() => IGNORE_ALL_UNION_LINE,
+        _ => IGNORE_ALL_LINE,
+    }
+}
+
 /// The report line of a record sealed with `--allow-ignore-all` (`seal.allow_ignore_all`).
 pub const IGNORE_ALL_LINE: &str = "**R3 ignores every parameter.** Sealed with `--allow-ignore-all`: \
 an ignore pattern in the rules file matches every parameter name, so R3 compared none.";
@@ -401,7 +430,7 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         out.push_str("\n\n");
     }
     if seal.get("allow_ignore_all") == Some(&Value::Bool(true)) {
-        out.push_str(IGNORE_ALL_LINE);
+        out.push_str(ignore_all_line(record));
         out.push_str("\n\n");
     }
     // Schema 5: a log that ends in the middle of a record.
@@ -441,6 +470,15 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         }
         if status == "FAIL" || status == "WARN" {
             failed.push((id, status, s(res, "expected", &path)?, detail));
+        } else {
+            // A field the rule did not read is shown whatever the status.
+            let notes: Vec<String> = detail
+                .into_iter()
+                .filter(|d| d.starts_with(NOT_READ_PREFIX))
+                .collect();
+            if !notes.is_empty() {
+                failed.push((id, status, s(res, "expected", &path)?, notes));
+            }
         }
     }
     out.push('\n');

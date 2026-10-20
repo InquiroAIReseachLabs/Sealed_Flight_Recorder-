@@ -260,10 +260,12 @@ impl std::fmt::Display for TypeMismatch {
 pub struct FailsafeRow {
     /// Source row.
     pub id: RowId,
-    /// Whether each flag is active.
-    pub active: Vec<bool>,
-    /// The flag's `mode_req_*` bitmask (bit `1 << nav_state`), or 0 when it has none.
-    pub mode_req: Vec<u32>,
+    /// Whether each flag is active. Shared with the row before it when equal, so a long log of
+    /// unchanging flags keeps one copy.
+    pub active: Rc<[bool]>,
+    /// The flag's `mode_req_*` bitmask (bit `1 << nav_state`), or 0 when it has none; shared the
+    /// same way.
+    pub mode_req: Rc<[u32]>,
 }
 
 /// The `failsafe_flags` topic of one instance.
@@ -539,6 +541,20 @@ impl FlightLogIngestor for Px4Ingestor {
         crypto: &dyn CryptoBackend,
         sealed_topics: &[String],
     ) -> Result<Ingested, IngestError> {
+        ingest_px4(file_name, input, crypto, sealed_topics, MAX_KEPT_ROWS)
+    }
+}
+
+/// [`Px4Ingestor::ingest_sealing`], keeping at most `max_kept_rows` rows ([`MAX_KEPT_ROWS`];
+/// tests give a smaller one to reach the limit with a small log).
+fn ingest_px4(
+    file_name: &str,
+    input: &mut dyn Read,
+    crypto: &dyn CryptoBackend,
+    sealed_topics: &[String],
+    max_kept_rows: usize,
+) -> Result<Ingested, IngestError> {
+    {
         let mut hashing = Hashing {
             inner: input,
             sha: crypto.sha256_stream(),
@@ -551,6 +567,7 @@ impl FlightLogIngestor for Px4Ingestor {
                 names: sealed_topics.iter().cloned().collect(),
                 ..Sealing::default()
             },
+            max_kept_rows: Some(max_kept_rows),
             ..Collector::default()
         };
         let summary = {
@@ -753,6 +770,14 @@ struct SealAcc {
     sha: Box<dyn Sha256Stream>,
 }
 
+/// The most data records kept as rows for the rules, over every topic they read
+/// (`vehicle_status`, `failsafe_flags`, `vehicle_command`, `vehicle_command_ack`,
+/// `vehicle_gps_position`, `sensor_gps`, `battery_status`, `estimator_status`,
+/// `estimator_selector_status`, `vehicle_imu_status`, `sensor_selection`). The golden flights
+/// keep 120 to 145 a second, so this is about 15 hours of flight; at the limit `seal` uses at
+/// most about 600 MB (docs/LIMITS.md). A log over it is refused (SPEC B1.4).
+pub const MAX_KEPT_ROWS: usize = 8_000_000;
+
 /// Sealed topic digests, computed while streaming; no data record is kept.
 #[derive(Default)]
 struct Sealing<'c> {
@@ -791,6 +816,10 @@ struct Collector<'c> {
     fs_schema: Option<(Rc<Layout>, Rc<Vec<FlagDef>>)>,
     flight: FlightLog,
     limit: Option<String>,
+    /// Data records kept as rows so far, and the most it may keep ([`MAX_KEPT_ROWS`]).
+    kept_rows: usize,
+    /// `None` is [`MAX_KEPT_ROWS`]; tests give a smaller limit.
+    max_kept_rows: Option<usize>,
     // Position of the next data or parameter record, in file order.
     order: u64,
 }
@@ -1002,6 +1031,22 @@ impl Visitor for Collector<'_> {
         *counter = counter.saturating_add(1);
         let rows = self.flight.topic_rows.entry(sub.topic.clone()).or_insert(0);
         *rows = rows.saturating_add(1);
+        // Every data record a rule reads is kept as a row; the rest are only counted. The rows
+        // are bounded so that memory is (SPEC B1.4).
+        if !matches!(sub.decoder, Decoder::Count) {
+            let max = self.max_kept_rows.unwrap_or(MAX_KEPT_ROWS);
+            if self.kept_rows >= max {
+                self.limit.get_or_insert_with(|| {
+                    crate::limit_exceeded(
+                        "the number of data records kept for the rules",
+                        max,
+                        "records",
+                    )
+                });
+                return;
+            }
+            self.kept_rows += 1;
+        }
         match &sub.decoder {
             Decoder::VehicleStatus(d) => {
                 let row = VehicleStatusRow {
@@ -1021,12 +1066,12 @@ impl Visitor for Collector<'_> {
                 self.vs.entry(sub.multi_id).or_default().push(row);
             }
             Decoder::Failsafe(flags) => {
-                let active = flags
+                let active: Vec<bool> = flags
                     .iter()
                     .map(|f| f.field.read_u64(p).is_some_and(|v| v != 0))
                     .collect();
                 // A mode_req_* mask is a uint32 at every supported tag; pinned() reads no other.
-                let mode_req = flags
+                let mode_req: Vec<u32> = flags
                     .iter()
                     .map(|f| {
                         f.requirement
@@ -1036,6 +1081,13 @@ impl Visitor for Collector<'_> {
                     })
                     .collect();
                 if let Some(inst) = self.fs.get_mut(&sub.multi_id) {
+                    // Equal to the row before: share its slices instead of keeping a copy.
+                    let (active, mode_req) = match inst.rows.last() {
+                        Some(prev) if *prev.active == *active && *prev.mode_req == *mode_req => {
+                            (Rc::clone(&prev.active), Rc::clone(&prev.mode_req))
+                        }
+                        _ => (Rc::from(active), Rc::from(mode_req)),
+                    };
                     inst.rows.push(FailsafeRow {
                         id,
                         active,
@@ -1470,8 +1522,8 @@ mod tests {
                 "wind_limit_exceeded"
             ]
         );
-        assert_eq!(fs.rows[0].mode_req, [1 << 4, 0, 1 << 4]);
-        assert_eq!(fs.rows[0].active, [false, true, true]);
+        assert_eq!(*fs.rows[0].mode_req, [1 << 4, 0, 1 << 4]);
+        assert_eq!(*fs.rows[0].active, [false, true, true]);
     }
 
     #[test]
@@ -1501,6 +1553,42 @@ mod tests {
             .ingest("a.ulg", &mut &log[..], &TestBackend)
             .expect("ingests");
         assert!(ing.flight.vehicle_status.is_empty());
+    }
+
+    #[test]
+    fn the_kept_row_limit_is_exact_and_counts_only_rows_the_rules_read() {
+        use crate::ulog::tests::Builder;
+        assert_eq!(MAX_KEPT_ROWS, 8_000_000);
+        // n sensor_selection records (kept) and n records of a topic no rule reads (counted).
+        let log = |n: u64| {
+            let mut b = Builder::new(0)
+                .flags(&[])
+                .format("sensor_selection:uint64_t timestamp;uint32_t accel_device_id;uint32_t gyro_device_id;")
+                .format("other:uint64_t timestamp;")
+                .sub(0, 0, "sensor_selection")
+                .sub(0, 1, "other");
+            for i in 0..n {
+                b = b
+                    .data(
+                        0,
+                        &[&(i + 1).to_le_bytes()[..], &[7, 0, 0, 0, 7, 0, 0, 0]].concat(),
+                    )
+                    .data(1, &(i + 1).to_le_bytes());
+            }
+            b.bytes
+        };
+        let run =
+            |n: u64, max: usize| ingest_px4("x.ulg", &mut &log(n)[..], &TestBackend, &[], max);
+        let ok = run(100, 100).expect("100 kept rows under a limit of 100");
+        assert_eq!(ok.flight.sensor_selection.len(), 100);
+        assert_eq!(ok.flight.topic_rows.get("other"), Some(&100));
+        assert_eq!(
+            run(101, 100).unwrap_err(),
+            IngestError::Limit(
+                "the number of data records kept for the rules exceeds the input limit of 100 records (SPEC B1.4)"
+                    .to_string()
+            )
+        );
     }
 
     #[test]

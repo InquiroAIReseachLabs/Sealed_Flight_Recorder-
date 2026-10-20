@@ -1883,3 +1883,83 @@ fn rule_status(record: &str, id: &str) -> String {
         })
         .unwrap_or_else(|| panic!("no result {id}"))
 }
+
+/// R4 does not read a `failsafe_flags` field no supported PX4 release defines, and says so in a
+/// detail line. That note is shown in the report and in the table whatever R4's status, not only
+/// when it fails or warns.
+#[test]
+fn a_not_read_note_is_shown_in_the_report_and_the_table_when_r4_passes() {
+    let dir = scratch();
+    let (key, _) = keygen(&dir.join("k"));
+    // cut_control.ulg with `bool gps_invalid` added to failsafe_flags, true on every sample.
+    let src = std::fs::read(root().join("testdata/synthetic/cut_control.ulg")).unwrap();
+    let mut out = src[..16].to_vec();
+    let mut pos = 16;
+    let mut fs_id = None;
+    while pos + 3 <= src.len() {
+        let size = u16::from_le_bytes([src[pos], src[pos + 1]]) as usize;
+        let ty = src[pos + 2];
+        let mut body = src[pos + 3..pos + 3 + size].to_vec();
+        if ty == b'F' && body.starts_with(b"failsafe_flags:") {
+            body.extend_from_slice(b"bool gps_invalid;");
+        }
+        if ty == b'A' && &body[3..] == b"failsafe_flags" {
+            fs_id = Some([body[1], body[2]]);
+        }
+        if ty == b'D' && Some([body[0], body[1]]) == fs_id {
+            body.push(1);
+        }
+        out.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        out.push(ty);
+        out.extend_from_slice(&body);
+        pos += 3 + size;
+    }
+    let log = dir.join("unread_flag.ulg");
+    std::fs::write(&log, &out).unwrap();
+    let note =
+        "not read: failsafe_flags.gps_invalid is not a field PX4 defines at any supported release";
+    let log_path = log.to_str().unwrap().to_string();
+    let args = |extra: &[&'static str]| -> Vec<String> {
+        let mut a: Vec<String> = [
+            "seal",
+            log_path.as_str(),
+            "--rules",
+            RULES,
+            "--baseline",
+            "testdata/baselines/synthetic_cut_control.params",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        a.extend(extra.iter().map(|s| s.to_string()));
+        a
+    };
+    let run = |a: Vec<String>| sfr(&a.iter().map(String::as_str).collect::<Vec<_>>());
+    let dry = run(args(&["--dry-run"]));
+    assert_eq!(dry.status.code(), Some(0), "{}", text(&dry));
+    let table = String::from_utf8_lossy(&dry.stdout);
+    assert!(table.contains("R4    PASS"), "{table}");
+    assert!(table.contains(&format!("- {note}")), "{table}");
+    let mut sealing = args(&["--evaluation-only", "--seal-time", SEAL_TIME]);
+    sealing.extend([
+        "--key".to_string(),
+        key.clone(),
+        "--out".to_string(),
+        dir.join("out").to_str().unwrap().to_string(),
+    ]);
+    let o = run(sealing);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let report = std::fs::read_to_string(dir.join("out/unread_flag.sfr.md")).unwrap();
+    let section = report
+        .split("### R4 PASS")
+        .nth(1)
+        .expect("an R4 section in the report");
+    assert!(
+        section.contains(&sfr_core::report::escape(note)),
+        "{report}"
+    );
+    let record =
+        sfr_core::json::parse(&std::fs::read(dir.join("out/unread_flag.sfr")).unwrap()).unwrap();
+    report_facts::check(&record, &report);
+    std::fs::remove_dir_all(dir).unwrap();
+}

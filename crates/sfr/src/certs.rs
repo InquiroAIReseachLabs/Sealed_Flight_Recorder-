@@ -333,6 +333,111 @@ fn name_text(name_tlv: &[u8]) -> String {
     read().unwrap_or_else(|| "(unreadable name)".to_string())
 }
 
+/// id-ce-basicConstraints, 2.5.29.19, as DER contents.
+const BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
+
+/// A certificate's notBefore and notAfter, Unix seconds.
+fn certificate_validity(der: &[u8]) -> Result<(i64, i64), String> {
+    let bad = || "the certificate's validity cannot be read".to_string();
+    let (_, certificate, _) = element(der).ok_or_else(bad)?;
+    let (_, mut tbs, _) = element(certificate).ok_or_else(bad)?;
+    if tbs.first() == Some(&0xa0) {
+        tbs = element(tbs).ok_or_else(bad)?.2;
+    }
+    for _ in 0..3 {
+        // serialNumber, signature, issuer
+        tbs = element(tbs).ok_or_else(bad)?.2;
+    }
+    let (_, validity, _) = element(tbs).ok_or_else(bad)?;
+    let (t, nb, rest) = element(validity).ok_or_else(bad)?;
+    let not_before = der_time(t, nb)?;
+    let (t, na, _) = element(rest).ok_or_else(bad)?;
+    Ok((not_before, der_time(t, na)?))
+}
+
+/// What a trust anchor must be (RFC 5280 sections 4.2.1.3 and 4.2.1.9), checked because webpki
+/// takes from an anchor only its subject, key and name constraints: valid at the verification
+/// time; a CA (basicConstraints cA TRUE); allowed to sign certificates (keyUsage keyCertSign);
+/// and, when it has a pathLenConstraint, allowing at least the `intermediates` given.
+fn check_anchor(der: &[u8], intermediates: usize, verification_time: i64) -> Result<(), String> {
+    let name = || {
+        format!(
+            "the trust anchor {} ({})",
+            certificate_names(der).map_or_else(|| "?".into(), |(_, s)| name_text(&s)),
+            certificate_fingerprint(der)
+        )
+    };
+    let (not_before, not_after) = certificate_validity(der)?;
+    if verification_time < not_before || verification_time > not_after {
+        return Err(format!(
+            "{} is not valid at the verification time {}: valid from {} to {}",
+            name(),
+            format_utc(verification_time),
+            format_utc(not_before),
+            format_utc(not_after)
+        ));
+    }
+    // BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE, pathLenConstraint INTEGER OPTIONAL }
+    let bc = extension_value(der, BASIC_CONSTRAINTS)
+        .and_then(element)
+        .filter(|(tag, _, _)| *tag == 0x30)
+        .map(|(_, c, _)| c);
+    let Some(mut fields) = bc else {
+        return Err(format!(
+            "{} has no basicConstraints extension, so it is not a CA certificate",
+            name()
+        ));
+    };
+    let mut ca = false;
+    let mut path_len: Option<u64> = None;
+    while let Some((tag, contents, rest)) = element(fields) {
+        match tag {
+            0x01 => ca = contents.first().is_some_and(|&b| b != 0),
+            0x02 if contents.len() <= 8 => {
+                path_len = Some(contents.iter().fold(0u64, |n, &b| (n << 8) | u64::from(b)));
+            }
+            _ => return Err(format!("{}: its basicConstraints is malformed", name())),
+        }
+        fields = rest;
+    }
+    if !ca {
+        return Err(format!(
+            "{} has basicConstraints cA FALSE, so it is not a CA certificate",
+            name()
+        ));
+    }
+    // keyUsage BIT STRING: keyCertSign is bit 5.
+    let key_cert_sign = extension_value(der, KEY_USAGE)
+        .and_then(element)
+        .filter(|(tag, _, _)| *tag == 0x03)
+        .and_then(|(_, bits, _)| bits.get(1).copied())
+        .map(|first| first & 0x04 != 0);
+    match key_cert_sign {
+        Some(true) => {}
+        Some(false) => {
+            return Err(format!(
+                "{} has a keyUsage without keyCertSign, so it may not sign certificates",
+                name()
+            ));
+        }
+        None => {
+            return Err(format!(
+                "{} has no keyUsage extension; a trust anchor must carry keyCertSign",
+                name()
+            ));
+        }
+    }
+    if let Some(n) = path_len
+        && (intermediates as u64) > n
+    {
+        return Err(format!(
+            "{} has pathLenConstraint {n}, which allows {n} intermediate CA certificate(s) below it; the chain gives {intermediates}",
+            name()
+        ));
+    }
+    Ok(())
+}
+
 /// The issuer and subject Names of a certificate, each as its whole DER element.
 fn certificate_names(der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     let (_, certificate, _) = element(der)?;
@@ -795,6 +900,18 @@ pub fn check_chain(
             certificate_fingerprint(a),
             certificate_names(a).map_or_else(String::new, |(i, _)| name_text(&i))
         ));
+    }
+    // Every anchor given is checked, whichever one the chain reaches; the pathLenConstraint is
+    // checked on the anchors that issued the top of the chain given.
+    let top_issuer = intermediates.last().map_or(signer, Vec::as_slice);
+    let top_issuer = certificate_names(top_issuer).map(|(i, _)| i);
+    for a in anchors {
+        let issues_top = certificate_names(a).map(|(_, s)| s) == top_issuer;
+        check_anchor(
+            a,
+            if issues_top { intermediates.len() } else { 0 },
+            verification_time,
+        )?;
     }
     let signer_der = CertificateDer::from(signer);
     let ee = EndEntityCert::try_from(&signer_der)

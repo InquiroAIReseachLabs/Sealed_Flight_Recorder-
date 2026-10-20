@@ -50,6 +50,10 @@
 #                     certificates (issuingDistributionPoint onlyContainsUserCerts): refused
 #   inter_cacerts.crl CRL issued by inter, number 2, listing nothing, scoped to CA certificates
 #                     (issuingDistributionPoint onlyContainsCACerts): refused
+#   root_expired.pem, root_not_ca.pem, root_no_certsign.pem, root_pathlen0.pem
+#                     root.pem issued again, same key and subject, with one defect each: valid
+#                     2020 to 2021; basicConstraints cA FALSE; keyUsage without keyCertSign;
+#                     pathLenConstraint 0, too small for a chain through inter. Refused as anchors.
 set -euo pipefail
 export LC_ALL=C TZ=UTC
 
@@ -99,6 +103,18 @@ prompt = no
 CN = sfr test
 [ v3_root ]
 basicConstraints = critical, CA:true
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+[ v3_root_not_ca ]
+basicConstraints = critical, CA:false
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+[ v3_root_no_certsign ]
+basicConstraints = critical, CA:true
+keyUsage = critical, cRLSign
+subjectKeyIdentifier = hash
+[ v3_root_pathlen0 ]
+basicConstraints = critical, CA:true, pathlen:0
 keyUsage = critical, keyCertSign, cRLSign
 subjectKeyIdentifier = hash
 [ v3_inter ]
@@ -231,6 +247,17 @@ EOF
   gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_dp.crl crl_dp
   gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_usercerts.crl crl_usercerts
   gencrl inter 02 "$work/index.empty" 20260601000000Z 20460101000000Z inter_cacerts.crl crl_cacerts
+  # anchor <file> <extensions> <notBefore> <notAfter>: root's key and subject, issued again.
+  anchor() {
+    openssl req -new -config "$work/ca.cnf" -key "$work/root.key" -subj "/CN=sfr test root" \
+      -out "$work/$1.csr"
+    openssl ca -batch -notext -config "$work/ca.cnf" -selfsign -keyfile "$work/root.key" \
+      -extensions "$2" -startdate "$3" -enddate "$4" -in "$work/$1.csr" -out "$out/$1.pem" 2> /dev/null
+  }
+  anchor root_expired v3_root 20200101000000Z 20210101000000Z
+  anchor root_not_ca v3_root_not_ca 20250101000000Z 20460101000000Z
+  anchor root_no_certsign v3_root_no_certsign 20250101000000Z 20460101000000Z
+  anchor root_pathlen0 v3_root_pathlen0 20250101000000Z 20460101000000Z
 }
 
 case "${1:-}" in
