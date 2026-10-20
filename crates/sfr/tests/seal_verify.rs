@@ -331,7 +331,13 @@ fn the_example_reports_render_from_their_records_and_verify() {
     ] {
         let record = format!("examples/reports/{name}.sfr");
         let parsed = sfr_core::json::parse(&std::fs::read(root().join(&record)).unwrap()).unwrap();
-        let md = std::fs::read_to_string(root().join(format!("{record}.md"))).unwrap();
+        let mut md = std::fs::read_to_string(root().join(format!("{record}.md"))).unwrap();
+        // SFR_RENDER_EXAMPLES=1 writes each report again from its record, for a change to the
+        // report alone (the records are kept; scripts/make_example_reports.sh seals new ones).
+        if std::env::var_os("SFR_RENDER_EXAMPLES").is_some() {
+            md = sfr_core::report::render(&parsed).unwrap();
+            std::fs::write(root().join(format!("{record}.md")), &md).unwrap();
+        }
         assert_eq!(
             md,
             sfr_core::report::render(&parsed).unwrap(),
@@ -399,10 +405,12 @@ fn a_report_shows_r3_differences_and_the_facts_check_catches_any_stray_line() {
     }
 }
 
-/// Log text that Markdown, HTML, or a shell would read as something else, and file names
-/// that a shell would split or read as an option: the report shows each value as its own text
-/// (the facts check requires every ASCII punctuation character escaped) and its verify command,
-/// run as written by bash in the directory that holds the files, verifies the record.
+/// Log text that Markdown, HTML, or a shell would read as something else, or that holds ESC or a
+/// newline, and file names that a shell would split, read as an option, or end a quoted string
+/// at: the report shows each value as its own text (the facts check requires every ASCII
+/// punctuation character escaped and every control character as a marker), and its verify
+/// commands, run as written in the directory that holds the files, verify the record in POSIX sh
+/// (dash) and bash without running anything else.
 #[test]
 fn hostile_log_text_and_file_names_give_a_literal_report_and_a_working_verify_command() {
     let dir = scratch();
@@ -411,6 +419,7 @@ fn hostile_log_text_and_file_names_give_a_literal_report_and_a_working_verify_co
     let texts = [
         "abc|def &lt;b&gt;x&lt;/b&gt; &amp; ~~gone~~ $$x$$ :x: *em* _u_ [l](http://x) `t` \\ #1",
         "<script>alert(1)</script> - 1. + 2) > q\tafter tab",
+        "before\u{1b}[31mRED\u{1b}[0m\nsecond line",
     ];
     for (i, t) in texts.iter().enumerate() {
         // A ULog logging message ('L'): level '4' (warning), timestamp, text.
@@ -421,8 +430,17 @@ fn hostile_log_text_and_file_names_give_a_literal_report_and_a_working_verify_co
         log.push(b'L');
         log.extend_from_slice(&payload);
     }
-    for name in ["-x.ulg", "--ulog", "tab\there 'q' $(x).ulg"] {
-        let case = dir.join(format!("case{}", name.len()));
+    let names = [
+        "-x.ulg",
+        "--ulog",
+        "tab\there $(x).ulg",
+        "x';touch INJECTED;#.ulg",
+        "y\u{2019};touch INJECTED;#.ulg",
+        "nl\nend.ulg",
+        "0x10",
+    ];
+    for (i, name) in names.iter().enumerate() {
+        let case = dir.join(format!("case{i}"));
         std::fs::create_dir_all(&case).unwrap();
         let log_path = case.join(name);
         std::fs::write(&log_path, &log).unwrap();
@@ -438,38 +456,50 @@ fn hostile_log_text_and_file_names_give_a_literal_report_and_a_working_verify_co
         report_facts::check(&parsed, &md);
         for t in texts {
             assert!(
-                md.contains(
-                    &t.replace('\t', " ")
-                        .chars()
-                        .fold(String::new(), |mut e, c| {
-                            if c.is_ascii_punctuation() {
-                                e.push('\\');
-                            }
-                            e.push(c);
-                            e
-                        })
-                ),
+                md.contains(&report_facts::esc(t)),
                 "{name}: the log text, escaped, in\n{md}"
             );
         }
+        assert!(!md.contains('\u{1b}'), "{name}: a raw ESC in the report");
         std::fs::copy(&public, case.join("sfr.pub")).unwrap();
-        let command = md
-            .lines()
-            .find(|l| l.starts_with("sfr verify "))
-            .expect("verify command");
-        let bin = report_facts::shell_arg(env!("CARGO_BIN_EXE_sfr"));
-        let o = Command::new("bash")
-            .arg("-c")
-            .arg(format!("{bin} {}", &command["sfr ".len()..]))
-            .current_dir(&case)
-            .output()
-            .unwrap();
-        assert_eq!(o.status.code(), Some(0), "{name}: {command}: {}", text(&o));
-        assert!(
-            text(&o).contains("Integrity: VERIFIED (record and log)"),
-            "{}",
-            text(&o)
-        );
+        // The verify section's code blocks: the command alone, or the POSIX assignments, the
+        // PowerShell assignments and the command.
+        let verify = &md[md.find("## Verify").unwrap()..];
+        let blocks: Vec<&str> = verify
+            .split("```\n")
+            .skip(1)
+            .step_by(2)
+            .map(|b| b.trim_end_matches('\n'))
+            .collect();
+        let script = match blocks.len() {
+            1 => blocks[0].to_string(),
+            3 => format!("{}\n{}", blocks[0], blocks[2]),
+            n => panic!("{name}: {n} code blocks in\n{verify}"),
+        };
+        let bin = report_facts::shell_arg(env!("CARGO_BIN_EXE_sfr")).unwrap();
+        for shell in ["dash", "bash"] {
+            let o = Command::new(shell)
+                .arg("-c")
+                .arg(format!("sfr() {{ {bin} \"$@\"; }}\n{script}"))
+                .current_dir(&case)
+                .output()
+                .unwrap();
+            assert_eq!(
+                o.status.code(),
+                Some(0),
+                "{name}: {shell}: {script}: {}",
+                text(&o)
+            );
+            assert!(
+                text(&o).contains("Integrity: VERIFIED (record and log)"),
+                "{shell}: {}",
+                text(&o)
+            );
+            assert!(
+                !case.join("INJECTED").exists(),
+                "{name}: {shell} ran a command from the file name"
+            );
+        }
     }
 }
 

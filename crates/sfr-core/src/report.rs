@@ -130,16 +130,14 @@ fn s(o: &Obj, key: &str, path: &str) -> Result<String, ReportError> {
     get(o, key, path).map(text)
 }
 
-/// Escapes text for Markdown, in a table cell, a list item, or running text: control
-/// characters become spaces, a character that hides or reorders text (a Unicode format character,
-/// the line and paragraph separators) is written out as its marker, `<U+202E>`, and every ASCII
-/// punctuation character, the marker's included, gets a backslash.
+/// Escapes text for Markdown, in a table cell, a list item, or running text: a control character
+/// (ESC, a newline, a tab) or a character that hides or reorders text (a Unicode format
+/// character, the line and paragraph separators) is written out as its marker, `<U+001B>`, and
+/// every ASCII punctuation character, the marker's included, gets a backslash.
 pub fn escape(t: &str) -> String {
     let mut out = String::with_capacity(t.len());
     for c in t.chars() {
-        if c.is_control() {
-            out.push(' ');
-        } else if crate::display::is_hidden(c) {
+        if c.is_control() || crate::display::is_hidden(c) {
             for m in crate::display::marker(c).chars() {
                 if m.is_ascii_punctuation() {
                     out.push('\\');
@@ -651,59 +649,102 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     } else {
         ""
     };
-    let command = format!(
-        "sfr verify {} --pubkey sfr.pub{allow} --ulog {}",
-        shell_word(&record_file_name(&file_name)),
-        shell_word(&file_name)
-    );
-    let fence = "`".repeat(longest_backtick_run(&command).max(2) + 1);
-    out.push_str(&format!("{fence}\n{command}\n{fence}\n\n"));
+    let record_name = record_file_name(&file_name);
+    match (shell_word(&record_name), shell_word(&file_name)) {
+        (Some(record), Some(log)) => {
+            let command = format!("sfr verify {record} --pubkey sfr.pub{allow} --ulog {log}");
+            let fence = "`".repeat(longest_backtick_run(&command).max(2) + 1);
+            out.push_str(&format!("{fence}\n{command}\n{fence}\n\n"));
+        }
+        _ => {
+            out.push_str(&format!(
+                "{VARIABLE_FORM_NOTE} The log's file name, with each such character shown as a \
+                 marker: {}. Set the variables `record` and `log` to the file names in your shell, \
+                 then run the command.\n\nPOSIX sh, bash:\n\n```\n{}\n{}\n```\n\nPowerShell:\n\n\
+                 ```\n{}\n{}\n```\n\nThen:\n\n```\n\
+                 sfr verify \"$record\" --pubkey sfr.pub{allow} --ulog \"$log\"\n```\n\n",
+                escape(&file_name),
+                posix_assignment("record", &record_name),
+                posix_assignment("log", &file_name),
+                powershell_assignment("record", &record_name),
+                powershell_assignment("log", &file_name),
+            ));
+        }
+    }
     out.push_str("Without `--ulog`, `sfr verify` checks the record alone.\n");
     Ok(out)
 }
 
-/// A file name as one shell word that `sfr` reads as that file: `./` in front of a name that
-/// starts with `-` (else it would be read as an option); then unchanged when it holds only
-/// letters, digits, `.`, `_`, `-`, and `/`; in `$'...'` with each byte of a control character
-/// or of a character that hides or reorders text (a bidirectional control, a zero-width
-/// character) as a three-digit octal escape when it holds one (POSIX dollar-single-quotes, as in
-/// bash, zsh, and ksh), so the command stays on one line and shows what it holds; else in single
-/// quotes.
-pub fn shell_word(name: &str) -> String {
-    let name = if name.starts_with('-') {
+/// The note before the variable form of the verify command.
+pub const VARIABLE_FORM_NOTE: &str = "The file names hold a character that cannot be written \
+     safely in one command for every shell (a control character, a character that hides text, or \
+     a single quote), so the command takes them from shell variables.";
+
+/// `name` as `sfr` should be given it: `./` in front of a name that starts with `-` (else it
+/// would be read as an option).
+fn as_operand(name: &str) -> String {
+    if name.starts_with('-') {
         format!("./{name}")
     } else {
         name.to_string()
-    };
-    let odd = |c: char| c.is_control() || crate::display::is_hidden(c);
-    if name.chars().any(odd) {
-        let mut w = String::from("$'");
-        for c in name.chars() {
-            match c {
-                '\\' | '\'' => {
-                    w.push('\\');
-                    w.push(c);
-                }
-                c if odd(c) => {
-                    let mut buf = [0u8; 4];
-                    for b in c.encode_utf8(&mut buf).bytes() {
-                        w.push_str(&format!("\\{b:03o}"));
-                    }
-                }
-                c => w.push(c),
-            }
-        }
-        w.push('\'');
-        w
-    } else if !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
-    {
-        name
-    } else {
-        format!("'{}'", name.replace('\'', "'\\''"))
     }
+}
+
+/// A file name as one word that POSIX sh, bash and PowerShell all read as that file, or `None`
+/// when no such word exists. The name is taken as an operand ([`as_operand`]); it is written
+/// unchanged when it starts with an ASCII letter or `./` and holds only letters, digits, `.`,
+/// `_`, `-` and `/` (a bare word that PowerShell could read as a number, such as `1kb` or `0x10`,
+/// is never left unquoted); else in single quotes, inside which none of the three shells gives
+/// any character a meaning except the quote itself. A name that holds a single quote (PowerShell
+/// also ends a string at U+2018 to U+201B), a control character, or a character that hides or
+/// reorders text gives `None`: the report then uses the variable form.
+pub fn shell_word(name: &str) -> Option<String> {
+    let name = as_operand(name);
+    let unsafe_char = |c: char| {
+        c.is_control()
+            || crate::display::is_hidden(c)
+            || matches!(c, '\'' | '\u{2018}'..='\u{201b}')
+    };
+    if name.is_empty() || name.chars().any(unsafe_char) {
+        return None;
+    }
+    let plain = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'));
+    let starts_plain =
+        name.starts_with(|c: char| c.is_ascii_alphabetic()) || name.starts_with("./");
+    if plain && starts_plain {
+        Some(name)
+    } else {
+        Some(format!("'{name}'"))
+    }
+}
+
+/// A POSIX sh line that sets `var` to `name` as an operand: `printf` with every byte outside
+/// letters, digits, `.`, `_`, `-` and `/` as a three-digit octal escape, and a final `x` that
+/// keeps a trailing newline through the command substitution.
+pub fn posix_assignment(var: &str, name: &str) -> String {
+    let mut f = String::new();
+    for b in as_operand(name).bytes() {
+        if b.is_ascii_alphanumeric() || b"._-/".contains(&b) {
+            f.push(char::from(b));
+        } else {
+            f.push_str(&format!("\\{b:03o}"));
+        }
+    }
+    format!("{var}=\"$(printf '{f}x')\"; {var}=\"${{{var}%x}}\"")
+}
+
+/// A PowerShell line that sets `$var` to `name` as an operand, from its UTF-8 bytes.
+pub fn powershell_assignment(var: &str, name: &str) -> String {
+    let bytes: Vec<String> = as_operand(name)
+        .bytes()
+        .map(|b| format!("0x{b:02X}"))
+        .collect();
+    format!(
+        "${var} = [Text.Encoding]::UTF8.GetString([byte[]]({}))",
+        bytes.join(", ")
+    )
 }
 
 fn longest_backtick_run(t: &str) -> usize {
@@ -731,7 +772,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn escape_backslashes_every_ascii_punctuation_character_and_blanks_control_characters() {
+    fn escape_backslashes_every_ascii_punctuation_character_and_marks_control_characters() {
         let punct: String = (0x21u8..0x7f)
             .map(char::from)
             .filter(char::is_ascii_punctuation)
@@ -746,7 +787,10 @@ mod tests {
                 .chunks(2)
                 .all(|p| p[0] == '\\' && p[1].is_ascii_punctuation())
         );
-        assert_eq!(escape("a\tb\nc\u{85}d e"), "a b c d e");
+        assert_eq!(
+            escape("a\tb\nc\u{85}d\u{1b}[31m e"),
+            "a\\<U\\+0009\\>b\\<U\\+000A\\>c\\<U\\+0085\\>d\\<U\\+001B\\>\\[31m e"
+        );
         // A format character is written out and escaped like any other punctuation, so a
         // Markdown viewer shows `<U+202E>` as text.
         assert_eq!(escape("PASS\u{202e}FAIL"), "PASS\\<U\\+202E\\>FAIL");
@@ -759,17 +803,45 @@ mod tests {
     }
 
     #[test]
-    fn shell_word_guards_options_quotes_and_control_characters() {
-        assert_eq!(shell_word("flight_1.ulg"), "flight_1.ulg");
-        assert_eq!(shell_word("-x.ulg"), "./-x.ulg");
-        assert_eq!(shell_word("--ulog.sfr"), "./--ulog.sfr");
-        assert_eq!(shell_word("a b's.ulg"), "'a b'\\''s.ulg'");
-        assert_eq!(shell_word("$(id).ulg"), "'$(id).ulg'");
-        assert_eq!(shell_word("a\tb'\\.ulg"), "$'a\\011b\\'\\\\.ulg'");
-        assert_eq!(shell_word("-\n"), "$'./-\\012'");
-        assert_eq!(shell_word("c\u{85}.ulg"), "$'c\\302\\205.ulg'");
-        // A bidirectional override is written out, so the command shows it.
-        assert_eq!(shell_word("a\u{202e}b.ulg"), "$'a\\342\\200\\256b.ulg'");
+    fn shell_word_guards_options_and_gives_none_for_what_no_quoting_makes_safe_everywhere() {
+        let w = |n: &str| shell_word(n);
+        assert_eq!(w("flight_1.ulg").as_deref(), Some("flight_1.ulg"));
+        assert_eq!(w("-x.ulg").as_deref(), Some("./-x.ulg"));
+        assert_eq!(w("--ulog.sfr").as_deref(), Some("./--ulog.sfr"));
+        assert_eq!(w("a b.ulg").as_deref(), Some("'a b.ulg'"));
+        assert_eq!(w("$(id).ulg").as_deref(), Some("'$(id).ulg'"));
+        assert_eq!(w("a;b`c\"d.ulg").as_deref(), Some("'a;b`c\"d.ulg'"));
+        assert_eq!(w("-a b").as_deref(), Some("'./-a b'"));
+        // PowerShell reads these bare words as numbers.
+        assert_eq!(w("1kb").as_deref(), Some("'1kb'"));
+        assert_eq!(w("0x10").as_deref(), Some("'0x10'"));
+        assert_eq!(w(".5").as_deref(), Some("'.5'"));
+        for n in [
+            "a'b.ulg",
+            "a\u{2019}b.ulg",
+            "a\u{2018}b.ulg",
+            "a\u{201b}b.ulg",
+            "a\tb.ulg",
+            "-\n",
+            "c\u{85}.ulg",
+            "a\u{1b}b.ulg",
+            "a\u{202e}b.ulg",
+            "",
+        ] {
+            assert_eq!(w(n), None, "{n:?}");
+        }
+    }
+
+    #[test]
+    fn the_variable_assignments_encode_every_byte_that_a_shell_could_read() {
+        assert_eq!(
+            posix_assignment("log", "-a'b\t%\\.ulg\n"),
+            "log=\"$(printf './-a\\047b\\011\\045\\134.ulg\\012x')\"; log=\"${log%x}\""
+        );
+        assert_eq!(
+            powershell_assignment("log", "a\u{2019}.u"),
+            "$log = [Text.Encoding]::UTF8.GetString([byte[]](0x61, 0xE2, 0x80, 0x99, 0x2E, 0x75))"
+        );
     }
 
     #[test]
