@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# T11 Public text scan: README, docs, examples, the page under site/, and every other tracked text file.
+# T11 Public text scan: README, docs, examples and every other tracked text file.
 # Lists, with file and line: internal wording (a person's role, review or ticket references, series labels),
 # personal information (e-mail addresses, home paths, names), compliance-sounding language, internal codenames,
 # and the strong-claim words that need a test behind them. The first four must have no hits; the claim words
