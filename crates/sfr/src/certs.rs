@@ -473,21 +473,46 @@ pub fn parse_crl(der: &[u8]) -> Result<CrlInfo, String> {
                 ));
             }
             if id == ISSUING_DISTRIBUTION_POINT {
-                // IssuingDistributionPoint: [3] onlySomeReasons, [4] indirectCRL.
+                // IssuingDistributionPoint (RFC 5280 section 5.2.5). Any field that narrows what
+                // the CRL covers makes it a partial CRL: a certificate it does not list may be
+                // revoked in another CRL. sfr reads only complete CRLs, so each is refused:
+                // [0] distributionPoint, [1] onlyContainsUserCerts, [2] onlyContainsCACerts,
+                // [3] onlySomeReasons, [4] indirectCRL, [5] onlyContainsAttributeCerts. A
+                // BOOLEAN field encoded FALSE narrows nothing.
                 let (_, mut fields, _) =
                     element(value).ok_or_else(|| bad("issuingDistributionPoint"))?;
+                let mut scope = Vec::new();
                 while let Some((tag, contents, rest)) = element(fields) {
-                    if tag == 0x84 && contents.first().is_some_and(|&b| b != 0) {
-                        return Err(bad(
-                            "an indirect CRL (issuingDistributionPoint indirectCRL); sfr reads only CRLs of the issuer that signs them",
-                        ));
-                    }
-                    if tag == 0x83 || tag == 0xa3 {
-                        return Err(bad(
+                    let set = contents.first().is_some_and(|&b| b != 0);
+                    let refused = match tag {
+                        0xa0 => Some(
+                            "a CRL scoped to one distribution point (issuingDistributionPoint distributionPoint)",
+                        ),
+                        0x81 if set => Some(
+                            "a CRL that covers only end-entity certificates (issuingDistributionPoint onlyContainsUserCerts)",
+                        ),
+                        0x82 if set => Some(
+                            "a CRL that covers only CA certificates (issuingDistributionPoint onlyContainsCACerts)",
+                        ),
+                        0x83 | 0xa3 => Some(
                             "a CRL that covers only some revocation reasons (issuingDistributionPoint onlySomeReasons)",
-                        ));
-                    }
+                        ),
+                        0x84 if set => Some(
+                            "an indirect CRL (issuingDistributionPoint indirectCRL); sfr reads only CRLs of the issuer that signs them",
+                        ),
+                        0x85 if set => Some(
+                            "a CRL that covers only attribute certificates (issuingDistributionPoint onlyContainsAttributeCerts)",
+                        ),
+                        _ => None,
+                    };
+                    scope.extend(refused);
                     fields = rest;
+                }
+                if !scope.is_empty() {
+                    return Err(bad(&format!(
+                        "{}; sfr reads only complete CRLs",
+                        scope.join("; ")
+                    )));
                 }
                 continue;
             }

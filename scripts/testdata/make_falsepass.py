@@ -188,6 +188,68 @@ def resubscribe_retyped(control):
     return log
 
 
+def _redefined_failsafe(control, fields):
+    """failsafe_flags instance 0 subscribed, then, in the data section, its format redefined with
+    `fields` and instance 0 subscribed again; the second subscription carries the flight, in
+    which global_position_invalid is set at 4 s where the first layout has it. The control
+    keeps one subscription and one format: the flag is true in flight at 4 s."""
+    log = Log().firmware()
+    log.format("vehicle_status", VS).format("failsafe_flags", FS)
+    log.param_i("SYS_AUTOSTART", 4001).param_f("MPC_XY_VEL_MAX", 12.0)
+    log.sub(0, 0, "vehicle_status").sub(0, 1, "failsafe_flags")
+    log.data(1, {"timestamp": S, "mode_req_global_position": 1 << 4})
+    log.data(0, vs_row(S, False))
+    fs_id = 1
+    if not control:
+        log.format("failsafe_flags", fields)
+        log.sub(0, 2, "failsafe_flags")
+        fs_id = 2
+    for i in range(2, 9):
+        ts = i * S
+        row = {"timestamp": ts, "mode_req_global_position": 1 << 4}
+        if control:
+            row["global_position_invalid"] = 1 if i == 4 else 0
+        else:
+            # Under the first layout these bytes would read global_position_invalid true at 4 s.
+            row.update({n: (1 if i == 4 else 0) for _, n in fields if n.startswith("global_position_invalid")})
+        log.data(fs_id, row, fields=FS if control else fields)
+        log.data(0, vs_row(ts, in_flight(i)))
+    return log
+
+
+def format_redefined_drops_flag(control):
+    """failsafe_flags redefined after its first subscription without global_position_invalid,
+    a flag the flight mode requires clear."""
+    return _redefined_failsafe(control, [f for f in FS if f[1] != "global_position_invalid"])
+
+
+def format_redefined_renames_flag(control):
+    """failsafe_flags redefined after its first subscription with global_position_invalid
+    renamed, so a reader that looks the flag up by name finds nothing."""
+    return _redefined_failsafe(control, [(t, n + "_x" if n == "global_position_invalid" else n) for t, n in FS])
+
+
+def resubscribe_identical(control):
+    """failsafe_flags instance 0 subscribed a second time with the same format and no new format
+    record, as a logger may; the second subscription carries global_position_invalid true at
+    4 s. Accepted and read like one subscription: R4 fails on the flag, as it does on the
+    control, which has one subscription."""
+    log = Log().firmware()
+    log.format("vehicle_status", VS).format("failsafe_flags", FS)
+    log.param_i("SYS_AUTOSTART", 4001).param_f("MPC_XY_VEL_MAX", 12.0)
+    log.sub(0, 0, "vehicle_status").sub(0, 1, "failsafe_flags")
+    fs_id = 1
+    for i in range(1, 9):
+        if i == 3 and not control:
+            log.sub(0, 2, "failsafe_flags")
+            fs_id = 2
+        ts = i * S
+        log.data(fs_id, {"timestamp": ts, "mode_req_global_position": 1 << 4,
+                         "global_position_invalid": 1 if i == 4 else 0})
+        log.data(0, vs_row(ts, in_flight(i)))
+    return log
+
+
 def mode_req_uint64(control):
     """mode_req_global_position declared uint64_t with only bit 36 set: as 32 bits it reads 0,
     so the required flag would look not required."""
@@ -471,11 +533,13 @@ CASES = [
      {"exit": 1, "status": "FAIL", "results": {"R6": "FAIL"},
       "found": {"R6": "vehicle_status.in_transition_mode is uint8_t in the log; PX4 defines bool"}},
      {"exit": 1, "status": "FAIL", "results": {"R6": "FAIL"}, "found": {"R6": "1 problem(s)"}}),
+    # Both logs of this case redefine vehicle_status with a format record in the data section,
+    # which the ULog specification does not allow there: both are refused. The case
+    # resubscribe_identical below is the accepted second subscription.
     ("resubscribe_retyped", "1.1", "a second subscription of vehicle_status retypes failsafe to uint8_t",
      resubscribe_retyped, RULES, [],
-     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
-      "found": {"R4": "vehicle_status.failsafe is uint8_t in the log; PX4 defines bool"}},
-     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"}, "found": {"R4": "true in flight 1 time(s)"}}),
+     {"exit": 3, "status": None, "results": {}},
+     {"exit": 3, "status": None, "results": {}}),
     ("instance_one_failsafe", "1.2", "a clean vehicle_status instance 0, failsafe in flight on instance 1",
      instance_one_failsafe, RULES, [],
      {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
@@ -524,6 +588,25 @@ CASES = [
      unknown_messages, RULES, [],
      {"exit": 0, "status": "PASS", "results": {}, "skipped": 2},
      {"exit": 0, "status": "PASS", "results": {}, "skipped": 0}),
+    ("format_redefined_drops_flag", "1.12",
+     "failsafe_flags redefined after its first subscription without a required flag",
+     format_redefined_drops_flag, RULES, [],
+     {"exit": 3, "status": None, "results": {}},
+     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
+      "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}}),
+    ("format_redefined_renames_flag", "1.12",
+     "failsafe_flags redefined after its first subscription with a required flag renamed",
+     format_redefined_renames_flag, RULES, [],
+     {"exit": 3, "status": None, "results": {}},
+     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
+      "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}}),
+    ("resubscribe_identical", "1.12",
+     "failsafe_flags instance 0 subscribed twice with the same format (accepted)",
+     resubscribe_identical, RULES, [],
+     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
+      "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}},
+     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
+      "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}}),
     ("mode_req_uint64", "1.11", "mode_req_global_position declared uint64_t, bit 36 set",
      mode_req_uint64, RULES, [],
      {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
