@@ -85,13 +85,20 @@ class Log:
         return self
 
 
-VS = [("uint64_t", "timestamp"), ("uint8_t", "arming_state"), ("uint8_t", "nav_state"),
-      ("bool", "failsafe"), ("bool", "is_vtol"), ("bool", "in_transition_mode"),
-      ("bool", "in_transition_to_fw"), ("uint8_t", "vehicle_type"), ("uint8_t", "system_type"),
-      ("uint8_t", "latest_arming_reason"), ("uint8_t", "latest_disarming_reason")]
+def px4_fields(tag, topic):
+    """The fields of a topic's message at a PX4 release tag, as (type, name), from
+    scripts/testdata/px4_tables.json, which scripts/px4/px4_tables.py writes from the
+    PX4-Autopilot source at that tag."""
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "px4_tables.json")) as f:
+        tables = json.load(f)
+    rel = next(r for r in tables["releases"] if r["tag"] == tag)
+    return [(t, n) for n, t in tables["msgs"][rel["topics"][topic]]["fields"]]
+
+
+# Every log here states PX4 v1.17.0 (RELEASE_1_17_0), so its formats are that tag's messages.
+VS = px4_fields("v1.17.0", "vehicle_status")
 # nav_state 4 is AUTO_LOITER: bit 4 of a mode_req_* field says that mode needs the flag clear.
-FS = [("uint64_t", "timestamp"), ("uint32_t", "mode_req_global_position"),
-      ("bool", "global_position_invalid"), ("bool", "vtol_fixed_wing_system_failure")]
+FS = px4_fields("v1.17.0", "failsafe_flags")
 S = 1_000_000
 
 
@@ -239,13 +246,13 @@ def never_armed_failsafe(control):
                   vs_kw=lambda i: {"failsafe": 1 if i == 4 else 0})
 
 
-def flag_gps_invalid(control):
-    """failsafe_flags.gps_invalid (a name PX4 does not use) true the whole armed interval,
-    vehicle_status.failsafe never set. The control sets a flag the mode requires instead."""
-    fs = FS + [("bool", "gps_invalid")]
-    if control:
-        return flight(fs_fields=fs, fs_kw=lambda i: {"global_position_invalid": int(in_flight(i))})
-    return flight(fs_fields=fs, fs_kw=lambda i: {"gps_invalid": int(in_flight(i))})
+def flag_gcs_connection_lost(control):
+    """failsafe_flags.gcs_connection_lost, which no mode_req_* mask covers in PX4 v1.17.0, true
+    the whole armed interval, vehicle_status.failsafe never set: a reader that checks only
+    vehicle_status.failsafe or only the required flags passes it. The control sets
+    global_position_invalid instead, which AUTO_LOITER requires (mode_req_global_position)."""
+    flag = "global_position_invalid" if control else "gcs_connection_lost"
+    return flight(fs_kw=lambda i: {flag: int(in_flight(i))})
 
 
 def vtol_mav_type_not_vtol(control):
@@ -482,10 +489,11 @@ CASES = [
      armed_rows_deleted, RULES, [],
      {"exit": 1, "status": "NO ARMED FLIGHT", "results": {"R5": "N/A"}},
      {"exit": 0, "status": "WARN", "results": {"R5": "PASS"}}),
-    ("flag_gps_invalid", "1.4", "failsafe_flags.gps_invalid true for the whole armed interval",
-     flag_gps_invalid, RULES, [],
+    ("flag_gcs_connection_lost", "1.4",
+     "failsafe_flags.gcs_connection_lost true for the whole armed interval",
+     flag_gcs_connection_lost, RULES, [],
      {"exit": 0, "status": "WARN", "results": {"R4": "WARN"},
-      "found": {"R4": "warning: failsafe_flags gps_invalid true in flight"}},
+      "found": {"R4": "warning: failsafe_flags gcs_connection_lost true in flight"}},
      {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
       "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}}),
     ("duplicate_failsafe", "1.5", "a second `bool failsafe` field in the vehicle_status format",

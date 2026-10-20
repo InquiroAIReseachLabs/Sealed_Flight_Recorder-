@@ -24,6 +24,7 @@ import argparse
 import bisect
 import hashlib
 import json
+import os
 import struct
 import sys
 import tomllib
@@ -183,35 +184,40 @@ def decode_release(v):
 RESULT_NAMES = {0: "ACCEPTED", 1: "TEMPORARILY_REJECTED", 2: "DENIED", 3: "UNSUPPORTED",
                 4: "FAILED", 5: "IN_PROGRESS", 6: "CANCELLED"}
 
-# failsafe_flags flag -> mode_req field
-MODE_REQ = {
-    'angular_velocity_invalid': 'mode_req_angular_velocity',
-    'attitude_invalid': 'mode_req_attitude',
-    'local_altitude_invalid': 'mode_req_local_alt',
-    'local_position_invalid': 'mode_req_local_position',
-    'local_position_invalid_relaxed': 'mode_req_local_position_relaxed',
-    'global_position_invalid': 'mode_req_global_position',
-    'global_position_invalid_relaxed': 'mode_req_global_position_relaxed',
-    'auto_mission_missing': 'mode_req_mission',
-    'offboard_control_signal_lost': 'mode_req_offboard_signal',
-    'home_position_invalid': 'mode_req_home_position',
-    'manual_control_signal_lost': 'mode_req_manual_control',
-    'wind_limit_exceeded': 'mode_req_wind_and_flight_time_compliance',
-    'flight_time_limit_exceeded': 'mode_req_wind_and_flight_time_compliance',
-}
+# PX4's message definitions and mode requirements at each supported release tag, read by
+# scripts/px4/px4_tables.py from the PX4-Autopilot source at that tag (px4_tables.json beside this
+# script). The same source as sfr's tables; no code is shared.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'px4_tables.json')) as _f:
+    PX4 = json.load(_f)
 
-# The failsafe_flags booleans of PX4 v1.14 to v1.17 (msg/FailsafeFlags.msg).
-PX4_FLAGS = {
-    'angular_velocity_invalid', 'attitude_invalid', 'local_altitude_invalid',
-    'local_position_invalid', 'local_position_invalid_relaxed', 'local_velocity_invalid',
-    'global_position_invalid', 'global_position_invalid_relaxed', 'auto_mission_missing',
-    'offboard_control_signal_lost', 'home_position_invalid', 'manual_control_signal_lost',
-    'gcs_connection_lost', 'battery_low_remaining_time', 'battery_unhealthy',
-    'primary_geofence_breached', 'geofence_breached', 'mission_failure',
-    'vtol_fixed_wing_system_failure', 'wind_limit_exceeded', 'flight_time_limit_exceeded',
-    'local_position_accuracy_low', 'position_accuracy_low', 'navigator_failure',
-    'fd_critical_failure', 'fd_esc_arming_failure', 'fd_imbalanced_prop', 'fd_motor_failure',
-}
+
+def px4_releases(release):
+    """The tags whose definitions apply to a log with this ver_sw_release: that release tag;
+    else the tags of its minor series; else every tag."""
+    rels = PX4['releases']
+    if release:
+        major, minor, patch, kind = (release >> 24) & 255, (release >> 16) & 255, (release >> 8) & 255, release & 255
+        exact = [r for r in rels if kind == 255 and r['version'] == [major, minor, patch]]
+        if exact:
+            return exact
+        series = [r for r in rels if r['version'][:2] == [major, minor]]
+        if series:
+            return series
+    return rels
+
+
+def px4_types(releases, topic, field):
+    """The types PX4 gives topic.field at these releases."""
+    out = set()
+    for r in releases:
+        i = r['topics'].get(topic)
+        if i is not None:
+            out.update(t for n, t in PX4['msgs'][i]['fields'] if n == field)
+    return out
+
+
+# failsafe_flags flag -> mode_req field, at any supported release.
+MODE_REQ = {f: m for r in PX4['releases'] for f, m in r['mode_requirements']}
 
 VS_REQUIRED_FIELDS = ['timestamp', 'arming_state', 'nav_state', 'failsafe', 'is_vtol',
                       'in_transition_mode', 'in_transition_to_fw', 'vehicle_type']
@@ -865,27 +871,21 @@ def run(path, rules, required, ptime, param_index, debug):
     ev_list = [e[2] for e in events]
 
     # ---- Rules
-    # The types PX4 v1.14 to v1.17 give the vehicle_status fields the rules read
-    # (msg/VehicleStatus.msg at the release tags, msg/versioned/ from v1.16).
-    vs_types = {'arming_state': 'uint8_t', 'nav_state': 'uint8_t', 'failsafe': 'bool',
-                'is_vtol': 'bool', 'in_transition_mode': 'bool', 'in_transition_to_fw': 'bool',
-                'vehicle_type': 'uint8_t', 'system_type': 'uint8_t'}
+    # The types PX4 gives the fields at the tags the log's version selects (px4_tables.json).
+    rels = px4_releases(info.get('ver_sw_release'))
+    all_rels = PX4['releases']
 
     def vs_ok(fields):
-        """Every instance has each field with PX4's type."""
-        return bool(vs_topics) and all(t.has(f) and t.types.get(f) == vs_types.get(f, t.types.get(f))
+        """Every instance has each field with a type PX4 gives it at those tags."""
+        return bool(vs_topics) and all(t.has(f) and t.types.get(f) in px4_types(rels, 'vehicle_status', f)
                                        for t in vs_topics for f in fields)
 
     def ff_ok():
-        """failsafe_flags flags as PX4 types them: the mode_req_* fields uint32, battery_warning
-        uint8, each PX4 flag name bool."""
+        """Every failsafe_flags field that PX4 defines at some supported tag has a type PX4 gives
+        it at the log's tags; a field no tag defines is not read."""
         for t in ff_by_inst.values():
             for f, ty in t.types.items():
-                if f.startswith('mode_req_') and ty != 'uint32_t':
-                    return False
-                if f == 'battery_warning' and ty != 'uint8_t':
-                    return False
-                if f in PX4_FLAGS and ty != 'bool':
+                if px4_types(all_rels, 'failsafe_flags', f) and ty not in px4_types(rels, 'failsafe_flags', f):
                     return False
         return bool(ff_by_inst)
 
@@ -935,8 +935,9 @@ def run(path, rules, required, ptime, param_index, debug):
                     if j < 0:
                         continue
                     n = nav[j]
-                    # Every bool field is a flag, and battery_warning above 0.
-                    flags = [f for f, ty in fft.types.items() if ty == 'bool']
+                    # Every field PX4 defines as a bool flag, and battery_warning above 0.
+                    flags = [f for f, ty in fft.types.items()
+                             if ty == 'bool' and 'bool' in px4_types(all_rels, 'failsafe_flags', f)]
                     if fft.types.get('battery_warning') == 'uint8_t':
                         flags.append('battery_warning')
                     for flag in flags:

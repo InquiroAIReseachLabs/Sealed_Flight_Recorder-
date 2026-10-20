@@ -27,10 +27,6 @@ pub enum IngestError {
     Limit(String),
 }
 
-/// Most flags (`bool` fields plus `battery_warning`) a `failsafe_flags` format may have. PX4
-/// v1.14 to v1.17 log 26 to 28.
-pub const MAX_FAILSAFE_FLAGS: usize = 256;
-
 impl std::fmt::Display for IngestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -220,17 +216,28 @@ pub struct TypeMismatch {
     pub field: String,
     /// The type the log declares.
     pub found: &'static str,
-    /// The type PX4 defines.
+    /// The types PX4 defines at the release tags the log's version selects, joined with " or ";
+    /// empty when none of them defines the field.
     pub expected: String,
+    /// Those release tags ([`crate::px4::tags_label`]).
+    pub tags: String,
 }
 
 impl std::fmt::Display for TypeMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}.{} is {} in the log; PX4 defines {}",
-            self.topic, self.field, self.found, self.expected
-        )
+        if self.expected.is_empty() {
+            write!(
+                f,
+                "{}.{} is {} in the log; PX4 {} does not define it",
+                self.topic, self.field, self.found, self.tags
+            )
+        } else {
+            write!(
+                f,
+                "{}.{} is {} in the log; PX4 defines {} ({})",
+                self.topic, self.field, self.found, self.expected, self.tags
+            )
+        }
     }
 }
 
@@ -250,9 +257,9 @@ pub struct FailsafeRow {
 pub struct FailsafeFlags {
     /// uORB instance.
     pub multi_id: u8,
-    /// True when a `mode_req_*` value did not fit 32 bits, so the mode requirements cannot be
-    /// read.
-    pub mode_req_unreadable: bool,
+    /// Fields of the logged format that no supported PX4 release defines in `failsafe_flags`,
+    /// so they are not read.
+    pub ignored: Vec<String>,
     /// Flag definitions from the logged format.
     pub flags: Vec<FlagDef>,
     /// Samples in file order.
@@ -581,123 +588,52 @@ fn get_f32(f: &Option<FlatField>, p: &[u8]) -> Option<f32> {
     f.as_ref().and_then(|f| f.read_f32(p))
 }
 
-/// The types PX4 v1.14 to v1.17 give the fields a rule reads (`msg/*.msg` at the release tags;
-/// `msg/versioned/` from v1.16). `vehicle_command.source_component` is `uint8_t` in v1.14 and
-/// `uint16_t` from v1.15 ([`source_component_types`]); `failsafe_flags` is checked by
-/// [`failsafe_flags_type`].
-const PINNED: &[(&str, &str, Scalar)] = &[
-    ("vehicle_status", "arming_state", Scalar::U8),
-    ("vehicle_status", "nav_state", Scalar::U8),
-    ("vehicle_status", "failsafe", Scalar::Bool),
-    ("vehicle_status", "is_vtol", Scalar::Bool),
-    ("vehicle_status", "in_transition_mode", Scalar::Bool),
-    ("vehicle_status", "in_transition_to_fw", Scalar::Bool),
-    ("vehicle_status", "vehicle_type", Scalar::U8),
-    ("vehicle_status", "system_type", Scalar::U8),
-    ("vehicle_status", "latest_arming_reason", Scalar::U8),
-    ("vehicle_status", "latest_disarming_reason", Scalar::U8),
-    ("vehicle_command", "command", Scalar::U32),
-    ("vehicle_command", "source_system", Scalar::U8),
-    ("battery_status", "remaining", Scalar::F32),
-    ("battery_status", "connected", Scalar::Bool),
-    ("vehicle_gps_position", "fix_type", Scalar::U8),
-    ("vehicle_gps_position", "satellites_used", Scalar::U8),
-    ("estimator_status", "filter_fault_flags", Scalar::U32),
-    ("estimator_selector_status", "primary_instance", Scalar::U8),
-    ("vehicle_imu_status", "accel_device_id", Scalar::U32),
-    ("vehicle_imu_status", "accel_clipping[0]", Scalar::U32),
-    ("vehicle_imu_status", "accel_clipping[1]", Scalar::U32),
-    ("vehicle_imu_status", "accel_clipping[2]", Scalar::U32),
-    ("vehicle_imu_status", "accel_vibration_metric", Scalar::F32),
-    ("sensor_selection", "accel_device_id", Scalar::U32),
+/// The fields a rule reads, besides `failsafe_flags`, whose every field PX4 defines is read.
+/// Their types come from the PX4 source at each release tag ([`crate::px4`]).
+const RULE_FIELDS: &[(&str, &str)] = &[
+    ("vehicle_status", "arming_state"),
+    ("vehicle_status", "nav_state"),
+    ("vehicle_status", "failsafe"),
+    ("vehicle_status", "is_vtol"),
+    ("vehicle_status", "in_transition_mode"),
+    ("vehicle_status", "in_transition_to_fw"),
+    ("vehicle_status", "vehicle_type"),
+    ("vehicle_status", "system_type"),
+    ("vehicle_status", "latest_arming_reason"),
+    ("vehicle_status", "latest_disarming_reason"),
+    ("vehicle_command", "command"),
+    ("vehicle_command", "source_system"),
+    ("vehicle_command", "source_component"),
+    ("battery_status", "remaining"),
+    ("battery_status", "connected"),
+    ("vehicle_gps_position", "fix_type"),
+    ("vehicle_gps_position", "satellites_used"),
+    ("estimator_status", "filter_fault_flags"),
+    ("estimator_selector_status", "primary_instance"),
+    ("vehicle_imu_status", "accel_device_id"),
+    ("vehicle_imu_status", "accel_clipping[0]"),
+    ("vehicle_imu_status", "accel_clipping[1]"),
+    ("vehicle_imu_status", "accel_clipping[2]"),
+    ("vehicle_imu_status", "accel_vibration_metric"),
+    ("sensor_selection", "accel_device_id"),
 ];
 
-/// The `failsafe_flags` booleans of PX4 v1.14 to v1.17 (`FailsafeFlags.msg`).
-const PX4_FAILSAFE_FLAGS: &[&str] = &[
-    "angular_velocity_invalid",
-    "attitude_invalid",
-    "local_altitude_invalid",
-    "local_position_invalid",
-    "local_position_invalid_relaxed",
-    "local_velocity_invalid",
-    "global_position_invalid",
-    "global_position_invalid_relaxed",
-    "auto_mission_missing",
-    "offboard_control_signal_lost",
-    "home_position_invalid",
-    "manual_control_signal_lost",
-    "gcs_connection_lost",
-    "battery_low_remaining_time",
-    "battery_unhealthy",
-    "primary_geofence_breached",
-    "geofence_breached",
-    "mission_failure",
-    "vtol_fixed_wing_system_failure",
-    "wind_limit_exceeded",
-    "flight_time_limit_exceeded",
-    "local_position_accuracy_low",
-    "position_accuracy_low",
-    "navigator_failure",
-    "fd_critical_failure",
-    "fd_esc_arming_failure",
-    "fd_imbalanced_prop",
-    "fd_motor_failure",
-];
-
-/// The type PX4 gives a `failsafe_flags` field R4 reads, or `None` for a field R4 does not
-/// read by name (any other `bool` is still read as a flag).
-fn failsafe_flags_type(name: &str) -> Option<Scalar> {
-    if name.starts_with("mode_req_") {
-        Some(Scalar::U32)
-    } else if name == "battery_warning" {
-        Some(Scalar::U8)
-    } else if PX4_FAILSAFE_FLAGS.contains(&name) {
-        Some(Scalar::Bool)
-    } else {
-        None
-    }
-}
-
-/// The types `vehicle_command.source_component` may have for this firmware: `uint8_t` in
-/// v1.14, `uint16_t` from v1.15, either when the version is outside v1.14 to v1.17 or unknown.
-pub fn source_component_types(fw: &Firmware) -> &'static [Scalar] {
-    match fw.series() {
-        Some((1, 14)) => &[Scalar::U8],
-        Some((1, 15..=17)) => &[Scalar::U16],
-        _ => &[Scalar::U8, Scalar::U16],
-    }
-}
-
-/// The PX4 types of `topic.name`, for any supported version, or `None` when no rule reads it.
-fn pinned_types(topic: &str, name: &str) -> Option<&'static [Scalar]> {
-    if topic == "vehicle_command" && name == "source_component" {
-        return Some(&[Scalar::U8, Scalar::U16]);
-    }
+/// Whether a rule reads `topic.name`.
+fn rule_reads(topic: &str, name: &str) -> bool {
     if topic == "failsafe_flags" {
-        return failsafe_flags_type(name).map(|s| match s {
-            Scalar::U32 => &[Scalar::U32][..],
-            Scalar::U8 => &[Scalar::U8][..],
-            _ => &[Scalar::Bool][..],
-        });
+        return !crate::px4::any_field_types(topic, name).is_empty();
     }
-    PINNED
-        .iter()
-        .find(|(t, f, _)| *t == topic && *f == name)
-        .map(|(_, _, s)| std::slice::from_ref(s))
+    RULE_FIELDS.iter().any(|(t, f)| *t == topic && *f == name)
 }
 
-/// A rule input field, only when the log gives it a type PX4 defines for it.
+/// A rule input field, only when the log gives it a type PX4 defines for it at some supported
+/// release; whether that is the type at the log's own release is checked when the log ends.
 fn pinned(layout: &Layout, topic: &str, name: &str) -> Option<FlatField> {
     let f = layout.field(name)?;
-    match pinned_types(topic, name) {
-        Some(types) if !types.contains(&f.scalar) => None,
-        _ => Some(f.clone()),
+    if rule_reads(topic, name) && !crate::px4::any_field_types(topic, name).contains(&f.scalar) {
+        return None;
     }
-}
-
-/// A `mode_req_*` bitmask as 32 bits (PX4's `uint32`), or `None` when it does not fit.
-pub fn mode_req_bits(value: u64) -> Option<u32> {
-    u32::try_from(value).ok()
+    Some(f.clone())
 }
 
 #[derive(Debug, Clone)]
@@ -714,50 +650,22 @@ struct VsDecoder {
     latest_disarming_reason: Option<FlatField>,
 }
 
-/// `failsafe_flags` flag name to its `mode_req_*` field, as PX4 `FailsafeBase::modeCanRun`
-/// (v1.14.4 and v1.17.0 `failsafe/framework.cpp`) and `mode_req_manual_control` pair them.
-const MODE_REQUIREMENTS: &[(&str, &str)] = &[
-    ("angular_velocity_invalid", "mode_req_angular_velocity"),
-    ("attitude_invalid", "mode_req_attitude"),
-    ("local_position_invalid", "mode_req_local_position"),
-    (
-        "local_position_invalid_relaxed",
-        "mode_req_local_position_relaxed",
-    ),
-    ("global_position_invalid", "mode_req_global_position"),
-    (
-        "global_position_invalid_relaxed",
-        "mode_req_global_position_relaxed",
-    ),
-    ("local_altitude_invalid", "mode_req_local_alt"),
-    ("auto_mission_missing", "mode_req_mission"),
-    ("offboard_control_signal_lost", "mode_req_offboard_signal"),
-    ("home_position_invalid", "mode_req_home_position"),
-    ("manual_control_signal_lost", "mode_req_manual_control"),
-    // HealthAndArmingChecks modeCheck.cpp clears the can-run bits of
-    // mode_req_wind_and_flight_time_compliance when either flag is set.
-    (
-        "wind_limit_exceeded",
-        "mode_req_wind_and_flight_time_compliance",
-    ),
-    (
-        "flight_time_limit_exceeded",
-        "mode_req_wind_and_flight_time_compliance",
-    ),
-];
-
+/// The flags of a `failsafe_flags` format: every field PX4 defines as a `bool` (and
+/// `battery_warning`, a `uint8`) at some supported release, each with the `mode_req_*` mask
+/// that PX4's mode checks pair with it ([`crate::px4::mode_requirement`]). A field no release
+/// defines is not read.
 fn failsafe_schema(layout: &Layout) -> Vec<FlagDef> {
+    let all: Vec<_> = crate::px4_tables::RELEASES.iter().collect();
     let mut flags = Vec::new();
     for f in &layout.fields {
-        let is_flag =
-            f.scalar == Scalar::Bool || (f.name == "battery_warning" && f.scalar == Scalar::U8);
+        let px4 = crate::px4::field_types(&all, "failsafe_flags", &f.name);
+        let is_flag = (f.scalar == Scalar::Bool && px4.contains(&Scalar::Bool))
+            || (f.name == "battery_warning" && f.scalar == Scalar::U8 && px4.contains(&Scalar::U8));
         if !is_flag {
             continue;
         }
-        let requirement = MODE_REQUIREMENTS
-            .iter()
-            .find(|(flag, _)| *flag == f.name)
-            .and_then(|(_, req)| pinned(layout, "failsafe_flags", req));
+        let requirement = crate::px4::mode_requirement(&all, &f.name)
+            .and_then(|req| pinned(layout, "failsafe_flags", req));
         flags.push(FlagDef {
             name: f.name.clone(),
             field: f.clone(),
@@ -846,7 +754,7 @@ struct Sealing<'c> {
 struct FsInstance {
     flags: Rc<Vec<FlagDef>>,
     rows: Vec<FailsafeRow>,
-    mode_req_unreadable: bool,
+    ignored: Vec<String>,
 }
 
 #[derive(Default)]
@@ -961,23 +869,20 @@ impl Visitor for Collector<'_> {
                         flags
                     }
                 };
-                if flags.len() > MAX_FAILSAFE_FLAGS {
-                    self.limit.get_or_insert_with(|| {
-                        crate::limit_exceeded(
-                            "the number of failsafe_flags flag fields",
-                            MAX_FAILSAFE_FLAGS,
-                            "fields",
-                        )
-                    });
-                    Decoder::Count
-                } else {
-                    self.fs.entry(multi_id).or_insert_with(|| FsInstance {
-                        flags: Rc::clone(&flags),
-                        rows: Vec::new(),
-                        mode_req_unreadable: false,
-                    });
-                    Decoder::Failsafe(flags)
-                }
+                // Only flags PX4 defines are read, so their number is bounded by the PX4
+                // tables, not by the log.
+                self.fs.entry(multi_id).or_insert_with(|| FsInstance {
+                    flags: Rc::clone(&flags),
+                    rows: Vec::new(),
+                    // Fields no supported PX4 release defines: not read, and named in R4.
+                    ignored: l
+                        .fields
+                        .iter()
+                        .filter(|f| crate::px4::any_field_types(topic, &f.name).is_empty())
+                        .map(|f| f.name.clone())
+                        .collect(),
+                });
+                Decoder::Failsafe(flags)
             }
             "vehicle_command" => Decoder::Command {
                 command: pinned(l, "vehicle_command", "command"),
@@ -1106,21 +1011,17 @@ impl Visitor for Collector<'_> {
                     .iter()
                     .map(|f| f.field.read_u64(p).is_some_and(|v| v != 0))
                     .collect();
-                let mut unreadable = false;
+                // A mode_req_* mask is a uint32 at every supported tag; pinned() reads no other.
                 let mode_req = flags
                     .iter()
-                    .map(
-                        |f| match f.requirement.as_ref().and_then(|r| r.read_u64(p)) {
-                            None => 0,
-                            Some(v) => mode_req_bits(v).unwrap_or_else(|| {
-                                unreadable = true;
-                                0
-                            }),
-                        },
-                    )
+                    .map(|f| {
+                        f.requirement
+                            .as_ref()
+                            .and_then(|r| r.read_u32(p))
+                            .unwrap_or(0)
+                    })
                     .collect();
                 if let Some(inst) = self.fs.get_mut(&sub.multi_id) {
-                    inst.mode_req_unreadable |= unreadable;
                     inst.rows.push(FailsafeRow {
                         id,
                         active,
@@ -1329,7 +1230,7 @@ impl Collector<'_> {
             .map(|(k, _)| *k);
         let to_flags = |multi_id: u8, inst: FsInstance| FailsafeFlags {
             multi_id,
-            mode_req_unreadable: inst.mode_req_unreadable,
+            ignored: inst.ignored,
             flags: inst.flags.as_ref().clone(),
             rows: inst.rows,
         };
@@ -1343,9 +1244,11 @@ impl Collector<'_> {
             .filter(|(_, i)| !i.rows.is_empty())
             .map(|(k, i)| to_flags(k, i))
             .collect();
-        // Rule inputs with a type other than PX4's, in the subscriptions that have data records.
+        // Rule inputs with a type other than PX4's at the release tags the log's version selects,
+        // or that those tags do not define, in the subscriptions that have data records.
         let mut mismatches = std::collections::BTreeSet::new();
-        let source_component = source_component_types(&firmware);
+        let releases = crate::px4::releases_for(&firmware);
+        let tags = crate::px4::tags_label(&releases);
         for sub in self.subs.values().filter(|s| s.had_data) {
             // sensor_gps is read only for the UTC offset, which no rule reads.
             let topic = sub.topic.as_str();
@@ -1353,14 +1256,10 @@ impl Collector<'_> {
                 continue;
             }
             for f in &sub.layout.fields {
-                let allowed = if topic == "vehicle_command" && f.name == "source_component" {
-                    source_component
-                } else {
-                    match pinned_types(topic, &f.name) {
-                        Some(t) => t,
-                        None => continue,
-                    }
-                };
+                if !rule_reads(topic, &f.name) {
+                    continue;
+                }
+                let allowed = crate::px4::field_types(&releases, topic, &f.name);
                 if !allowed.contains(&f.scalar) {
                     mismatches.insert(TypeMismatch {
                         topic: topic.to_string(),
@@ -1371,6 +1270,7 @@ impl Collector<'_> {
                             .map(|s| s.name())
                             .collect::<Vec<_>>()
                             .join(" or "),
+                        tags: tags.clone(),
                     });
                 }
             }
@@ -1577,7 +1477,8 @@ mod tests {
             schemas.iter().all(|f| Rc::ptr_eq(f, schemas[0])),
             "one shared schema"
         );
-        assert_eq!(schemas[0].len(), 256);
+        // Its 256 bool fields are not PX4 failsafe flags, so none is read.
+        assert_eq!(schemas[0].len(), 0);
         assert_eq!(c.fs.len(), 256, "one entry per multi id");
         // R1 reports the missing core topic; nothing else is refused.
         let ing = Px4Ingestor
@@ -1587,7 +1488,7 @@ mod tests {
     }
 
     #[test]
-    fn exactly_the_parameter_and_flag_limits_are_accepted() {
+    fn exactly_the_parameter_limit_is_accepted() {
         use crate::ulog::tests::Builder;
         let mut log = Builder::new(0).flags(&[]);
         for i in 0..crate::params::MAX_PARAMS {
@@ -1601,23 +1502,6 @@ mod tests {
             .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
             .expect("65,536 parameters are accepted");
         assert_eq!(ing.config.params.len(), crate::params::MAX_PARAMS);
-
-        let mut format = String::from("failsafe_flags:uint64_t timestamp;");
-        for i in 0..MAX_FAILSAFE_FLAGS {
-            format.push_str(&format!("bool f{i};"));
-        }
-        let mut row = 1u64.to_le_bytes().to_vec();
-        row.resize(8 + MAX_FAILSAFE_FLAGS, 0);
-        let log = Builder::new(0)
-            .flags(&[])
-            .format(&format)
-            .sub(0, 0, "failsafe_flags")
-            .data(0, &row);
-        let ing = Px4Ingestor
-            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
-            .expect("256 flags are accepted");
-        assert_eq!(ing.flight.failsafe_flags.flags.len(), MAX_FAILSAFE_FLAGS);
-        assert_eq!(ing.flight.failsafe_flags.rows.len(), 1);
     }
 
     #[test]
@@ -1636,33 +1520,6 @@ mod tests {
                 "the number of parameters at log start exceeds the input limit of 65536 parameters (SPEC B1.4)"
                     .to_string()
             )
-        );
-    }
-
-    #[test]
-    fn a_failsafe_flags_format_with_too_many_flags_is_refused() {
-        use crate::ulog::tests::Builder;
-        let mut format = String::from("failsafe_flags:uint64_t timestamp;");
-        for i in 0..=MAX_FAILSAFE_FLAGS {
-            format.push_str(&format!("bool f{i};"));
-        }
-        let log = Builder::new(0)
-            .flags(&[])
-            .format(&format)
-            .sub(0, 0, "failsafe_flags");
-        let err = Px4Ingestor
-            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
-            .unwrap_err();
-        assert_eq!(
-            err,
-            IngestError::Limit(
-                "the number of failsafe_flags flag fields exceeds the input limit of 256 fields (SPEC B1.4)"
-                    .to_string()
-            )
-        );
-        assert!(
-            err.to_string()
-                .starts_with("the number of failsafe_flags flag fields exceeds")
         );
     }
 
@@ -1822,15 +1679,6 @@ mod tests {
     }
 
     #[test]
-    fn mode_req_values_convert_to_32_bits_only_when_they_fit() {
-        assert_eq!(mode_req_bits(1 << 4), Some(1 << 4));
-        assert_eq!(mode_req_bits(u64::from(u32::MAX)), Some(u32::MAX));
-        // A truncating cast would read 1 << 36 as 0, so a required flag would look optional.
-        assert_eq!(mode_req_bits(1 << 36), None);
-        assert_eq!(mode_req_bits((1 << 36) | (1 << 4)), None);
-    }
-
-    #[test]
     fn rule_inputs_with_another_type_than_px4_are_named() {
         use crate::ulog::tests::Builder;
         let log = Builder::new(0)
@@ -1853,10 +1701,10 @@ mod tests {
         assert_eq!(
             named,
             [
-                "failsafe_flags.attitude_invalid is uint8_t in the log; PX4 defines bool",
-                "failsafe_flags.mode_req_attitude is uint64_t in the log; PX4 defines uint32_t",
-                "vehicle_status.arming_state is int8_t in the log; PX4 defines uint8_t",
-                "vehicle_status.failsafe is uint8_t in the log; PX4 defines bool",
+                "failsafe_flags.attitude_invalid is uint8_t in the log; PX4 defines bool (v1.14.0 to v1.17.0)",
+                "failsafe_flags.mode_req_attitude is uint64_t in the log; PX4 defines uint32_t (v1.14.0 to v1.17.0)",
+                "vehicle_status.arming_state is int8_t in the log; PX4 defines uint8_t (v1.14.0 to v1.17.0)",
+                "vehicle_status.failsafe is uint8_t in the log; PX4 defines bool (v1.14.0 to v1.17.0)",
             ]
         );
         // A mistyped field reads as absent, never as a guessed value.
@@ -1871,12 +1719,245 @@ mod tests {
             release: Some(release),
             ..Firmware::default()
         };
-        assert_eq!(source_component_types(&fw(0x010E_04FF)), [Scalar::U8]);
-        assert_eq!(source_component_types(&fw(0x0111_00FF)), [Scalar::U16]);
-        assert_eq!(
-            source_component_types(&Firmware::default()),
-            [Scalar::U8, Scalar::U16]
+        let types = |fw: &Firmware| {
+            crate::px4::field_types(
+                &crate::px4::releases_for(fw),
+                "vehicle_command",
+                "source_component",
+            )
+        };
+        assert_eq!(types(&fw(0x010E_04FF)), [Scalar::U8]);
+        assert_eq!(types(&fw(0x0111_00FF)), [Scalar::U16]);
+        assert_eq!(types(&Firmware::default()), [Scalar::U8, Scalar::U16]);
+    }
+
+    // Tests from the ULog specification: docs/en/dev_log/ulog_file_format.md in PX4-Autopilot
+    // (commit d28a64240f7b7570d65776b9b6397eddec0dd9ba), "Flag Bits Message" and "Requirements
+    // for Parsers". docs/VALIDATION.md lists where sfr does otherwise.
+
+    /// A flight: armed from 2 s to 6 s, failsafe at 4 s; one vehicle_status row per second.
+    fn spec_flight_rows() -> Vec<Vec<u8>> {
+        (1..=8u64)
+            .map(|i| {
+                let armed = (2..=6).contains(&i);
+                [
+                    &(i * 1_000_000).to_le_bytes()[..],
+                    &[if armed { 2 } else { 1 }, 4, u8::from(i == 4)],
+                ]
+                .concat()
+            })
+            .collect()
+    }
+
+    fn spec_definitions(appended: &[u64]) -> crate::ulog::tests::Builder {
+        crate::ulog::tests::Builder::new(0)
+            .flags(appended)
+            .format("vehicle_status:uint64_t timestamp;uint8_t arming_state;uint8_t nav_state;bool failsafe;")
+            .sub(0, 0, "vehicle_status")
+    }
+
+    fn spec_ingest(bytes: &[u8]) -> Result<Ingested, IngestError> {
+        Px4Ingestor.ingest("x.ulg", &mut &bytes[..], &TestBackend)
+    }
+
+    /// A log stating `ver_sw_release` with one failsafe_flags format and one row.
+    fn flags_log(release: u32, format: &str, row: &[u8]) -> Ingested {
+        let key = b"uint32_t ver_sw_release";
+        let mut info = vec![key.len() as u8];
+        info.extend_from_slice(key);
+        info.extend_from_slice(&release.to_le_bytes());
+        let log = crate::ulog::tests::Builder::new(0)
+            .flags(&[])
+            .rec(b'I', &info)
+            .format(&format!("failsafe_flags:uint64_t timestamp;{format}"))
+            .sub(0, 0, "failsafe_flags")
+            .data(0, &[&5u64.to_le_bytes()[..], row].concat());
+        Px4Ingestor
+            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_failsafe_flags_field_no_px4_release_defines_is_not_read_as_a_flag() {
+        // gps_invalid is in no FailsafeFlags.msg from v1.14.0 to v1.17.0.
+        let ing = flags_log(
+            0x0111_00FF,
+            "bool gps_invalid;bool gcs_connection_lost;",
+            &[1, 1],
         );
+        let fs = &ing.flight.failsafe_flags;
+        let names: Vec<&str> = fs.flags.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["gcs_connection_lost"]);
+        assert_eq!(fs.ignored, ["gps_invalid"]);
+        assert!(ing.flight.type_mismatches.is_empty());
+    }
+
+    #[test]
+    fn a_failsafe_flags_field_the_logs_release_does_not_define_is_a_mismatch() {
+        // navigator_failure is in FailsafeFlags.msg from v1.16.0; a log that states v1.14.4 and
+        // has it is not what PX4 v1.14.4 writes.
+        let named = |release| -> Vec<String> {
+            flags_log(release, "bool navigator_failure;", &[0])
+                .flight
+                .type_mismatches
+                .iter()
+                .map(|m| m.to_string())
+                .collect()
+        };
+        assert_eq!(
+            named(0x010E_04FF),
+            ["failsafe_flags.navigator_failure is bool in the log; PX4 v1.14.4 does not define it"]
+        );
+        assert!(named(0x0110_00FF).is_empty());
+        // global_position_invalid_relaxed and its mask, from v1.17.0 only.
+        let ing = flags_log(
+            0x010F_04FF,
+            "uint32_t mode_req_global_position_relaxed;bool global_position_invalid_relaxed;",
+            &[0, 0, 0, 0, 0],
+        );
+        assert_eq!(ing.flight.type_mismatches.len(), 2);
+    }
+
+    #[test]
+    fn ulog_spec_every_unknown_incompat_bit_is_refused() {
+        // "If a parser finds any of these bits set that isn't specified, it must refuse to parse
+        // the log." Bit 0 of incompat_flags[0] (DATA_APPENDED) is the only one specified.
+        let base = spec_definitions(&[]).data(0, &spec_flight_rows()[0]).bytes;
+        // incompat_flags start after the header (16), the record header (3) and compat_flags (8).
+        let at = 16 + 3 + 8;
+        for bit in 1..64 {
+            let mut b = base.clone();
+            b[at + bit / 8] |= 1 << (bit % 8);
+            let err = spec_ingest(&b).expect_err("refused");
+            assert!(
+                err.to_string().contains("unknown incompatible flag bits"),
+                "bit {bit}: {err}"
+            );
+        }
+        // Unknown compat_flags bits are for changes any parser can read: ignored.
+        let mut b = base.clone();
+        b[16 + 3..16 + 3 + 8].copy_from_slice(&[0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+        spec_ingest(&b).expect("unknown compat bits are ignored");
+    }
+
+    #[test]
+    fn ulog_spec_a_longer_flag_bits_message_is_read_and_its_extra_bytes_ignored() {
+        // "If the msg_size is bigger than expected (currently 40), any additional bytes must be
+        // ignored/discarded."
+        let mut flags = vec![0u8; 40];
+        flags.extend_from_slice(&[0xAA; 24]);
+        let mut b = crate::ulog::tests::Builder::new(0).rec(b'B', &flags);
+        b = b
+            .format("vehicle_status:uint64_t timestamp;uint8_t arming_state;uint8_t nav_state;bool failsafe;")
+            .sub(0, 0, "vehicle_status");
+        for row in spec_flight_rows() {
+            b = b.data(0, &row);
+        }
+        let ing = spec_ingest(&b.bytes).expect("read");
+        assert_eq!(ing.flight.vehicle_status.len(), 8);
+    }
+
+    #[test]
+    fn ulog_spec_unknown_message_types_are_skipped_and_counted() {
+        // "Must ignore unknown messages (but it can print a warning)." Each type below is not one
+        // the specification defines; the flight reads the same with or without them, and the
+        // record counts them (log.skipped).
+        let mut plain = spec_definitions(&[]);
+        let mut noisy = spec_definitions(&[]);
+        for (i, row) in spec_flight_rows().iter().enumerate() {
+            plain = plain.data(0, row);
+            noisy = noisy.data(0, row);
+            noisy = noisy.rec(
+                [b'Z', b'z', b'X', 0xFF, b'0', b'~', b'H', b'U'][i],
+                &[i as u8; 7],
+            );
+        }
+        let (plain, noisy) = (
+            spec_ingest(&plain.bytes).unwrap(),
+            spec_ingest(&noisy.bytes).unwrap(),
+        );
+        assert_eq!(noisy.events, plain.events);
+        assert_eq!(noisy.flight.vehicle_status, plain.flight.vehicle_status);
+        assert_eq!(noisy.flight.summary.unknown_records, 8);
+        assert_eq!(plain.flight.summary.unknown_records, 0);
+    }
+
+    #[test]
+    fn ulog_spec_appended_data_is_read_as_ordinary_data() {
+        // "Appended data must be treated as if it was part of the regular Data section." The
+        // same flight twice: whole, and cut in the middle of a record after its third row with
+        // the other five rows (the failsafe, the disarm) appended at the announced offset.
+        let rows = spec_flight_rows();
+        let mut whole = spec_definitions(&[]);
+        for row in &rows {
+            whole = whole.data(0, row);
+        }
+        let mut main = spec_definitions(&[1]);
+        for row in &rows[..3] {
+            main = main.data(0, row);
+        }
+        let mut bytes = main.bytes;
+        // A record that announces 100 bytes and stops after 2: a log cut mid-message.
+        bytes.extend_from_slice(&[100, 0, b'D', 0, 0]);
+        let offset = bytes.len() as u64;
+        bytes[16 + 3 + 16..16 + 3 + 24].copy_from_slice(&offset.to_le_bytes());
+        let mut tail = crate::ulog::tests::Builder { bytes: Vec::new() };
+        for row in &rows[3..] {
+            tail = tail.data(0, row);
+        }
+        bytes.extend_from_slice(&tail.bytes);
+        let (whole, appended) = (
+            spec_ingest(&whole.bytes).unwrap(),
+            spec_ingest(&bytes).unwrap(),
+        );
+        assert!(appended.flight.summary.data_appended);
+        assert_eq!(appended.flight.vehicle_status, whole.flight.vehicle_status);
+        assert_eq!(appended.events, whole.events);
+        assert!(
+            appended
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, crate::events::EventKind::Disarm { .. }))
+        );
+        // The cut record is the one region skipped, all 5 of its bytes.
+        assert_eq!(
+            (
+                appended.flight.summary.skipped_regions,
+                appended.flight.summary.skipped_bytes
+            ),
+            (1, 5)
+        );
+    }
+
+    #[test]
+    fn ulog_spec_differences_sfr_keeps() {
+        // Where sfr does not do what the specification asks, on purpose (docs/VALIDATION.md):
+        // a file format version above 1 is refused, not parsed with a warning ...
+        let mut b = spec_definitions(&[]).data(0, &spec_flight_rows()[0]).bytes;
+        b[7] = 2;
+        let err = spec_ingest(&b).expect_err("refused");
+        assert!(
+            err.to_string()
+                .contains("unsupported ULog file format version 2"),
+            "{err}"
+        );
+        // ... and a log that ends in the middle of a record, with no appended data, is refused,
+        // not read with the unfinished record discarded.
+        let mut b = spec_definitions(&[]).data(0, &spec_flight_rows()[0]).bytes;
+        b.extend_from_slice(&[100, 0, b'D', 0, 0]);
+        let err = spec_ingest(&b).expect_err("refused");
+        assert!(
+            matches!(err, IngestError::Malformed(UlogError::Truncated { .. })),
+            "{err}"
+        );
+        // DATA_APPENDED with every offset 0 breaks "at least one of the appended_offsets is
+        // non-zero"; sfr reads such a log as one with nothing appended.
+        let mut b = spec_definitions(&[0]);
+        for row in spec_flight_rows() {
+            b = b.data(0, &row);
+        }
+        let ing = spec_ingest(&b.bytes).expect("read");
+        assert_eq!(ing.flight.vehicle_status.len(), 8);
     }
 
     #[test]

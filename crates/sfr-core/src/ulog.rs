@@ -215,6 +215,14 @@ impl FlatField {
     }
 
     /// Reads a `float` field.
+    pub fn read_u32(&self, payload: &[u8]) -> Option<u32> {
+        match self.scalar {
+            Scalar::U32 => Some(u32::from_le_bytes(le(payload, self.offset)?)),
+            _ => None,
+        }
+    }
+
+    /// The value of a `float` field.
     pub fn read_f32(&self, payload: &[u8]) -> Option<f32> {
         match self.scalar {
             Scalar::F32 => Some(f32::from_le_bytes(le(payload, self.offset)?)),
@@ -830,9 +838,10 @@ fn skip_to_offset<R: Read>(
     start: u64,
     off: u64,
 ) -> Result<(), UlogError> {
-    if off > src.pos {
+    // The region starts where the dropped record starts, its header included.
+    if off > start {
         summary.skipped_regions = summary.skipped_regions.saturating_add(1);
-        summary.skipped_bytes = summary.skipped_bytes.saturating_add(off - src.pos);
+        summary.skipped_bytes = summary.skipped_bytes.saturating_add(off - start);
     }
     src.skip_to(off)?;
     if src.pos < off {

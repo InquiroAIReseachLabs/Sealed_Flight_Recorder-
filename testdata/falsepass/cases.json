@@ -268,12 +268,12 @@
     "what": "control for golden_armed_rows_deleted"
   },
   {
-    "baseline": "flag_gps_invalid.params",
-    "case": "flag_gps_invalid",
+    "baseline": "flag_gcs_connection_lost.params",
+    "case": "flag_gcs_connection_lost",
     "expect": {
       "exit": 0,
       "found": {
-        "R4": "warning: failsafe_flags gps_invalid true in flight"
+        "R4": "warning: failsafe_flags gcs_connection_lost true in flight"
       },
       "results": {
         "R4": "WARN"
@@ -282,14 +282,14 @@
     },
     "item": "1.4",
     "kind": "attack",
-    "log": "flag_gps_invalid.ulg",
+    "log": "flag_gcs_connection_lost.ulg",
     "options": [],
     "rules": "rules.toml",
-    "what": "failsafe_flags.gps_invalid true for the whole armed interval"
+    "what": "failsafe_flags.gcs_connection_lost true for the whole armed interval"
   },
   {
-    "baseline": "flag_gps_invalid_control.params",
-    "case": "flag_gps_invalid_control",
+    "baseline": "flag_gcs_connection_lost_control.params",
+    "case": "flag_gcs_connection_lost_control",
     "expect": {
       "exit": 1,
       "found": {
@@ -302,10 +302,10 @@
     },
     "item": "1.4",
     "kind": "control",
-    "log": "flag_gps_invalid_control.ulg",
+    "log": "flag_gcs_connection_lost_control.ulg",
     "options": [],
     "rules": "rules.toml",
-    "what": "control for flag_gps_invalid"
+    "what": "control for flag_gcs_connection_lost"
   },
   {
     "baseline": "duplicate_failsafe.params",

@@ -9,7 +9,7 @@ Which parts of a PX4 log `sfr` reads, how to seal on a companion computer after 
 | Topic | Fields | Used for | Needed |
 |---|---|---|---|
 | `vehicle_status` | `arming_state`, `nav_state`, `failsafe`, `is_vtol`, `in_transition_mode`, `in_transition_to_fw`, `vehicle_type`; `system_type`, `latest_arming_reason`, `latest_disarming_reason` when present | ARM, DISARM, NAV_STATE_CHANGE, FAILSAFE and VTOL events; vehicle identity; R4, R5, R6 | always (R1) |
-| `failsafe_flags` | every `bool` field, and `battery_warning` | the flags a failsafe event and R4 name | always (R1) |
+| `failsafe_flags` | every `bool` field PX4 defines, and `battery_warning` | the flags a failsafe event and R4 name | always (R1) |
 | `vehicle_command` | `command`, `source_system`, `source_component` | COMMAND events; R7 | with `[authorized_sources]` (R1) |
 | `vehicle_command_ack` | `command`, `result`, `target_system`, `target_component` | each command's result, else `NO_ACK` | no |
 | `vehicle_gps_position`, else `sensor_gps` | `fix_type`, `time_utc_usec` (instance 0) | UTC time of events, from the first sample with a fix | no (`utc_us` is null without it) |
