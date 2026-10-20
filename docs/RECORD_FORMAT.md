@@ -27,6 +27,8 @@ A parameter value is a typed string (`crates/sfr-core/src/ulog.rs` `f32_shortest
 - `i32:<n>`: a ULog int32 parameter, in decimal (`i32:5`, `i32:-1`).
 - `f32:<x>`: a ULog float32 parameter. `<x>` is the shortest decimal that reads back as the same float32, with the digits ECMAScript `Number::toString` would choose (fewest digits, then the one closest to the value, an exact tie to the even digit), in plain positional notation with no exponent (`f32:0.15`, `f32:2.4414062`, `f32:0`, `f32:-0`). Any NaN is `f32:NaN`; infinities are `f32:Infinity` and `f32:-Infinity`.
 
+The tests in `crates/sfr-core/tests/canonical.rs` hold this to the rule instead of to a sample: the RFC 8785 examples for ordering and for strings, a large sample of float32 values on every run, and, with `cargo test --release -p sfr-core --test canonical -- --ignored`, every one of the 2^32 float32 bit patterns (each finite value must read back as itself, have no shorter text that does, be the closest of the texts of that length, and take the even digit at an exact tie; every NaN pattern gives `f32:NaN`). The exhaustive test takes under two hours on four cores; its last full run passed, and the count of patterns it checked is printed with `--nocapture`.
+
 ## Top-level fields
 
 A record holds exactly these thirteen fields, no more and no fewer (`RECORD_FIELDS` in `crates/sfr-core/src/seal.rs`). They are listed here in canonical (sorted) order.
