@@ -24,6 +24,10 @@ const SIGNER_EXPIRED: u8 = 0x31;
 const SIGNER_SERVER: u8 = 0x32;
 const SIGNER_REVOKED: u8 = 0x33;
 const SIGNER_LAPSED: u8 = 0x34;
+const SIGNER_CODESIGN: u8 = 0x35;
+const SIGNER_BOTH: u8 = 0x36;
+const SIGNER_NOSIG: u8 = 0x37;
+const SIGNER_NOKEYUSAGE: u8 = 0x38;
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -281,7 +285,7 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             "not yet valid at the verification time",
         ),
         (
-            "no code signing usage",
+            "issued for TLS server authentication only",
             SIGNER_SERVER,
             "signer_server.pem",
             Some("inter.pem"),
@@ -289,7 +293,51 @@ fn every_rejection_the_spec_lists_fails_with_its_reason() {
             "root.pem",
             &BOTH_CRLS[..],
             None,
-            "lacks extended key usage code signing",
+            "lists TLS server authentication but not the sfr record-signing usage",
+        ),
+        (
+            "issued for code signing only",
+            SIGNER_CODESIGN,
+            "signer_codesign.pem",
+            Some("inter.pem"),
+            SEAL_TIME,
+            "root.pem",
+            &BOTH_CRLS[..],
+            None,
+            "lists code signing but not the sfr record-signing usage",
+        ),
+        (
+            "record signing and also code signing and server authentication",
+            SIGNER_BOTH,
+            "signer_both.pem",
+            Some("inter.pem"),
+            SEAL_TIME,
+            "root.pem",
+            &BOTH_CRLS[..],
+            None,
+            "also lists code signing; a key that signs records must not be certified for other purposes",
+        ),
+        (
+            "keyUsage without digitalSignature",
+            SIGNER_NOSIG,
+            "signer_nosig.pem",
+            Some("inter.pem"),
+            SEAL_TIME,
+            "root.pem",
+            &BOTH_CRLS[..],
+            None,
+            "keyUsage lacks digitalSignature",
+        ),
+        (
+            "no keyUsage extension",
+            SIGNER_NOKEYUSAGE,
+            "signer_nokeyusage.pem",
+            Some("inter.pem"),
+            SEAL_TIME,
+            "root.pem",
+            &BOTH_CRLS[..],
+            None,
+            "has no keyUsage extension",
         ),
         (
             "another trust anchor",
