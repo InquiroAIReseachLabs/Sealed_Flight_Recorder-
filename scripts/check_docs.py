@@ -9,7 +9,7 @@ Every public doc is held to four rules:
                            exit 0. Blocks of one doc run in order, so a later block may use files
                            an earlier one wrote. A doc runs with `try/` removed first, and `try/`
                            is removed again at the end.
-       ```sh doc-release   a step of the download path of the README quickstart. It needs a
+       ```sh doc-release   a step of the download path in docs/RELEASE.md. It needs a
                            published release, so the docs test only syntax-checks it (the
                            paragraph above must say "post-release check"); the post-release
                            workflow runs it with --release, in an empty directory.
@@ -40,7 +40,7 @@ Usage:
   scripts/check_docs.py              run every rule (commands need target/ and network for cargo)
   scripts/check_docs.py --static     rules 2 to 4 and the block labels and syntax, nothing run
   scripts/check_docs.py --update     run the commands and rewrite each doc-output block
-  scripts/check_docs.py --release <dir>   run the doc-release blocks of README.md, in order, with
+  scripts/check_docs.py --release <dir>   run the doc-release blocks of docs/RELEASE.md, in order, with
                                      <dir> (empty, created if missing) as the working directory;
                                      SFR_VERSION and SFR_TARGET select the release and the target
   ... --doc <doc>...                 any of the above for these docs only
@@ -62,6 +62,7 @@ FENCE = re.compile(r"^( {0,3})(`{3,})(.*)$")
 TRY_DIR = "try"
 # Doc order: the README builds sfr, so it runs first.
 FIRST = ["README.md"]
+RELEASE_DOC = "docs/RELEASE.md"
 
 
 def fail(msg):
@@ -372,14 +373,14 @@ def run_doc(root, doc, blocks, errors, update):
     return new_outputs
 
 
-def run_release(root, workdir):
-    """Runs the doc-release blocks of README.md in order in workdir; returns a list of errors."""
+def run_release(root, workdir, doc=RELEASE_DOC):
+    """Runs the doc-release blocks of the release doc in order in workdir; returns a list of errors."""
     errors = []
-    path = os.path.join(root, "README.md")
-    blocks, _ = parse("README.md", open(path, encoding="utf-8").read())
+    path = os.path.join(root, doc)
+    blocks, _ = parse(doc, open(path, encoding="utf-8").read())
     steps = [b for b in blocks if b.lang in SHELLS and "doc-release" in b.tags]
     if not steps:
-        return ["README.md has no doc-release block: nothing to run"]
+        return [f"{doc} has no doc-release block: nothing to run"]
     os.makedirs(workdir, exist_ok=True)
     if os.listdir(workdir):
         return [f"{workdir} is not empty: the quickstart must run in a clean directory"]
@@ -392,7 +393,7 @@ def run_release(root, workdir):
     print(out, end="" if out.endswith("\n") or not out else "\n")
     if r.returncode != 0:
         last = [l for l in out.splitlines() if l.startswith("BLOCK ")]
-        errors.append(f"{last[-1][6:] if last else 'README.md'}: the doc-release steps exited {r.returncode}")
+        errors.append(f"{last[-1][6:] if last else doc}: the doc-release steps exited {r.returncode}")
         return errors
     for b in steps:
         print(f"PASS: {b.where()} ran")
@@ -508,12 +509,12 @@ def self_test():
         assert errors == [], errors
         os.environ["SFR_VERSION"] = "9.9.9"
         wd = os.path.join(tmp, "wd")
-        assert run_release(tmp, wd) == [], "release blocks run"
+        assert run_release(tmp, wd, "README.md") == [], "release blocks run"
         assert open(os.path.join(wd, "got.txt")).read() == "step-one\n"
-        assert any("not empty" in e for e in run_release(tmp, wd)), "a used directory is refused"
+        assert any("not empty" in e for e in run_release(tmp, wd, "README.md")), "a used directory is refused"
         os.environ["SFR_VERSION"] = "1.0.0"
         shutil.rmtree(wd)
-        assert any("exited 1" in e for e in run_release(tmp, wd)), "a failing release block fails"
+        assert any("exited 1" in e for e in run_release(tmp, wd, "README.md")), "a failing release block fails"
         del os.environ["SFR_VERSION"]
         for name, text, expect in [
             ("a doc-release block that does not name the post-release check", rel.replace("The post-release check runs", "Somebody runs"), "post-release check"),
@@ -524,7 +525,7 @@ def self_test():
             _, errors = check(tmp, run=False)
             assert any(expect in e for e in errors), f"{name}: expected {expect!r} in {errors}"
         open(os.path.join(tmp, "README.md"), "w").write(good.replace("| a | b |", "From `scripts/count.sh`:\n\n| a | b |"))
-        assert run_release(tmp, os.path.join(tmp, "wd2")) == ["README.md has no doc-release block: nothing to run"]
+        assert run_release(tmp, os.path.join(tmp, "wd2"), "README.md") == ["README.md has no doc-release block: nothing to run"]
         # Exempt files and generated reports are not public docs; generated blocks are not prose.
         os.makedirs(os.path.join(tmp, "docs"), exist_ok=True)
         open(os.path.join(tmp, "docs/SPEC.md"), "w").write("```\nanything 1234\n```\n")
@@ -548,11 +549,11 @@ def main(argv):
             fail("usage: --release <dir>")
         errors = run_release(ROOT, argv[1])
         if errors:
-            print("FAIL: README quickstart (download path):")
+            print("FAIL: docs/RELEASE.md download path:")
             for e in errors:
                 print(f"  {e}")
             return 1
-        print("PASS: README quickstart, download path, every doc-release block ran in a clean directory")
+        print("PASS: docs/RELEASE.md download path, every doc-release block ran in a clean directory")
         return 0
     only = None
     if "--doc" in argv:

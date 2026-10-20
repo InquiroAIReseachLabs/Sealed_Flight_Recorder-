@@ -103,7 +103,7 @@ printf '%s\n' \
 chmod 0644 "$pkg/examples/sample/README.txt"
 {
   echo "name: sfr"
-  echo "version: $version (evaluation release)"
+  echo "version: $version"
   echo "target: $target"
   echo "commit: $commit"
   echo "rustc: $(rustc -V)"

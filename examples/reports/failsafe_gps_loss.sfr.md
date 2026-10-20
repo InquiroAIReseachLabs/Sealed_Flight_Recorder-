@@ -5,7 +5,7 @@ EVALUATION KEY: not for operational use
 - Merkle root: `187c2519db380efc9e7a04d0b023024939a6e360c0e0e05f2045a2fa76cef3cd` (sha256\-rfc6962, 39 leaves)
 - Key fingerprint: `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be`
 
-**Status: FAIL**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0 (evaluation release). This report is generated from the record failsafe\_gps\_loss\.sfr alone.
+**Status: FAIL**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0. This report is generated from the record failsafe\_gps\_loss\.sfr alone.
 
 ## Rules
 

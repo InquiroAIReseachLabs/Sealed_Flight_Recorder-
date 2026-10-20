@@ -5,7 +5,7 @@ EVALUATION KEY: not for operational use
 - Merkle root: `e38199dbf65715446bea7d17f3a9c502cc966a324be246c99d168af7e6c609eb` (sha256\-rfc6962, 35 leaves)
 - Key fingerprint: `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be`
 
-**Status: PASS**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0 (evaluation release). This report is generated from the record gz\_quadtailsitter\_transition\.sfr alone.
+**Status: PASS**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0. This report is generated from the record gz\_quadtailsitter\_transition\.sfr alone.
 
 ## Rules
 

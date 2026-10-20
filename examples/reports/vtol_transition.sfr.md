@@ -5,7 +5,7 @@ EVALUATION KEY: not for operational use
 - Merkle root: `745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430` (sha256\-rfc6962, 34 leaves)
 - Key fingerprint: `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be`
 
-**Status: PASS**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0 (evaluation release). This report is generated from the record vtol\_transition\.sfr alone.
+**Status: PASS**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0. This report is generated from the record vtol\_transition\.sfr alone.
 
 ## Rules
 

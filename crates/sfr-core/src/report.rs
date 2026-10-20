@@ -292,7 +292,7 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     );
     out.push('\n');
     out.push_str(&format!(
-        "**Status: {}**. Sealed (time claimed by the sealer) {} by {} {} (evaluation release). \
+        "**Status: {}**. Sealed (time claimed by the sealer) {} by {} {}. \
          This report is generated from the record {} alone.\n\n",
         escape(&s(r, "status", "record")?),
         escape(&s(seal, "time_utc", "seal")?),

@@ -1,7 +1,7 @@
-# After a release is published: do the README quickstart's download steps work on clean runners?
+# After a release is published: do the download steps of docs/RELEASE.md work on clean runners?
 #
-# The commands are the README's own: scripts/check_docs.py --release runs every fenced block
-# marked doc-release in README.md, in order, in an empty directory, with nothing from the
+# The commands are that page's own: scripts/check_docs.py --release runs every fenced block
+# marked doc-release in docs/RELEASE.md, in order, in an empty directory, with nothing from the
 # repository on the path. The checks of the release itself (its file list, its key, its
 # attestations) run beside it. Writes nothing, uses no secret, and holds no key.
 name: post-release-check
@@ -24,7 +24,7 @@ env:
 
 jobs:
   quickstart:
-    name: README quickstart on ${{ matrix.target }}
+    name: download steps on ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -34,7 +34,7 @@ jobs:
           - { target: aarch64-unknown-linux-musl, runner: ubuntu-24.04-arm, qemu: "no" }
           - { target: armv7-unknown-linux-musleabihf, runner: ubuntu-24.04, qemu: "yes" }
     steps:
-      # Only the README and the check script come from the repository, at the released tag.
+      # Only docs/RELEASE.md and the check script come from the repository, at the released tag.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
@@ -48,7 +48,7 @@ jobs:
           if [ ! -e /proc/sys/fs/binfmt_misc/qemu-arm ]; then
             sudo sh -c 'cat /usr/lib/binfmt.d/qemu-arm.conf > /proc/sys/fs/binfmt_misc/register'
           fi
-      - name: The README quickstart, download path, in an empty directory
+      - name: The download steps of docs/RELEASE.md in an empty directory
         env:
           SFR_TARGET: ${{ matrix.target }}
         run: |
@@ -57,8 +57,8 @@ jobs:
           work="$(mktemp -d)"
           python3 -I repo/scripts/check_docs.py --release "$work" | tee quickstart.log
           fp="$(openssl pkey -pubin -in repo/release/sfr-release.pub -outform DER | sha256sum | cut -d' ' -f1)"
-          grep -q -F "sha256:$fp" quickstart.log || { echo "the quickstart did not print the committed release key's fingerprint"; exit 1; }
-          { echo "### README quickstart, ${{ matrix.target }}"; echo; grep -E '^(PASS|release key|SFR )' quickstart.log | sed 's/^/- /'; } >> "$GITHUB_STEP_SUMMARY"
+          grep -q -F "sha256:$fp" quickstart.log || { echo "the download steps did not print the committed release key's fingerprint"; exit 1; }
+          { echo "### Download steps, ${{ matrix.target }}"; echo; grep -E '^(PASS|release key|SFR )' quickstart.log | sed 's/^/- /'; } >> "$GITHUB_STEP_SUMMARY"
 
   release-facts:
     name: the published release holds exactly its files, its key and its attestations
@@ -88,7 +88,7 @@ jobs:
           fp="$(openssl pkey -pubin -in "$work/sfr-release.pub" -outform DER | sha256sum | cut -d' ' -f1)"
           [ "$fp" = "$(openssl pkey -pubin -in release/sfr-release.pub -outform DER | sha256sum | cut -d' ' -f1)" ] \
             || { echo "the release's key is not the key committed at this tag"; exit 1; }
-          grep -q -F "sha256:$fp" README.md && grep -q -F "sha256:$fp" docs/RELEASE.md || { echo "README.md or docs/RELEASE.md does not show the release key's fingerprint"; exit 1; }
+          grep -q -F "sha256:$fp" docs/RELEASE.md || { echo "docs/RELEASE.md does not show the release key's fingerprint"; exit 1; }
           for f in "$work"/sfr-*.tar.gz; do
             gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" --source-ref "refs/tags/${TAG:-$GITHUB_REF_NAME}" > /dev/null

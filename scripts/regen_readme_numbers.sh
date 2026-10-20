@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# regen_readme_numbers.sh: write the README's numbers from the CI run that measured them
+# regen_readme_numbers.sh: write the measured numbers of docs/MEASUREMENTS.md from the CI run that measured them
 # (no number in a doc that no script in this repo produced; SPEC B1.10 Reproducible claims).
 #
 # The numbers live in one receipt, docs/receipts/ci-run.txt: lines copied verbatim from the job
 # logs of one CI run, each prefixed with its job, plus the run id and the commit. `--receipt`
-# writes it from downloaded job logs; the default mode writes the README blocks from it; `--check`
-# (CI) fails when README.md differs from what the receipt gives. The blocks:
+# writes it from downloaded job logs; the default mode writes the blocks of docs/MEASUREMENTS.md from it;
+# `--check` (CI) fails when docs/MEASUREMENTS.md differs from what the receipt gives. The blocks:
 #
 #   verify-timing  code-quality job: the two "perf:" lines of crates/sfr/tests/verify_perf.rs
 #   tests          code-quality job: the "tests:" line; records job: the two "byte-identical
@@ -17,20 +17,20 @@
 #   release-key    release/sfr-release.pub, the release public key, with its fingerprint; until
 #                  the release key holder generates it (scripts/release_sign.sh keygen), a line saying so
 #
-# docs/RELEASE.md holds the same release-key block, and docs/BENCHMARK.md holds the block
+# docs/RELEASE.md holds the release-key block, and docs/BENCHMARK.md holds the block
 # benchmark-arm-vm: the output of scripts/benchmark.sh on GitHub's arm64 hosted runner, from the
 # receipt docs/receipts/aarch64-benchmark.txt (written by --aarch64-receipt from the
 # benchmark-aarch64 workflow's output; until it exists, a line saying so). It is labelled
 # "aarch64, Arm cloud VM" and nothing else: the runner is a cloud virtual machine on Arm
 # processors, not embedded or companion-computer hardware.
 #
-# The release-key block is always required in README.md. Each other block is required, between its
+# The release-key block is written only in a file that holds its markers (docs/RELEASE.md). Each other block is required, between its
 # markers, exactly when the receipt holds its lines, and a marker of a block the receipt cannot
 # fill is an error, so no number between markers comes from anywhere else.
 #
 # Usage:
-#   scripts/regen_readme_numbers.sh                    rewrite README.md from the receipt
-#   scripts/regen_readme_numbers.sh --check            exit 1 if README.md differs from the receipt
+#   scripts/regen_readme_numbers.sh                    rewrite docs/MEASUREMENTS.md from the receipt
+#   scripts/regen_readme_numbers.sh --check            exit 1 if docs/MEASUREMENTS.md differs from the receipt
 #   scripts/regen_readme_numbers.sh --aarch64-receipt <run-id> <commit> <log>
 #       write docs/receipts/aarch64-benchmark.txt from the output of scripts/benchmark.sh run
 #       with an aarch64 binary on an aarch64 machine (anything else is refused)
@@ -288,8 +288,12 @@ regenerate() {
     [ "$block" = release-key ] || printf '%s\n' "$rendered" | grep -q -x -F -- "$block" \
       || die "$readme holds a $block block, but the receipt $r has no lines for it"
   done < <(grep -i -E '<!--[[:space:]]*(BEGIN|END)' "$readme" || true)
-  render_release_key "$key" > "$work/block"
-  splice "$readme" release-key "$work/block" > "$out"
+  if grep -q -x -F -- "$(begin release-key)" "$readme"; then
+    render_release_key "$key" > "$work/block"
+    splice "$readme" release-key "$work/block" > "$out"
+  else
+    cp "$readme" "$out"
+  fi
   for block in $rendered; do
     "render_${block//-/_}" "$r" > "$work/block"
     splice "$out" "$block" "$work/block" > "$work/spliced"
@@ -415,7 +419,7 @@ self_test() {
   echo "regen_readme_numbers.sh self-test: ok"
 }
 
-readme="$root/README.md" receipt_file="$root/docs/receipts/ci-run.txt"
+readme="$root/docs/MEASUREMENTS.md" receipt_file="$root/docs/receipts/ci-run.txt"
 release_md="$root/docs/RELEASE.md" bench_md="$root/docs/BENCHMARK.md"
 aarch64_receipt="$root/docs/receipts/aarch64-benchmark.txt" release_key_file="$root/release/sfr-release.pub"
 case "${1:-}" in
