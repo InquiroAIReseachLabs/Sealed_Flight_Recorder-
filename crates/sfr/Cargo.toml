@@ -22,5 +22,8 @@ rustls-pki-types = { workspace = true }
 # it and without debug assertions (any release profile) fails to compile (src/main.rs).
 dev-helper = []
 
+[dev-dependencies]
+proptest = { workspace = true }
+
 [lints]
 workspace = true

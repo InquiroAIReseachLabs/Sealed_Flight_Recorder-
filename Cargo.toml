@@ -44,6 +44,9 @@ rustls-webpki = { version = "=0.103.15", default-features = false, features = ["
 rustls-pki-types = { version = "=1.15.1", default-features = false, features = ["alloc"] }
 # sfr-pkcs11-helper only: a separate, dynamically linked process (SPEC B1.2).
 cryptoki = { version = "=0.12.1" }
+# Property tests (docs/review/PLAN.md, 0.5): dev-dependency of the test targets only, never part
+# of a shipped binary. Without the fork and timeout features, so no child processes are started.
+proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
 
 # Workspace-wide lints. Each crate also carries #![forbid(unsafe_code)] at its root
 # so the gate is visible in the source file itself (SPEC B1.10, "No unsafe").
