@@ -342,51 +342,17 @@ pub fn tested_firmware(fw: &Firmware) -> bool {
     supported_series(fw).is_some()
 }
 
-/// NAVIGATION_STATE_* names per version (PX4 `VehicleStatus.msg`). `None` outside v1.14 to v1.17.
+/// The NAVIGATION_STATE_* name of a state at the log's release tag (`VehicleStatus.msg` in the
+/// PX4 source, [`crate::px4`]); `None` outside v1.14 to v1.17, or when the tags the version
+/// selects name it differently.
 pub fn nav_state_name(state: u8, fw: &Firmware) -> Option<&'static str> {
-    let series = supported_series(fw)?;
-    let v114 = series == (1, 14);
-    Some(match state {
-        0 => "MANUAL",
-        1 => "ALTCTL",
-        2 => "POSCTL",
-        3 => "AUTO_MISSION",
-        4 => "AUTO_LOITER",
-        5 => "AUTO_RTL",
-        6 if !v114 => "POSITION_SLOW",
-        7 if !v114 => "FREE5",
-        8 if v114 => "UNUSED3",
-        8 if series == (1, 17) => "ALTITUDE_CRUISE",
-        8 => "FREE4",
-        9 if v114 => "UNUSED",
-        9 => "FREE3",
-        10 => "ACRO",
-        11 if v114 => "UNUSED1",
-        11 => "FREE2",
-        12 => "DESCEND",
-        13 => "TERMINATION",
-        14 => "OFFBOARD",
-        15 => "STAB",
-        16 if v114 => "UNUSED2",
-        16 => "FREE1",
-        17 => "AUTO_TAKEOFF",
-        18 => "AUTO_LAND",
-        19 => "AUTO_FOLLOW_TARGET",
-        20 => "AUTO_PRECLAND",
-        21 => "ORBIT",
-        22 => "AUTO_VTOL_TAKEOFF",
-        23 if v114 => "MAX",
-        23 => "EXTERNAL1",
-        24 if !v114 => "EXTERNAL2",
-        25 if !v114 => "EXTERNAL3",
-        26 if !v114 => "EXTERNAL4",
-        27 if !v114 => "EXTERNAL5",
-        28 if !v114 => "EXTERNAL6",
-        29 if !v114 => "EXTERNAL7",
-        30 if !v114 => "EXTERNAL8",
-        31 if !v114 => "MAX",
-        _ => return None,
-    })
+    supported_series(fw)?;
+    crate::px4::constant_name(
+        &crate::px4::releases_for(fw),
+        "VehicleStatus",
+        "NAVIGATION_STATE_",
+        i64::from(state),
+    )
 }
 
 /// The VTOL state that commander mirrors into `vehicle_status` (PX4 `VehicleStatus.msg`).
@@ -1132,7 +1098,7 @@ mod tests {
         // Flags as ingest delivers them: sorted by name.
         let fs = FailsafeFlags {
             multi_id: 0,
-            mode_req_unreadable: false,
+            ignored: Vec::new(),
             flags: vec![flag("a_flag"), flag("b_flag")],
             rows: vec![fs_row(0, 0, &[false, false]), fs_row(25, 1, &[true, true])],
         };
@@ -1180,7 +1146,7 @@ mod tests {
         let quadchute = |fs_rows: Vec<FailsafeRow>| {
             let fs = FailsafeFlags {
                 multi_id: 0,
-                mode_req_unreadable: false,
+                ignored: Vec::new(),
                 flags: vec![flag("vtol_fixed_wing_system_failure")],
                 rows: fs_rows,
             };
@@ -1218,7 +1184,7 @@ mod tests {
         // A failsafe edge with no failsafe_flags sample at or before it is unattributed.
         let fs = FailsafeFlags {
             multi_id: 0,
-            mode_req_unreadable: false,
+            ignored: Vec::new(),
             flags: vec![flag("x_flag")],
             rows: vec![fs_row(50, 0, &[true])],
         };
@@ -1240,7 +1206,7 @@ mod tests {
     fn failsafe_reference_falls_back_to_the_earliest_sample() {
         let fs = FailsafeFlags {
             multi_id: 0,
-            mode_req_unreadable: false,
+            ignored: Vec::new(),
             flags: vec![flag("x_flag")],
             rows: vec![fs_row(20, 1, &[true]), fs_row(10, 0, &[true])],
         };
@@ -1262,7 +1228,7 @@ mod tests {
     fn failsafe_attribution_names_required_or_new_flags() {
         let fs = FailsafeFlags {
             multi_id: 0,
-            mode_req_unreadable: false,
+            ignored: Vec::new(),
             flags: vec![flag("a_always"), flag("b_required"), flag("c_new")],
             rows: vec![
                 FailsafeRow {
@@ -1408,7 +1374,7 @@ mod tests {
         let names: Vec<String> = (0..256).map(|i| format!("f{i:03}")).collect();
         let fs = FailsafeFlags {
             multi_id: 0,
-            mode_req_unreadable: false,
+            ignored: Vec::new(),
             flags: names.iter().map(|n| flag(n)).collect(),
             rows: vec![
                 FailsafeRow {

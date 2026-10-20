@@ -11,7 +11,7 @@ sfr: log flight.ulg: the number of events exceeds the input limit of 100000 even
 sfr: rules file rules.toml: line 3: `required_topics` exceeds the input limit of 256 entries (SPEC B1.4)
 ```
 
-A message for a name, version or length rule ends with a parenthesis that states the rule and cites SPEC B1.4, for example `unsupported ULog file format version 2 (versions 0 and 1 are read; SPEC B1.4)`. `seal` names the byte offset (log) or line (rules file, baseline) where it met the limit. It names only the file for three counts (parameters at log start, `failsafe_flags` flag fields, events), the file sizes and TOML dotted-key depth. `verify` reports a limit in the record or in the `--ulog` log as its first mismatch (`FAILED: ...`); a public key over its limit exits 4.
+A message for a name, version or length rule ends with a parenthesis that states the rule and cites SPEC B1.4, for example `unsupported ULog file format version 2 (versions 0 and 1 are read; SPEC B1.4)`. `seal` names the byte offset (log) or line (rules file, baseline) where it met the limit. It names only the file for two counts (parameters at log start, events), the file sizes and TOML dotted-key depth. `verify` reports a limit in the record or in the `--ulog` log as its first mismatch (`FAILED: ...`); a public key over its limit exits 4.
 
 | Command | Input | Exit code |
 |---|---|---|
@@ -36,7 +36,6 @@ A message for a name, version or length rule ends with a parenthesis that states
 | Flattened field name (with nested prefixes and `[i]` index), subscription name | 255 bytes | Bounds the text kept per field and subscription. | `ulog.rs` `MAX_NAME_LEN` |
 | Parameter name | 1 to 16 letters, digits, `_` | The PX4 rule, for the log and the baseline. | `params.rs` `valid_param_name` |
 | Parameters at log start; baseline parameters | 65,536 | Bounds the parameter table. | `ingest.rs` with `params.rs` `MAX_PARAMS` |
-| `failsafe_flags` flag fields | 256 | Each failsafe edge gives one event per flag and R4 lists the flags, so this bounds events per edge, R4 lines and kept rows. | `ingest.rs` `MAX_FAILSAFE_FLAGS` |
 | Events | 100,000 | A log where a failsafe toggles on every row could otherwise exhaust memory. Well above the 10,000 events at which SPEC B1.10 measures verify. | `events.rs` `MAX_EVENTS` |
 | Rules file, baseline, key file, public key | 16 MiB each | Stops `sfr` reading an unbounded file into memory. | `sfr/src/main.rs` `MAX_TEXT_BYTES` |
 | `required_topics.topics`, `parameters.ignore`, `watched_parameters.names`, `payload_commands.ids`, `authorized_sources.sources` | 256 entries each | Bounds the work per log. | `rules.rs` `MAX_LIST_ENTRIES` |

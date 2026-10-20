@@ -654,13 +654,7 @@ fn r4(f: &FlightLog) -> RuleResult {
     if f.failsafe_flags.rows.is_empty() {
         return fail_missing("R4", NAME, expected, vec!["failsafe_flags".into()]);
     }
-    let mut wrong = f.mismatches("failsafe_flags", &[]);
-    if std::iter::once(&f.failsafe_flags)
-        .chain(&f.failsafe_flags_others)
-        .any(|fs| fs.mode_req_unreadable)
-    {
-        wrong.push("a failsafe_flags.mode_req_* value does not fit 32 bits".into());
-    }
+    let wrong = f.mismatches("failsafe_flags", &[]);
     if !wrong.is_empty() {
         return fail_unreadable("R4", NAME, expected, wrong);
     }
@@ -768,6 +762,18 @@ fn r4(f: &FlightLog) -> RuleResult {
                 )
             });
         }
+    }
+    // Fields of the logged failsafe_flags that no supported PX4 release defines: not read.
+    let mut ignored: Vec<&str> = std::iter::once(&f.failsafe_flags)
+        .chain(&f.failsafe_flags_others)
+        .flat_map(|fs| fs.ignored.iter().map(String::as_str))
+        .collect();
+    ignored.sort_unstable();
+    ignored.dedup();
+    for name in ignored {
+        detail.push(|| {
+            format!("not read: failsafe_flags.{name} is not a field PX4 defines at any supported release")
+        });
     }
     let warning = if warned.is_empty() {
         String::new()
@@ -2015,7 +2021,7 @@ mod tests {
         check(
             &float,
             None,
-            "cannot evaluate: vehicle_command.source_component is float in the log; PX4 defines uint8_t or uint16_t",
+            "cannot evaluate: vehicle_command.source_component is float in the log; PX4 defines uint8_t or uint16_t (v1.14.0 to v1.17.0)",
         );
     }
 

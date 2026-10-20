@@ -14,6 +14,10 @@ pub mod keys;
 pub mod merkle;
 pub mod params;
 pub mod pkcs11_uri;
+pub mod px4;
+// Written by scripts/px4/px4_tables.py, which checks it byte for byte: not formatted.
+#[rustfmt::skip]
+pub mod px4_tables;
 pub mod record;
 pub mod report;
 pub mod rules;

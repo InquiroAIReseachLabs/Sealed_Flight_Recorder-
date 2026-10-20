@@ -64,6 +64,16 @@ check_oracle_differential() {
   [ "${PIPESTATUS[0]}" -eq 0 ]
 }
 run "sfr agrees with the pyulog oracle on every golden and false-pass log" check_oracle_differential
+# The px4-sources CI job: the PX4 tables are what scripts/px4/px4_tables.py reads from the
+# PX4-Autopilot source at each release tag. SFR_PX4_SOURCE names a clone (git clone
+# --filter=blob:none --no-checkout https://github.com/PX4/PX4-Autopilot.git); a missing clone
+# is a failure.
+check_px4_tables() {
+  [ -n "${SFR_PX4_SOURCE:-}" ] && [ -d "$SFR_PX4_SOURCE" ] || {
+    echo "  SFR_PX4_SOURCE does not name a PX4-Autopilot clone; see scripts/px4/px4_tables.py"; return 1; }
+  python3 -I scripts/px4/px4_tables.py "$SFR_PX4_SOURCE" --check
+}
+run "PX4 tables match the PX4-Autopilot source at every supported release tag" check_px4_tables
 run "test certificates match their script (testdata/pki)" scripts/testdata/make_test_pki.sh --check
 
 # 3. No networking or async-runtime crates; no std::net (SPEC B1.10, "No network").
@@ -103,6 +113,9 @@ run "benchmark segment manifest matches the golden VTOL flight" python3 -I scrip
 check_script_syntax() {
   local f ok=0
   for f in scripts/*.sh scripts/testdata/*.sh scripts/claims_audit/*.sh; do bash -n "$f" || { echo "  bash -n: $f"; ok=1; }; done
+  python3 -I -c 'import ast, sys
+for f in sys.argv[1:]:
+    ast.parse(open(f).read(), f)' scripts/px4/*.py || { echo "  python parse: scripts/px4"; ok=1; }
   sh -n scripts/run_demo.sh || { echo "  sh -n: scripts/run_demo.sh"; ok=1; }
   python3 -I -c 'import ast, sys
 for f in sys.argv[1:]:
