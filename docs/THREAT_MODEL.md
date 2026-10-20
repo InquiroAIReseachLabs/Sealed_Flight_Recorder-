@@ -23,7 +23,7 @@ Designs for closing some of these gaps (a time from outside the sealer, a chain 
 
 ## Attacks and what detects them
 
-The attacks of this table that were fixed after the first red team (seal time, custody, CRL handling, the report, the signed structure, the signer certificate usage) are re-run by `scripts/t12_attacks.sh` against an earlier build, where each must succeed, and against the current build, where each must fail, after a control that must verify. Its output for the build before the fixes and the current one is in `docs/receipts/t12.txt`.
+Twelve attacks of this table that an earlier build did not stop (seal time, custody, CRL handling, the report, the signed structure, the signer certificate usage) are re-run by `scripts/claims_audit/t12_attacks.sh` against that earlier build, where each must succeed, and against the current build, where each must fail, after a control that must verify. The audit that includes them, and how to run it, is in [CLAIMS_AUDIT.md](CLAIMS_AUDIT.md).
 
 | Attack | Detected by | Shown by |
 |---|---|---|

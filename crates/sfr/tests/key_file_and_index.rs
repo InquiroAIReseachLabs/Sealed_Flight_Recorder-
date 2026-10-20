@@ -1,4 +1,4 @@
-//! Two small things a reader could take the wrong way (Issue #24, F7 and the note on key files):
+//! Two small things a reader could take the wrong way (the key-file mode and the BLAKE3 index):
 //! `seal` warns about a key file other users can read, and the BLAKE3 digest of a log is an index
 //! that comes second, after the SHA-256 the seal rests on.
 // A panicking test is a failing test, so tests may use expect and unwrap.

@@ -83,8 +83,11 @@ run "benchmark segment manifest matches the golden VTOL flight" python3 -I scrip
   testdata/sitl/v1.17.0/vtol_transition.ulg
 check_script_syntax() {
   local f ok=0
-  for f in scripts/*.sh scripts/testdata/*.sh; do bash -n "$f" || { echo "  bash -n: $f"; ok=1; }; done
+  for f in scripts/*.sh scripts/testdata/*.sh scripts/claims_audit/*.sh; do bash -n "$f" || { echo "  bash -n: $f"; ok=1; }; done
   sh -n scripts/run_demo.sh || { echo "  sh -n: scripts/run_demo.sh"; ok=1; }
+  python3 -I -c 'import ast, sys
+for f in sys.argv[1:]:
+    ast.parse(open(f).read(), f)' scripts/claims_audit/*.py || { echo "  python parse: scripts/claims_audit"; ok=1; }
   return $ok
 }
 run "every script parses" check_script_syntax

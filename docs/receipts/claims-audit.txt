@@ -1,0 +1,41 @@
+claims audit: 2026-10-20T02:55:41Z on Linux 6.18.44-fc-v139 x86_64, 4 CPUs, Intel(R) Xeon(R) Processor @ 2.10GHz
+commit: 874c096a096011260669b1e7b90bfe88ddfbcf78
+subject: Merge pull request #33 from InquiroAIReseachLabs/claude/charming-brahmagupta-3xi2az-a9-t12
+
+
+T1   Quickstart, cold start (Rust install + clone + build + seal + verify) PASS
+T2   Seal and verify each golden log with --pubkey                  PASS
+T3   Tamper tests (24 cases)                                        PASS
+T4-T5 No trusted key; PX4 versions; malformed and foreign formats    PASS
+T6   Offline: empty network namespace, strace                       PASS
+T7   Determinism: same inputs, same bytes                           PASS
+T8   Rules R1 to R7, one failing fixture each                       PASS
+T9   Reproducible build, twice from clean and another directory     PASS
+T10  Key custody: SoftHSM, swtpm, chain, revoked certificate        PASS
+T11  Public text scan                                               FAIL (exit 1)  [on commit 874c096: internal wording found in test comments, one threat-model sentence, a design page, a receipt and the T12 script; removed in the change that adds this file; the same test then passes, see below]
+T12  Twelve attacks: succeed on the earlier build, fail on this one PASS
+-    The audited checkout was not modified by the tests             PASS
+
+logs: /tmp/audit/run1/logs
+
+T11 re-run on the tree of the change that removes that wording (scripts/claims_audit/t11_text_scan.sh): 0 hits for internal wording, personal information and codenames; 0 unreviewed strong-claim words; PASS.
+
+T1 cold start (empty home, new Rust toolchain, clone, build, seal, verify): 77 s, on Linux 6.18.44 x86_64, 4 CPUs, Intel Xeon @ 2.10GHz, 15 GiB memory. Deviation: https://sh.rustup.rs returned 403 from this network, so the same installer (rustup-init) was fetched from static.rust-lang.org.
+T9 scope: one machine, the pinned toolchain; the binary and the tarball were identical across two clean builds and across a clone in another directory.
+T5 observation: a log whose last 100 bytes were zeroed, and a log with 64 bytes of 0xFF inside the data section, are sealed without a warning; the seal covers the bytes as they are. A log cut in the middle of a message, a log with garbage appended, an empty file, random bytes, a text file, an ArduPilot .bin and a MAVLink .tlog are refused with exit 3 and nothing written. A PX4 version outside 1.14 to 1.17 is refused unless --allow-untested-version, and the flag is then in the signed record and the report.
+
+T12 (earlier build = commit 4031c96, before the fixes; current build = commit 874c096):
+ID       ATTACK                                 EARLIER    CURRENT    RESULT
+T12.01   backdated seal time, lapsed cert       succeeded  failed     as expected
+T12.02   seal time in the verifier's future     succeeded  failed     as expected
+T12.03   evaluation key, no flag                succeeded  failed     as expected
+T12.04   custody relabelled, --require-hw       succeeded  failed     as expected
+T12.05   revoked, older CRL given first         succeeded  failed     as expected
+T12.06   revoked, no CRL given                  succeeded  failed     as expected
+T12.07   revoked, only a stale CRL              succeeded  failed     as expected
+T12.08   report missing                         succeeded  failed     as expected
+T12.09   forged report, other name              succeeded  failed     as expected
+T12.10   U+202E in a file name                  succeeded  failed     as expected
+T12.11   leaf moved to another section          succeeded  failed     as expected
+T12.12   code-signing cert as signer            succeeded  failed     as expected
+

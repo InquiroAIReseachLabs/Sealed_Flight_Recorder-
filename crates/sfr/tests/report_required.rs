@@ -166,7 +166,7 @@ fn a_record_without_its_report_does_not_verify_unless_told_not_to_look() {
 
 #[test]
 fn a_forged_report_under_another_name_does_not_stand_in_for_the_real_one() {
-    // Issue 24, F6: the report verify looks at is <record>.md. A forged report under any other name
+    // The report verify looks at is <record>.md. A forged report under any other name
     // was never looked at, and the record still verified.
     let dir = scratch();
     let (record, report, public) = seal(&root().join(FLIGHT), BASELINE, &dir);
@@ -255,7 +255,7 @@ fn the_merkle_root_and_key_fingerprint_stand_under_the_title_and_match_verify() 
 
 #[test]
 fn a_right_to_left_override_in_a_value_is_shown_in_the_report_the_terminal_and_json() {
-    // Issue 24, F6: a log named with U+202E reached the report heading, the record name and the
+    // A log named with U+202E reached the report heading, the record name and the
     // verify output unchanged ("Trojan Source", CVE-2021-42574).
     let dir = scratch();
     let named = dir.join(format!("flight{RLO}gnp.ulg"));
@@ -357,7 +357,7 @@ fn every_unicode_format_character_is_shown_in_the_report_not_acted_on() {
 
 #[test]
 fn a_log_given_under_another_name_verifies_and_the_output_says_so() {
-    // Issue 24, F6: deep verify binds the log's content, not its name, and a renamed log verified
+    // Deep verify binds the log's content, not its name, and a renamed log verified
     // "record and log" with nothing said. It still verifies; now the output notes it.
     let dir = scratch();
     let (record, _, public) = seal(&root().join(FLIGHT), BASELINE, &dir);

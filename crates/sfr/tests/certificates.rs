@@ -538,7 +538,7 @@ fn revoked_record() -> PathBuf {
 
 #[test]
 fn the_order_of_crl_arguments_never_decides_whether_a_revoked_signer_verifies() {
-    // Issue 24, F1: webpki used the first CRL of the right issuer, so an older CRL of the same
+    // webpki used the first CRL of the right issuer, so an older CRL of the same
     // issuer, given first, hid the revocation. The highest CRL number now decides, in any order.
     let record = revoked_record();
     // inter_older.crl is number 0 and lists nothing; inter_stale.crl is number 0, lists nothing and
@@ -590,7 +590,7 @@ fn the_order_of_crl_arguments_never_decides_whether_a_revoked_signer_verifies() 
 
 #[test]
 fn every_issuer_in_the_chain_needs_a_crl_unless_checking_is_switched_off() {
-    // Issue 24, F2: with no CRL a revoked signer verified and the trust line said "0 CRL(s)".
+    // With no CRL a revoked signer verified and the trust line said "0 CRL(s)".
     let record = revoked_record();
     let refused = |crls: &[&str], missing: &[&str], present_not: &[&str]| {
         let v = verify_anchor(&record, "root.pem", crls);
@@ -673,7 +673,7 @@ fn every_issuer_in_the_chain_needs_a_crl_unless_checking_is_switched_off() {
 
 #[test]
 fn a_crl_past_its_next_update_fails_against_the_verification_time() {
-    // Issue 24, F2: nextUpdate was ignored, so a stale CRL alone was accepted. The record is
+    // nextUpdate was ignored, so a stale CRL alone was accepted. The record is
     // sealed in mid-June 2025, when this CRL was current, and the claimed time must not help it.
     let (o, record) = seal(
         SIGNER_LAPSED,

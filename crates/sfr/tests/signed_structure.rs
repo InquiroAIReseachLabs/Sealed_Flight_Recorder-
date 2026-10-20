@@ -116,7 +116,7 @@ fn a_leaf_moved_to_another_section_changes_the_root_and_fails_the_signature() {
         Some(0)
     );
 
-    // The red team's move (Issue #24, F5): the last result becomes the first sealed topic. The
+    // The attack: the last result becomes the first sealed topic. The
     // order of the leaves is unchanged, so without section tags the root, and with it the
     // signature, stayed valid.
     let mut r = object(&record);
