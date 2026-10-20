@@ -96,27 +96,41 @@ pub struct Pkcs11Key {
     public: [u8; 32],
 }
 
-/// `SFR_PKCS11_HELPER` if set, else `sfr-pkcs11-helper` beside this `sfr`, else on `PATH`.
-fn helper_path() -> PathBuf {
+/// `sfr-pkcs11-helper` in the directory of this `sfr`, by the canonical path of the running
+/// binary: the helper signs as the token, so it is never looked up on `PATH` or taken from the
+/// environment. Only a test build (the `dev-helper` feature, which a release build refuses) also
+/// reads `SFR_PKCS11_HELPER`.
+fn helper_path() -> Result<PathBuf, String> {
+    #[cfg(feature = "dev-helper")]
     if let Some(p) = std::env::var_os("SFR_PKCS11_HELPER") {
-        return PathBuf::from(p);
+        return Ok(PathBuf::from(p));
     }
     let name = format!("sfr-pkcs11-helper{}", std::env::consts::EXE_SUFFIX);
-    if let Some(beside) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|d| d.join(&name)))
-        .filter(|p| p.is_file())
-    {
-        return beside;
+    let exe = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .map_err(|e| format!("cannot find the directory of this sfr to run {name} from: {e}"))?;
+    let dir = exe.parent().ok_or_else(|| {
+        format!(
+            "cannot find the directory of {} to run {name} from",
+            exe.display()
+        )
+    })?;
+    let helper = dir.join(&name);
+    if !helper.is_file() {
+        return Err(format!(
+            "{} does not exist: sfr runs {name} only from its own directory, {}",
+            helper.display(),
+            dir.display()
+        ));
     }
-    PathBuf::from(name)
+    Ok(helper)
 }
 
 impl Pkcs11Key {
     /// Checks the URI and asks the token for the key's public half.
     pub fn open(uri: &str) -> Result<Pkcs11Key, String> {
         let parsed = Pkcs11Uri::parse(uri).map_err(|e| format!("--key-uri: {e}"))?;
-        let helper = helper_path();
+        let helper = helper_path()?;
         let out = run(&helper, &["public-key", uri], b"")?;
         Ok(Pkcs11Key {
             public: decode_hex(&out, "the helper's public key")?,
@@ -146,10 +160,36 @@ impl Signer for Pkcs11Key {
 // ---------------------------------------------------------------------------------------------
 // tpm-sealed
 
-/// The tpm2-tools command `name`. They find the TPM through their own configuration
+/// Where the tpm2-tools commands are when `SFR_TPM2_TOOLS_DIR` does not say: the directory
+/// Debian, Ubuntu and Fedora install them in.
+pub const DEFAULT_TPM2_TOOLS_DIR: &str = "/usr/bin";
+
+/// The tpm2-tools command `name`, by an absolute path: in `SFR_TPM2_TOOLS_DIR`, which must be an
+/// absolute directory, else in [`DEFAULT_TPM2_TOOLS_DIR`]. Never looked up on `PATH`: whatever
+/// runs here sees the seed. The commands find the TPM through their own configuration
 /// (`TPM2TOOLS_TCTI`, else `/dev/tpmrm0`).
-fn tpm2(name: &str) -> PathBuf {
-    PathBuf::from(name)
+fn tpm2(name: &str) -> Result<PathBuf, String> {
+    let dir = match std::env::var_os("SFR_TPM2_TOOLS_DIR") {
+        Some(d) => {
+            let d = PathBuf::from(d);
+            if !d.is_absolute() {
+                return Err(format!(
+                    "SFR_TPM2_TOOLS_DIR is {}, not an absolute directory; sfr runs tpm2-tools only by an absolute path",
+                    d.display()
+                ));
+            }
+            d
+        }
+        None => PathBuf::from(DEFAULT_TPM2_TOOLS_DIR),
+    };
+    let tool = dir.join(name);
+    if !tool.is_file() {
+        return Err(format!(
+            "{} does not exist: install tpm2-tools, or set SFR_TPM2_TOOLS_DIR to the absolute directory that holds them (sfr never searches PATH)",
+            tool.display()
+        ));
+    }
+    Ok(tool)
 }
 
 /// A private scratch directory for TPM object contexts, removed on drop. It never holds key
@@ -290,7 +330,7 @@ pub fn tpm_keygen(
     let policy = scratch.path("policy.digest");
     if let Some(p) = pcrs {
         run(
-            &tpm2("tpm2_createpolicy"),
+            &tpm2("tpm2_createpolicy")?,
             &["--policy-pcr", "-l", p, "-L", &policy, "-Q"],
             b"",
         )?;
@@ -318,7 +358,7 @@ pub fn tpm_keygen(
         args.extend(["-L", policy.as_str()]);
     }
     // The seed goes to the TPM through a pipe; it never touches disk.
-    run(&tpm2("tpm2_create"), &args, seed)?;
+    run(&tpm2("tpm2_create")?, &args, seed)?;
     let settings = TpmSettings {
         parent: parent.to_string(),
         pcrs: pcrs.map(str::to_string),
@@ -370,7 +410,7 @@ fn unseal(
 ) -> Result<Zeroizing<[u8; 32]>, String> {
     let context = scratch.path("object.ctx");
     run(
-        &tpm2("tpm2_load"),
+        &tpm2("tpm2_load")?,
         &[
             "-C",
             &settings.parent,
@@ -389,7 +429,7 @@ fn unseal(
     if let Some(a) = &auth {
         args.extend(["-p", a.as_str()]);
     }
-    let out = run(&tpm2("tpm2_unseal"), &args, b"")?;
+    let out = run(&tpm2("tpm2_unseal")?, &args, b"")?;
     let seed: [u8; 32] = out
         .as_slice()
         .try_into()

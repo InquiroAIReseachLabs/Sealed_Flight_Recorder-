@@ -331,7 +331,13 @@ fn the_example_reports_render_from_their_records_and_verify() {
     ] {
         let record = format!("examples/reports/{name}.sfr");
         let parsed = sfr_core::json::parse(&std::fs::read(root().join(&record)).unwrap()).unwrap();
-        let md = std::fs::read_to_string(root().join(format!("{record}.md"))).unwrap();
+        let mut md = std::fs::read_to_string(root().join(format!("{record}.md"))).unwrap();
+        // SFR_RENDER_EXAMPLES=1 writes each report again from its record, for a change to the
+        // report alone (the records are kept; scripts/make_example_reports.sh seals new ones).
+        if std::env::var_os("SFR_RENDER_EXAMPLES").is_some() {
+            md = sfr_core::report::render(&parsed).unwrap();
+            std::fs::write(root().join(format!("{record}.md")), &md).unwrap();
+        }
         assert_eq!(
             md,
             sfr_core::report::render(&parsed).unwrap(),

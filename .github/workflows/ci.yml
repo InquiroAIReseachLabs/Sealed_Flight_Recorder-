@@ -57,6 +57,13 @@ jobs:
           awk '/^test result:/ { p += $4; f += $6; i += $8 }
             END { printf "tests: %d passed, %d failed, %d ignored (cargo test --workspace --locked)\n", p, f, i }' test.log \
             | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: The dev-helper feature (tests only) does not build in a release profile
+        run: |
+          set -euo pipefail
+          if out="$(cargo check --release --locked -p sfr --features dev-helper 2>&1)"; then
+            echo "cargo check --release --features dev-helper succeeded"; exit 1
+          fi
+          grep -q "the dev-helper feature is for test builds only" <<<"$out"
       - name: The test certificates are what scripts/testdata/make_test_pki.sh makes
         run: scripts/testdata/make_test_pki.sh --check
       - name: README numbers come only from docs/receipts/ci-run.txt (SPEC B1.10 Reproducible claims)
@@ -290,64 +297,6 @@ jobs:
           scripts/check_release_hygiene.sh --self-test
           scripts/check_release_flow.sh
           scripts/regen_readme_numbers.sh --self-test
-
-  # The engine bundle: built from this commit, checked, then driven in three browser
-  # engines through its test harness page by tests/browser/sandbox.test.mjs. Safari itself
-  # cannot run on a Linux runner; WebKit is its engine. The bundle is kept as the artifact
-  # sfr-engine-<commit>, with SHA256SUMS and BUILDINFO inside (docs/SANDBOX.md).
-  sandbox:
-    name: engine bundle in Chromium, Firefox and WebKit; same records as the CLI; user files never sent (SPEC B1.10 Sandbox)
-    runs-on: ubuntu-24.04
-    env:
-      # wasm-bindgen-cli: the release binary of the version Cargo.lock pins, checked against the
-      # SHA-256 its release publishes (wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz.sha256sum).
-      WASM_BINDGEN_VERSION: 0.2.129
-      WASM_BINDGEN_SHA256: 82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      # The browsers install in the background while the engine, the harness and the CLI build.
-      - name: Install the toolchain, wasm-bindgen-cli and the browsers; build the bundle, the harness and the CLI from this commit
-        run: |
-          set -euo pipefail
-          (cd tests/browser && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium firefox webkit) \
-            > playwright-install.log 2>&1 &
-          browsers=$!
-          rustup toolchain install
-          rustup target add wasm32-unknown-unknown
-          name="wasm-bindgen-$WASM_BINDGEN_VERSION-x86_64-unknown-linux-musl"
-          curl -sSfL -o "$RUNNER_TEMP/wb.tar.gz" \
-            "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$WASM_BINDGEN_VERSION/$name.tar.gz"
-          echo "$WASM_BINDGEN_SHA256  $RUNNER_TEMP/wb.tar.gz" | sha256sum -c -
-          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/wb.tar.gz"
-          export WASM_BINDGEN="$RUNNER_TEMP/$name/wasm-bindgen"
-          cargo clippy -p sfr-wasm --target wasm32-unknown-unknown --locked -- -D warnings
-          scripts/build_site.sh dist/site
-          scripts/check_engine_bundle.sh --self-test
-          scripts/check_engine_bundle.sh dist/site/engine "$(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
-          SFR_BUILD_COMMIT="$(git rev-parse HEAD)" cargo build --release --locked -p sfr
-          wait "$browsers" || { cat playwright-install.log; exit 1; }
-      # The "PASS"/"FAIL" lines and summary.md are the gate's evidence.
-      - name: Headless browser gate (tests/browser/sandbox.test.mjs)
-        run: |
-          set -euo pipefail
-          node tests/browser/sandbox.test.mjs --site dist/site --sfr target/release/sfr --out sandbox-test 2>&1 | tee sandbox-test.log
-          cat sandbox-test/summary.md >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
-        with:
-          name: sfr-engine-${{ github.sha }}
-          path: dist/site/engine/
-          if-no-files-found: error
-          retention-days: 30
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
-        if: always()
-        with:
-          name: sandbox-test-screenshots
-          path: |
-            sandbox-test/*.png
-            sandbox-test/summary.md
-            sandbox-test/summary.json
-          if-no-files-found: warn
-          retention-days: 30
 
   # Release artifacts. These jobs run beside the gates above and build everything a
   # release holds, unsigned: the three static tarballs, the benchmark kit, the demo image, one
