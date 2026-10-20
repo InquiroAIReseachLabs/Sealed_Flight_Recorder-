@@ -43,9 +43,21 @@ run "cargo test --locked" cargo test --workspace --locked --quiet
 # does, on nightly. A type check on the pinned toolchain catches a changed engine API at once.
 run "fuzz targets type-check (fuzz/ is not in the workspace)" \
   cargo check --manifest-path fuzz/Cargo.toml --locked --bins --quiet
-run "golden files agree with the independent oracle" scripts/testdata/regenerate.sh compare
+run "golden files agree with the committed pyulog oracle outputs" scripts/testdata/regenerate.sh compare
 run "reference verifier vectors (tools/reference_verifier)" python3 -I tools/reference_verifier/sfr_ref_verify.py --self-test
 run "reference verifier vectors are what their generator writes" python3 -I tools/reference_verifier/make_vectors.py --check
+# The oracle-differential CI job: sfr and the pyulog oracle, both run now, on every golden and
+# false-pass log. Needs the test-only packages of scripts/testdata/requirements-dev.txt, in a
+# virtual environment outside the repository (the docs and language checks scan every file in
+# it); SFR_ORACLE_PYTHON names its Python. A missing package is a failure.
+check_oracle_differential() {
+  local py="${SFR_ORACLE_PYTHON:-python3}"
+  "$py" -I -c 'import pyulog' 2>/dev/null || {
+    echo "  no Python with pyulog at $py; see scripts/testdata/requirements-dev.txt"; return 1; }
+  cargo build --locked -p sfr --quiet && "$py" -I scripts/testdata/oracle_differential.py target/debug/sfr | tail -1
+  [ "${PIPESTATUS[0]}" -eq 0 ]
+}
+run "sfr agrees with the pyulog oracle on every golden and false-pass log" check_oracle_differential
 run "test certificates match their script (testdata/pki)" scripts/testdata/make_test_pki.sh --check
 
 # 3. No networking or async-runtime crates; no std::net (SPEC B1.10, "No network").

@@ -1423,7 +1423,7 @@ fn not_checked(
             t.push('\n');
         }
         t.push_str(&format!(
-            "{INTEGRITY_NOT_CHECKED}\nFlight rules: UNKNOWN (the record's integrity was not checked)\nrecord    {record_path}\n{}To check it, {how}.\n",
+            "{INTEGRITY_NOT_CHECKED}\nRule checks: UNKNOWN (the record's integrity was not checked)\nrecord    {record_path}\n{}To check it, {how}.\n",
             claimed_lines(claimed)
         ));
         t

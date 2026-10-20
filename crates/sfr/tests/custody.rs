@@ -102,7 +102,7 @@ fn a_record_signed_with_an_evaluation_key_is_refused_unless_it_is_allowed() {
     assert!(!out.contains("VERIFIED"), "{out}");
     assert!(
         out.contains(
-            "Flight rules: UNKNOWN (the record was refused, so its rule results are not accepted)\n"
+            "Rule checks: UNKNOWN (the record was refused, so its rule results are not accepted)\n"
         ),
         "{out}"
     );

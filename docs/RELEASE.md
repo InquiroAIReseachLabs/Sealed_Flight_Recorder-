@@ -106,7 +106,7 @@ You need `curl`, `tar`, `sha256sum` and OpenSSL 3. Every command below is run, i
    bin/sfr keygen --evaluation-only --out keys > /dev/null
    bin/sfr seal examples/sample/sample.ulg --rules examples/rules.default.toml \
      --baseline examples/sample/sample.params --key keys/sfr.key --evaluation-only --out out | grep -E '^(status|record)'
-   bin/sfr verify out/sample.sfr --pubkey keys/sfr.pub --allow-evaluation-key --ulog examples/sample/sample.ulg | grep -E '^(Integrity|Flight rules)'
+   bin/sfr verify out/sample.sfr --pubkey keys/sfr.pub --allow-evaluation-key --ulog examples/sample/sample.ulg | grep -E '^(Integrity|Rule checks)'
    ```
 
 6. Change one parameter value in a copy of the record, and one byte of a copy of the log. Each verify exits 1 and says what no longer matches. The post-release check runs these commands and requires both exits to be 1:

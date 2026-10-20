@@ -31,16 +31,16 @@ check "target/release/sfr exists" "$([ -x target/release/sfr ]; echo $?)"
 step "README step 3: verify a record sealed earlier, against its log"
 out="$(target/release/sfr verify examples/reports/vtol_transition.sfr --pubkey examples/reports/sfr.pub --allow-evaluation-key --ulog testdata/sitl/v1.17.0/vtol_transition.ulg)"; rc=$?
 echo "$out" | sed -n 1,3p; echo "exit $rc"
-check "Integrity: VERIFIED (record and log), Flight rules: PASS, exit 0" "$([ $rc -eq 0 ] && grep -q '^Integrity: VERIFIED (record and log)' <<< "$out" && grep -q '^Flight rules: PASS' <<< "$out"; echo $?)"
+check "Integrity: VERIFIED (record and log), Rule checks: WARN (R4) as README step 3 shows, exit 0" "$([ $rc -eq 0 ] && grep -q '^Integrity: VERIFIED (record and log)' <<< "$out" && grep -qx 'Rule checks: WARN (R4)' <<< "$out"; echo $?)"
 step "README step 5: keygen and seal"
 mkdir -p try; target/release/sfr keygen --evaluation-only --out try/keys > try/keygen.txt; head -1 try/keygen.txt
 target/release/sfr seal testdata/sitl/v1.17.0/vtol_transition.ulg --rules examples/rules.default.toml \
   --baseline testdata/baselines/v1.17.0_vtol_transition.params --key try/keys/sfr.key --evaluation-only --out try/out > try/seal.txt; rc=$?
 grep -E '^(R[0-9] |status|record|report)' try/seal.txt
-check "seal exit 0 and status PASS" "$([ $rc -eq 0 ] && grep -q '^status    PASS' try/seal.txt; echo $?)"
+check "seal exit 0 and status WARN, as README step 5 shows" "$([ $rc -eq 0 ] && grep -qx 'status    WARN' try/seal.txt; echo $?)"
 step "README step 6: verify the record just sealed"
 out="$(target/release/sfr verify try/out/vtol_transition.sfr --pubkey try/keys/sfr.pub --allow-evaluation-key --ulog testdata/sitl/v1.17.0/vtol_transition.ulg)"; rc=$?
-echo "$out" | grep -E '^(EVALUATION|Integrity|Flight rules)'
+echo "$out" | grep -E '^(EVALUATION|Integrity|Rule checks)'
 check "Integrity: VERIFIED (record and log)" "$([ $rc -eq 0 ] && grep -q '^Integrity: VERIFIED (record and log)' <<< "$out"; echo $?)"
 step "done: cold start (Rust install + clone + build + seal + verify) took $(( $(date +%s) - t0 )) s"
 cp target/release/sfr "$A_WORK/sfr-from-t01"

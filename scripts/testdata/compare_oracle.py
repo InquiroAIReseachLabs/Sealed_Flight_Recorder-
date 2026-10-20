@@ -3,8 +3,9 @@
 
 Usage: python3 -I compare_oracle.py <sfr.json> <oracle.json>
 
-The oracle (oracle.py, built on pyulog and its own ULog record reader only from SPEC B1.5, B1.6
-and B1.7 and docs/RECORD_FORMAT.md) and sfr were written independently. This script maps sfr's event fields onto the oracle's schema and reports every
+The oracle (oracle.py: a test-only second implementation on pyulog, sharing no code with sfr;
+its header says what it does and does not check). This script maps sfr's event fields onto the
+oracle's schema and reports every
 difference in configuration, firmware, `is_vtol` and `vtol_type`, events (kind, time, source, kind
 fields including the COMMAND category, order), the rules both evaluate (R1, R4, R5, R6, R7),
 `config.watched_parameters`, and every sealed topic digest entry field by field. Exit 0 when they

@@ -1,6 +1,6 @@
 # Record format (`.sfr`)
 
-This page specifies schema version 3 of the record `sfr seal` writes, in enough detail to write an independent verifier. SPEC B1.7 is the normative summary. The code is `crates/sfr-core/src/seal.rs` (fields, leaves, signed payload), `json.rs` (canonical JSON), `merkle.rs` (the tree), `keys.rs` (keys and fingerprint) and `verify.rs` (verification), all in `crates/sfr-core/src/`. The last section checks a golden record with `openssl`, `b3sum` and the Python standard library, without `sfr`.
+This page specifies schema version 4 of the record `sfr seal` writes, in enough detail to write an independent verifier. SPEC B1.7 is the normative summary. The code is `crates/sfr-core/src/seal.rs` (fields, leaves, signed payload), `json.rs` (canonical JSON), `merkle.rs` (the tree), `keys.rs` (keys and fingerprint) and `verify.rs` (verification), all in `crates/sfr-core/src/`. The last section checks a golden record with `openssl`, `b3sum` and the Python standard library, without `sfr`.
 
 ## The file
 

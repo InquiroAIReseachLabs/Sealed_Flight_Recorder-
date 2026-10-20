@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """sfr_ref_verify.py: a reference verifier for Sealed Flight Record files, schema 4.
 
-Written from docs/RECORD_FORMAT.md alone; it imports nothing from sfr and needs only the Python
-3.11+ standard library (Ed25519 is implemented here from RFC 8032).
+It follows docs/RECORD_FORMAT.md and shares no code with sfr (it imports nothing from it); it is
+maintained in the same repository, so it checks the format as that document states it. It needs
+only the Python 3.11+ standard library (Ed25519 is implemented here from RFC 8032).
 
   sfr_ref_verify.py <record.sfr> <sfr.pub>     prints VERIFIED (exit 0) or FAILED: <reason> (exit 1)
   sfr_ref_verify.py --self-test                runs the test vectors in vectors/ (exit 1 on a miss)

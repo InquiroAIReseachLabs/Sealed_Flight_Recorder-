@@ -40,7 +40,7 @@ You need git and a C compiler and linker (`cc`; on Debian or Ubuntu, `build-esse
    cargo build --release --locked
    ```
 
-3. Verify a record sealed earlier, against its log. `examples/reports/` holds four records sealed from golden SITL logs, and the public key `sfr.pub`. `Integrity:` says whether the record and log are unchanged since sealing; `Flight rules:` gives the sealed rule results. A record whose rules failed still verifies; the exit code follows integrity only:
+3. Verify a record sealed earlier, against its log. `examples/reports/` holds four records sealed from golden SITL logs, and the public key `sfr.pub`. `Integrity:` says whether the record and log are unchanged since sealing; `Rule checks:` gives the sealed rule results. A record whose rules failed still verifies; the exit code follows integrity only:
 
    ```sh doc-test
    target/release/sfr verify examples/reports/vtol_transition.sfr --pubkey examples/reports/sfr.pub \
@@ -51,7 +51,7 @@ You need git and a C compiler and linker (`cc`; on Debian or Ubuntu, `build-esse
    ```text doc-output
    EVALUATION KEY: not for operational use
    Integrity: VERIFIED (record and log)
-   Flight rules: WARN (R4)
+   Rule checks: WARN (R4)
    record    examples/reports/vtol_transition.sfr
    report    examples/reports/vtol_transition.sfr.md matches the record
    trust     the public key given with --pubkey (trusted as far as its source is)
@@ -76,7 +76,7 @@ You need git and a C compiler and linker (`cc`; on Debian or Ubuntu, `build-esse
    ```text doc-output
    EVALUATION KEY: not for operational use
    Integrity: FAILED: Merkle root mismatch: a leaf changed after sealing (recorded cb0183bc5b2bb55bd02c2d2a2f592cb10f60c36520d2ab22f8701c3e66ff9375, computed 78ad1b57928f3c6ab6dc6407ead4012b77ed6fd96e3c84f1d9f782515640587f)
-   Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
+   Rule checks: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
    key       sha256:1ab979d4bed49693df5e1482cfb3a5432a6dd632de3c95dc24f7c9896c7eec45 (named by the record, not proven)
    custody   unattested (declared file-evaluation)
    exit 1
@@ -93,7 +93,7 @@ You need git and a C compiler and linker (`cc`; on Debian or Ubuntu, `build-esse
    EVALUATION KEY: not for operational use
    Integrity: FAILED: event seq 1 (COMMAND) field `command`: sealed 311, found 211
      also: Merkle root mismatch: a leaf changed after sealing (recorded cb0183bc5b2bb55bd02c2d2a2f592cb10f60c36520d2ab22f8701c3e66ff9375, computed 78ad1b57928f3c6ab6dc6407ead4012b77ed6fd96e3c84f1d9f782515640587f)
-   Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
+   Rule checks: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)
    key       sha256:1ab979d4bed49693df5e1482cfb3a5432a6dd632de3c95dc24f7c9896c7eec45 (named by the record, not proven)
    custody   unattested (declared file-evaluation)
    exit 1
@@ -131,13 +131,13 @@ You need git and a C compiler and linker (`cc`; on Debian or Ubuntu, `build-esse
 
    ```sh doc-test
    target/release/sfr verify try/out/vtol_transition.sfr --pubkey try/keys/sfr.pub --allow-evaluation-key \
-     --ulog testdata/sitl/v1.17.0/vtol_transition.ulg | grep -E '^(EVALUATION|Integrity|Flight rules)'
+     --ulog testdata/sitl/v1.17.0/vtol_transition.ulg | grep -E '^(EVALUATION|Integrity|Rule checks)'
    ```
 
    ```text doc-output
    EVALUATION KEY: not for operational use
    Integrity: VERIFIED (record and log)
-   Flight rules: WARN (R4)
+   Rule checks: WARN (R4)
    ```
 
 To seal your own log you need a rules file (start from `examples/rules.default.toml`) and a baseline: the parameter file QGroundControl exports, plus one line `# Firmware: <version>` ([docs/RULES.md](docs/RULES.md)). Operational records use a key in a PKCS#11 token or HSM, or a seed sealed to a TPM ([docs/INTEGRATION_NOTES.md](docs/INTEGRATION_NOTES.md#keys)). Not run in CI: it needs your files.
@@ -154,7 +154,7 @@ From `crates/sfr-core/src/lib.rs` (`exit_code`):
 
 | Exit | `sfr seal` | `sfr verify` |
 |---|---|---|
-| 0 | status PASS or WARN; record written | `Integrity: VERIFIED`, whatever the `Flight rules:` line says |
+| 0 | status PASS or WARN; record written | `Integrity: VERIFIED`, whatever the `Rule checks:` line says |
 | 1 | a rule FAIL, or no armed flight (status NO ARMED FLIGHT); the record is still written | `Integrity: FAILED` (record, log or certificate chain does not check, or an input limit is exceeded) or `Integrity: REFUSED` (good signature, but an evaluation key without `--allow-evaluation-key`, or custody `--require-hardware-key` does not accept) |
 | 2 | a required topic or field is missing (R1 FAIL); the record is still written | not used |
 | 3 | the log, rules file or baseline is malformed, truncated, or over an input limit; nothing written | not used |
@@ -172,7 +172,8 @@ From `crates/sfr-core/src/lib.rs` (`exit_code`):
 | [docs/INTEGRATION_NOTES.md](docs/INTEGRATION_NOTES.md) | the topics `sfr` reads, sealing after disarm, CI use, key handling |
 | [docs/LIMITS.md](docs/LIMITS.md) | the input limits |
 | [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md), [docs/BENCHMARK.md](docs/BENCHMARK.md) | verify timing, test results and seal benchmarks |
-| [docs/CLAIMS_AUDIT.md](docs/CLAIMS_AUDIT.md) | the tests that re-check these pages from a fresh clone |
+| [docs/VALIDATION.md](docs/VALIDATION.md) | what was tested, the crafted false-pass logs and what became of them, the false passes that remain |
+| [docs/CLAIMS_AUDIT.md](docs/CLAIMS_AUDIT.md) | the tests that re-check, from a fresh clone, the claims its table lists (not every sentence of these pages) |
 | [docs/design/README.md](docs/design/README.md) | design notes for things a record does not do yet; none is built |
 | [docs/RELEASE.md](docs/RELEASE.md) | how a release is made and checked (no release exists yet) |
 | [examples/reports/README.md](examples/reports/README.md) | the example records and reports |

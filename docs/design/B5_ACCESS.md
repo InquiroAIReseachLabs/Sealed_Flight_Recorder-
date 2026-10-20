@@ -19,7 +19,7 @@ It does not add:
 
 ### Selective disclosure by inclusion proof
 
-A record's leaves are hashed into a Merkle tree (RFC 6962 shape). The signature covers the root, the tree size and, in schema 3, each section's leaf count ([RECORD_FORMAT.md](../RECORD_FORMAT.md)). An inclusion proof for one leaf is the list of sibling hashes from the leaf to the root, the audit path of RFC 9162 section 2.1.3.
+A record's leaves are hashed into a Merkle tree (RFC 6962 shape). The signature covers the root, the tree size and, since schema 3, each section's leaf count ([RECORD_FORMAT.md](../RECORD_FORMAT.md)). An inclusion proof for one leaf is the list of sibling hashes from the leaf to the root, the audit path of RFC 9162 section 2.1.3.
 
 A *disclosure* file holds the leaf's canonical JSON and section, its index and audit path, and what the recipient needs to check the signature: the seal context leaf (key fingerprint, schema, claimed seal time), the root, the tree size, the section counts and the signature. The recipient hashes the leaf, walks the path to a root, compares it with the signed root, and verifies the signature. `sfr disclose <record.sfr> --leaf <kind>[:<id>] --out <file>` makes it; `sfr verify-disclosure <file> --pubkey <sfr.pub>` checks it. Neither needs the log.
 

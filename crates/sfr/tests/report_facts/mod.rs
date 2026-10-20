@@ -331,7 +331,9 @@ pub fn check(record: &Value, md: &str) {
     }
 
     // Rules: one row per result, in order; then the findings of each failed rule.
-    l.expect("## Rules");
+    l.expect("## Rule checks");
+    l.expect("");
+    l.expect("Results are computed from data the log declares about itself; see VALIDATION.md.");
     l.expect("");
     let results = a(r, "results");
     let rows = l.table(&["Rule", "Status", "Name", "Found"]);

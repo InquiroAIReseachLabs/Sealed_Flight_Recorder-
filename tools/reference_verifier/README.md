@@ -1,6 +1,6 @@
 # tools/reference_verifier/
 
-A second, independent verifier of Sealed Flight Record files (schema 4), for anyone who wants to check a record without trusting `sfr`. It is written from [docs/RECORD_FORMAT.md](../../docs/RECORD_FORMAT.md) alone, imports nothing from `sfr`, and needs only the Python 3.11+ standard library; Ed25519 is implemented in the file from RFC 8032 and checked against that RFC's test vectors.
+A second verifier of Sealed Flight Record files (schema 4), for anyone who wants to check a record without trusting `sfr`'s code. It follows [docs/RECORD_FORMAT.md](../../docs/RECORD_FORMAT.md), shares no code with `sfr` (it imports nothing from it), and is maintained in this repository by the same people, so it checks the format as that document states it, not an independent reading of it. It needs only the Python 3.11+ standard library; Ed25519 is implemented in the file from RFC 8032 and checked against that RFC's test vectors.
 
 - `sfr_ref_verify.py <record.sfr> <sfr.pub>` prints `VERIFIED` (exit 0) or `FAILED: <reason>` (exit 1). Its header lists every check it makes and every one it does not (certificate chains and CRLs, the custody policy, the report, the log, and the rules file beyond its TOML syntax and ignore list).
 - `sfr_ref_verify.py --self-test` runs the RFC 8032 vectors and the record vectors in `vectors/`.

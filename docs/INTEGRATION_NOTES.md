@@ -116,7 +116,7 @@ Copy the records from `/var/lib/sfr/records/` off the vehicle with the logs; any
 
 ## In CI or another pipeline
 
-`sfr verify` reports two things apart. `Integrity:` is VERIFIED when the record (and, with `--ulog`, the log) has not changed since sealing. `Flight rules:` is the rule results sealed in the record: PASS; WARN with the ids of the rules that warned; NO ARMED FLIGHT when the log has no ARM and no DISARM, so no flight was checked; or FAIL with the failing rule ids. The exit code follows integrity only: 0 when the record verifies, even if its rules failed, 1 when it does not. `--json` gives `integrity`, `flight_rules`, `failed_rules` and `warned_rules`. This function fails a pipeline on a record that does not verify against its log, and on one that verifies but recorded a rule FAIL or no armed flight; a WARN passes and is shown:
+`sfr verify` reports two things apart. `Integrity:` is VERIFIED when the record (and, with `--ulog`, the log) has not changed since sealing. `Rule checks:` is the rule results sealed in the record: PASS; WARN with the ids of the rules that warned; NO ARMED FLIGHT when the log has no ARM and no DISARM, so no flight was checked; or FAIL with the failing rule ids. The exit code follows integrity only: 0 when the record verifies, even if its rules failed, 1 when it does not. `--json` gives `integrity`, `flight_rules`, `failed_rules` and `warned_rules`. This function fails a pipeline on a record that does not verify against its log, and on one that verifies but recorded a rule FAIL or no armed flight; a WARN passes and is shown:
 
 ```sh doc-test
 mkdir -p try

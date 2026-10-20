@@ -26,19 +26,19 @@ From the repository root, with `sfr` built as the [README](../../README.md) desc
 ```sh doc-test
 for name in vtol_transition failsafe_gps_loss gz_quadtailsitter_transition gz_x500_vision_hover; do
   target/release/sfr verify "examples/reports/$name.sfr" --pubkey examples/reports/sfr.pub --allow-evaluation-key \
-    --ulog "testdata/sitl/v1.17.0/$name.ulg" | grep -E '^(Integrity|Flight rules)'
+    --ulog "testdata/sitl/v1.17.0/$name.ulg" | grep -E '^(Integrity|Rule checks)'
 done
 ```
 
 ```text doc-output
 Integrity: VERIFIED (record and log)
-Flight rules: WARN (R4)
+Rule checks: WARN (R4)
 Integrity: VERIFIED (record and log)
-Flight rules: FAIL (R4)
+Rule checks: FAIL (R4)
 Integrity: VERIFIED (record and log)
-Flight rules: WARN (R4)
+Rule checks: WARN (R4)
 Integrity: VERIFIED (record and log)
-Flight rules: FAIL (R7)
+Rule checks: FAIL (R7)
 ```
 
 `crates/sfr/tests/seal_verify.rs` checks that each report is exactly what its record renders to and that each record verifies against its log. If a format change makes it fail, run `scripts/make_example_reports.sh` again and commit the new files. Not run in CI, because it makes a new key and rewrites every record, report and `sfr.pub`:

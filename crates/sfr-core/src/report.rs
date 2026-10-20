@@ -39,6 +39,10 @@ pub const DIGEST_PREFIX_LEN: usize = 16;
 /// The note under "Parameters changed in flight".
 pub const PARAM_CHANGES_NOTE: &str = "R3 compares the parameters in effect at each ARM with the baseline; a change in flight of a parameter it does not ignore makes R3 WARN.";
 
+/// The line under the rule checks heading: what the results rest on.
+pub const RULE_CHECKS_NOTE: &str =
+    "Results are computed from data the log declares about itself; see VALIDATION.md.";
+
 /// The line under the status of a record whose log has no armed flight.
 pub const NO_ARMED_FLIGHT_LINE: &str = "No armed flight: the log has no ARM and no DISARM, so the rules had no flight to check. This is not a PASS.";
 
@@ -357,7 +361,9 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     }
 
     // Rules.
-    out.push_str("## Rules\n\n");
+    out.push_str("## Rule checks\n\n");
+    out.push_str(RULE_CHECKS_NOTE);
+    out.push_str("\n\n");
     header(&mut out, &["Rule", "Status", "Name", "Found"]);
     let mut r3_lines: Vec<String> = Vec::new();
     let mut failed = Vec::new();
