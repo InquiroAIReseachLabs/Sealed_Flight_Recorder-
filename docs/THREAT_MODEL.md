@@ -8,7 +8,7 @@ Only the record, `<name>.sfr`, is signed: the Ed25519 signature covers its Merkl
 
 ## What a seal proves
 
-`sfr verify` reports `Integrity: VERIFIED` only after checking the signature against a public key the verifier supplied (`--pubkey`) or a key whose certificate chains to a trust anchor the verifier supplied (`--trust-anchor`), and only for a record that is not signed with an evaluation key (those need `--allow-evaluation-key`, else `Integrity: REFUSED`); given neither key nor anchor, it reports `Integrity: NOT CHECKED` and exits 4. A record so verified proves that it has not changed since it was sealed: that this record, signed by the key with this fingerprint, holds these rule results, this configuration and these events, and that its report, when one is beside it or named, is the one it renders; with `--ulog`, that they match these log bytes (SHA-256 and BLAKE3 of the whole file) and that the embedded rules and baseline give the same results from them. The format is in [RECORD_FORMAT.md](RECORD_FORMAT.md).
+`sfr verify` reports `Integrity: VERIFIED` only after checking the signature against a public key the verifier supplied (`--pubkey`) or a key whose certificate chains to a trust anchor the verifier supplied (`--trust-anchor`), and only for a record that is not signed with an evaluation key (those need `--allow-evaluation-key`, else `Integrity: REFUSED`); given neither key nor anchor, it reports `Integrity: NOT CHECKED` and exits 4. A record so verified proves that it has not changed since it was sealed: that this record, signed by the key with this fingerprint, holds these rule results, this configuration and these events, and that its report, when one is beside it or named, is the one it renders; with `--ulog`, that they match these log bytes (the SHA-256 of the whole file; the BLAKE3 digest recorded beside it is an index for finding the file and adds no security) and that the embedded rules and baseline give the same results from them. The format is in [RECORD_FORMAT.md](RECORD_FORMAT.md).
 
 ## What a seal does not prove
 
@@ -76,7 +76,7 @@ Command source ids are the values recorded in the log. MAVLink source ids are se
 
 ## Cryptography
 
-On every target, `sfr` computes SHA-256 with `sha2`, Ed25519 with `ed25519-dalek`, and the supplementary BLAKE3 digest of the raw log with `blake3`; `seal.crypto_crates` names each crate and its crate version. The same crates build every target, so a record is byte-identical wherever it is sealed. These crates have no CMVP certificate, and `sfr` makes no claim under any cryptographic module standard: treat its digests and signatures as made by ordinary open source code. `sfr` makes no claim that it meets any security standard or regime; such requirements apply to whole systems and how they are run.
+On every target, `sfr` computes SHA-256 with `sha2`, Ed25519 with `ed25519-dalek`, and the BLAKE3 index digest of the raw log with `blake3` (it identifies the file for lookup and adds no security: SHA-256 is the digest the seal rests on); `seal.crypto_crates` names each crate and its crate version. The same crates build every target, so a record is byte-identical wherever it is sealed. These crates have no CMVP certificate, and `sfr` makes no claim under any cryptographic module standard: treat its digests and signatures as made by ordinary open source code. `sfr` makes no claim that it meets any security standard or regime; such requirements apply to whole systems and how they are run.
 
 ## Sensitivity
 

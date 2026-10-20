@@ -72,7 +72,7 @@ A record holds exactly these thirteen fields, no more and no fewer (`RECORD_FIEL
 
 | Member | Value |
 |---|---|
-| `blake3` | lowercase hex BLAKE3 of the whole log file, every byte |
+| `blake3` | lowercase hex BLAKE3 of the whole log file, every byte: an index for finding the file, which adds no security. SHA-256 is the digest the seal rests on, and `verify --ulog` checks it first |
 | `file_name` | the log's file name, without directories |
 | `firmware` | `git`: the `ver_sw` info message, or null; `ver_sw_release`: the `ver_sw_release` info message as `0x` and eight lowercase hex digits, or null; `version`: that value as `major.minor.patch` with `-rc`, `-beta`, `-alpha` or `-dev` from its last byte (`version_string` in `crates/sfr-core/src/ingest.rs`), or null |
 | `sha256` | lowercase hex SHA-256 of the whole log file |
@@ -270,13 +270,13 @@ log=testdata/sitl/v1.17.0/vtol_transition.ulg
 ident=$(grep -o '"log":{"blake3":"[0-9a-f]\{64\}","file_name":"[^"\\]*","firmware":{[^}]*},"sha256":"[0-9a-f]\{64\}","size":"[0-9]*"' "$rec")
 field() { printf '%s' "$ident" | sed "s/.*\"$1\":\"\\([^\"]*\\)\".*/\\1/"; }
 same() { if [ "$2" = "$3" ]; then echo "$1 matches: $2"; else echo "$1 DIFFERS: record $2, file $3"; fi; }
-same blake3 "$(field blake3)" "$(b3sum --no-names "$log")"
+same "blake3 (index only)" "$(field blake3)" "$(b3sum --no-names "$log")"
 same sha256 "$(field sha256)" "$(sha256sum < "$log" | cut -d' ' -f1)"
 same size "$(field size)" "$(wc -c < "$log" | tr -d ' ')"
 ```
 
 ```text doc-output
-blake3 matches: 0af5378155f2d8dc440697a01096d4af50217c6eb33f93b3bef3d976a54adbfd
+blake3 (index only) matches: 0af5378155f2d8dc440697a01096d4af50217c6eb33f93b3bef3d976a54adbfd
 sha256 matches: 86d64e54d1261991f4035355550f64e017f8a486c5c665848d6e68ae67fc9bf3
 size matches: 24295307
 ```

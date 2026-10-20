@@ -518,7 +518,7 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
     item(&mut out, "SHA-256", &code(&s(log, "sha256", "log")?));
     item(
         &mut out,
-        "BLAKE3 (supplementary)",
+        "BLAKE3 (index only, adds no security)",
         &code(&s(log, "blake3", "log")?),
     );
     item(

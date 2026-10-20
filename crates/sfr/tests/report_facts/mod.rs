@@ -510,7 +510,10 @@ pub fn check(record: &Value, md: &str) {
         format!("{} (git {})", ev(f(fw, "version")), ev(f(fw, "git")))
     );
     assert_eq!(l.item("SHA-256"), hex_span(f(log, "sha256")));
-    assert_eq!(l.item("BLAKE3 (supplementary)"), hex_span(f(log, "blake3")));
+    assert_eq!(
+        l.item("BLAKE3 (index only, adds no security)"),
+        hex_span(f(log, "blake3"))
+    );
     assert_eq!(l.item("VTOL"), ev(f(vehicle, "is_vtol")));
     assert_eq!(l.item("MAV_TYPE"), ev(f(vehicle, "system_type")));
     l.expect("");

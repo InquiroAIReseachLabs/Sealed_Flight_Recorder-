@@ -87,7 +87,7 @@ The record holds no sealed topic digests.
 - Size (bytes): 24295307
 - Firmware: 1\.17\.0 (git d6f12ad1c4f70ad3230afd7d86e971421e02fef4)
 - SHA-256: `86d64e54d1261991f4035355550f64e017f8a486c5c665848d6e68ae67fc9bf3`
-- BLAKE3 (supplementary): `0af5378155f2d8dc440697a01096d4af50217c6eb33f93b3bef3d976a54adbfd`
+- BLAKE3 (index only, adds no security): `0af5378155f2d8dc440697a01096d4af50217c6eb33f93b3bef3d976a54adbfd`
 - VTOL: true
 - MAV_TYPE: 22
 
