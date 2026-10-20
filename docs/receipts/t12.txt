@@ -1,0 +1,36 @@
+# T12 receipt: scripts/t12_attacks.sh <main at 4031c96> <main at a5b7f34>
+# earlier build = main at 4031c96 (before the A-series); current build = main at a5b7f34 (A1 to A8 merged)
+# run 2026-10-20T02:30:11Z on linux x86_64, openssl 3.0.13
+
+T12: the attacks of the A-series, earlier build against current build
+  earlier: sfr 0.1.0 (build unknown)    current: sfr 0.1.0 (build a5b7f3492ed0f8e5176afd17a7386c900c4a08bc)
+
+ID     ATTACK                                 EARLIER    CURRENT    RESULT
+A1a    backdated seal time, lapsed cert       succeeded  failed     as expected
+A1b    seal time in the verifier's future     succeeded  failed     as expected
+A2a    evaluation key, no flag                succeeded  failed     as expected
+A2b    custody relabelled, --require-hw       succeeded  failed     as expected
+A3a    revoked, older CRL given first         succeeded  failed     as expected
+A3b    revoked, no CRL given                  succeeded  failed     as expected
+A3c    revoked, only a stale CRL              succeeded  failed     as expected
+A4a    report missing                         succeeded  failed     as expected
+A4b    forged report, other name              succeeded  failed     as expected
+A4c    U+202E in a file name                  succeeded  failed     as expected
+A5     leaf moved to another section          succeeded  failed     as expected
+A7     code-signing cert as signer            succeeded  failed     as expected
+
+control (honest record, good certificate): earlier verifies (certificate form: old); current verifies (certificate form: new)
+
+why the current build refuses:
+  A1a  Integrity: FAILED: certificate chain: a certificate had expired at the verification time (the verifier's clock, or --at)
+  A1b  Integrity: FAILED: the seal time claimed by the sealer, 2035-12-31T00:00:00Z, is later than the verification time 2026-10-20T02:29:46Z by more than th
+  A2a  Integrity: REFUSED: the record is signed with an evaluation key (declared custody file-evaluation), which is for evaluation only; its signature does v
+  A2b  Integrity: REFUSED: --require-hardware-key needs custody attested by a certificate chain to a trust anchor you give with --trust-anchor; this record d
+  A3a  Integrity: FAILED: certificate chain: a certificate in the chain is revoked by a supplied CRL
+  A3b  Integrity: FAILED: certificate chain: no CRL was given for the issuer(s) CN=t12 inter; CN=t12 root of the certificates in the chain, so a revoked cert
+  A3c  Integrity: FAILED: certificate chain: the current CRL of CN=t12 inter (number 1) is out of date: its nextUpdate 2025-07-01T00:00:00Z is not after the 
+  A4a  Integrity: FAILED: report: no report found beside the record: expected /tmp/tmp.x4uPyLQnVo/current/a4a/custom_detection.sfr.md. A verified record whos
+  A4b  Integrity: FAILED: report: no report found beside the record: expected /tmp/tmp.x4uPyLQnVo/current/a4b/custom_detection.sfr.md. A verified record whos
+  A4c  no raw U+202E; shown as <U+202E>
+  A5   Merkle root mismatch: a leaf changed after sealing 
+  A7   Integrity: FAILED: certificate chain: the signer certificate is not issued for sealing records: its extended k
