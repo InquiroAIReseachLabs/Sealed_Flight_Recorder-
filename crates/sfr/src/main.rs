@@ -53,7 +53,7 @@ const USAGE: &str = "usage:
   sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> ([--crl <crl>]... | --no-crl-check)
              [--max-crl-age <n>[s|m|h|d]] [--allow-partial-chain])
              [--ulog <flight.ulg>] (--report <name.sfr.md> | --no-report) [--allow-evaluation-key]
-             [--require-hardware-key] [--at <RFC3339> [--allow-past-at]] [--json]
+             [--require-hardware-key] [--require-pass] [--at <RFC3339> [--allow-past-at]] [--json]
   sfr pubkey --key-uri (pkcs11:... | tpm-sealed:<dir>) [--json]
   sfr --version [--json]";
 
@@ -590,6 +590,27 @@ fn table(
     out
 }
 
+/// The Windows device name a file stem stands for, if any: `CON`, `PRN`, `AUX`, `NUL`, `COM1` to
+/// `COM9`, `LPT1` to `LPT9`, in any case, as the whole stem or before its first `.`, with trailing
+/// spaces and dots ignored (Windows strips them). A file of that name cannot be created or copied
+/// on Windows, so a record must not have one wherever it is sealed.
+fn windows_reserved_name(stem: &str) -> Option<String> {
+    let base = stem
+        .split('.')
+        .next()
+        .unwrap_or(stem)
+        .trim_end_matches([' ', '.']);
+    let upper = base.to_ascii_uppercase();
+    let reserved = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper
+                .as_bytes()
+                .get(3)
+                .is_some_and(|b| (b'1'..=b'9').contains(b)));
+    reserved.then(|| base.to_string())
+}
+
 fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Result<i32, Failure> {
     let a = Args::parse(
         args,
@@ -695,18 +716,39 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         || "record".to_string(),
         |s| s.to_string_lossy().into_owned(),
     );
+    if let Some(name) = windows_reserved_name(&stem) {
+        return Err(fail(
+            exit_code::USAGE,
+            format!(
+                "log {log}: the record would be named {stem}.sfr, and `{name}` is a device name on Windows, where the record and its report could not be copied; rename the log"
+            ),
+        ));
+    }
     let out_path = out_dir.join(format!("{stem}.sfr"));
     let report_path = out_dir.join(format!("{stem}.{}", sfr_core::report::REPORT_EXTENSION));
     for path in [&out_path, &report_path] {
-        // symlink_metadata: a symbolic link there, even a dangling one, counts as existing.
-        if !dry_run && path.symlink_metadata().is_ok() {
-            return Err(fail(
-                exit_code::USAGE,
-                format!(
-                    "{} exists; seal never overwrites a record or its report",
-                    path.display()
-                ),
-            ));
+        if dry_run {
+            continue;
+        }
+        // symlink_metadata: a symbolic link there, even a dangling one, counts as existing. Any
+        // error but "not found" (a directory that cannot be read, say) stops here, before any work.
+        match path.symlink_metadata() {
+            Ok(_) => {
+                return Err(fail(
+                    exit_code::USAGE,
+                    format!(
+                        "{} exists; seal never overwrites a record or its report",
+                        path.display()
+                    ),
+                ));
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(fail(
+                    exit_code::USAGE,
+                    format!("cannot check {}: {e}; nothing written", path.display()),
+                ));
+            }
         }
     }
 
@@ -991,9 +1033,10 @@ fn chain_trust_line(ok: &certs::ChainOk) -> String {
         );
     }
     let mut t = format!(
-        "certificate chain to the trust anchor {} at the verification time; {} CRL(s) checked",
+        "certificate chain to the trust anchor {} at the verification time; {} CRL(s) checked, each with thisUpdate at most {} s before the verification time (--max-crl-age)",
         ok.anchor,
-        ok.crls.len()
+        ok.crls.len(),
+        ok.max_crl_age
     );
     if ok.partial {
         t.push_str(PARTIAL_CHAIN_NOTE);
@@ -1037,10 +1080,12 @@ fn verify_cmd(
             "--no-crl-check",
             "--no-report",
             "--json",
+            "--require-pass",
         ],
     )?;
     let record_path = a.one_positional("record")?.to_string();
     let json_out = a.flag("--json");
+    let require_pass = a.flag("--require-pass");
     let no_report = a.flag("--no-report");
     if no_report && a.value("--report").is_some() {
         return Err(usage(
@@ -1122,6 +1167,11 @@ fn verify_cmd(
             ))
         }
         (None, Some(anchor_path)) => {
+            if no_crl_check && a.value("--max-crl-age").is_some() {
+                return Err(usage(
+                    "--max-crl-age applies to the CRLs checked, and --no-crl-check checks none: give one or the other",
+                ));
+            }
             if no_crl_check && !crl_paths.is_empty() {
                 return Err(usage(
                     "--no-crl-check and --crl contradict each other: give CRLs to check revocation, or --no-crl-check to skip it",
@@ -1137,12 +1187,17 @@ fn verify_cmd(
             }
             let anchors = certs::read_certificates(anchor_path, "trust anchor")
                 .map_err(|e| fail(exit_code::USAGE, e))?;
+            for der in &anchors {
+                certs::check_anchor_der(der).map_err(|e| {
+                    fail(exit_code::USAGE, format!("trust anchor {anchor_path}: {e}"))
+                })?;
+            }
             // Each CRL is read as it is loaded, so a refusal names its file.
             let crls = crl_paths
                 .iter()
                 .map(|p| {
                     let der = certs::read_crl(p)?;
-                    certs::parse_crl(&der).map_err(|e| format!("CRL {p}: {e}"))?;
+                    certs::check_crl_der(&der).map_err(|e| format!("CRL {p}: {e}"))?;
                     Ok(der)
                 })
                 .collect::<Result<Vec<_>, String>>()
@@ -1269,7 +1324,13 @@ fn verify_cmd(
                     Ok((v, Some(ok)))
                 }
                 Err(e) => Err(VerifyError::Mismatch(Mismatch {
-                    first: format!("certificate chain: {e}"),
+                    // A finding about the anchor names the file it came from.
+                    first: match a.value("--trust-anchor") {
+                        Some(path) if e.starts_with("the trust anchor ") => {
+                            format!("certificate chain: {e} (from {path})")
+                        }
+                        _ => format!("certificate chain: {e}"),
+                    },
                     also: Vec::new(),
                     custody: Some(v.custody),
                 })),
@@ -1341,6 +1402,20 @@ fn verify_cmd(
                 None => TRUST_PUBKEY.to_string(),
                 Some(ok) => chain_trust_line(ok),
             };
+            // An age limit longer than a CRL's own window (thisUpdate to nextUpdate) is looser
+            // than its issuer: nextUpdate is the limit that binds for that CRL.
+            if let Some(ok) = &chain {
+                for c in ok.crls.iter().filter(|c| ok.max_crl_age > c.window) {
+                    let _ = writeln!(
+                        io::stderr().lock(),
+                        "{}",
+                        terminal_safe(&format!(
+                            "sfr: warning: --max-crl-age {} s is longer than the validity window of the CRL of {} ({} s, thisUpdate to nextUpdate): for that CRL the issuer's nextUpdate is the stricter limit",
+                            ok.max_crl_age, c.issuer, c.window
+                        ))
+                    );
+                }
+            }
             let attestation = attestation_of(chain.as_ref());
             let text = if json_out {
                 json::pretty(
@@ -1473,7 +1548,27 @@ fn verify_cmd(
                 }
                 t
             };
+            // Default verify checks integrity, not the verdict; --require-pass checks both.
+            let text = if require_pass && !json_out {
+                let verdict_ok = matches!(v.status.as_str(), "PASS" | "WARN");
+                format!(
+                    "{text}verdict   {}\n",
+                    if verdict_ok {
+                        format!("{} (--require-pass: PASS or WARN required)", v.status)
+                    } else {
+                        format!(
+                            "{} (--require-pass: PASS or WARN required, so this exits 1)",
+                            v.status
+                        )
+                    }
+                )
+            } else {
+                text
+            };
             write_out(stdout, &text)?;
+            if require_pass && !matches!(v.status.as_str(), "PASS" | "WARN") {
+                return Ok(exit_code::RULE_FAIL);
+            }
             Ok(exit_code::OK)
         }
         Err(VerifyError::Mismatch(m)) => {

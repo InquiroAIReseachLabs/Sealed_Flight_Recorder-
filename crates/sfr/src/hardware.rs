@@ -164,10 +164,42 @@ impl Signer for Pkcs11Key {
 /// Debian, Ubuntu and Fedora install them in.
 pub const DEFAULT_TPM2_TOOLS_DIR: &str = "/usr/bin";
 
+/// Whether `path` and every directory above it are owned by root and writable by no one else, so
+/// only root can change what runs from there. A directory with the sticky bit set (such as
+/// `/tmp`) may be writable by others above the tools, since others cannot rename or remove root's
+/// entries in it. `Err` names the first path that fails.
+#[cfg(unix)]
+fn root_owned_and_closed(path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let mut first = true;
+    for p in path.ancestors() {
+        let m = std::fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        if m.uid() != 0 {
+            return Err(format!(
+                "{} is owned by uid {}, not root",
+                p.display(),
+                m.uid()
+            ));
+        }
+        let open = m.mode() & 0o022 != 0;
+        let sticky = m.is_dir() && m.mode() & 0o1000 != 0;
+        if open && (first || !sticky) {
+            return Err(format!(
+                "{} is writable by group or others (mode {:04o})",
+                p.display(),
+                m.mode() & 0o7777
+            ));
+        }
+        first = false;
+    }
+    Ok(())
+}
+
 /// The tpm2-tools command `name`, by an absolute path: in `SFR_TPM2_TOOLS_DIR`, which must be an
-/// absolute directory, else in [`DEFAULT_TPM2_TOOLS_DIR`]. Never looked up on `PATH`: whatever
-/// runs here sees the seed. The commands find the TPM through their own configuration
-/// (`TPM2TOOLS_TCTI`, else `/dev/tpmrm0`).
+/// absolute directory that only root can change (it, every directory above it, and the command
+/// owned by root and writable by no one else), else in [`DEFAULT_TPM2_TOOLS_DIR`]. Never looked
+/// up on `PATH`: whatever runs here sees the seed. The commands find the TPM through their own
+/// configuration (`TPM2TOOLS_TCTI`, else `/dev/tpmrm0`).
 fn tpm2(name: &str) -> Result<PathBuf, String> {
     let dir = match std::env::var_os("SFR_TPM2_TOOLS_DIR") {
         Some(d) => {
@@ -188,6 +220,18 @@ fn tpm2(name: &str) -> Result<PathBuf, String> {
             "{} does not exist: install tpm2-tools, or set SFR_TPM2_TOOLS_DIR to the absolute directory that holds them (sfr never searches PATH)",
             tool.display()
         ));
+    }
+    // A directory named in the environment is trusted only if only root can change it.
+    if std::env::var_os("SFR_TPM2_TOOLS_DIR").is_some() {
+        #[cfg(unix)]
+        root_owned_and_closed(&tool).map_err(|why| {
+            format!(
+                "SFR_TPM2_TOOLS_DIR {}: {why}; sfr runs tpm2-tools only from a directory only root can change",
+                dir.display()
+            )
+        })?;
+        #[cfg(not(unix))]
+        return Err("SFR_TPM2_TOOLS_DIR is read on Unix systems only".into());
     }
     Ok(tool)
 }

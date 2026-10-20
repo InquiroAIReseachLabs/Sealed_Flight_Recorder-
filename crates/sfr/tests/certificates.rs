@@ -151,9 +151,11 @@ fn verify_anchor_with(record: &Path, anchor: &str, crls: &[&str], more: &[&str])
         record.to_str().unwrap(),
         "--trust-anchor",
         &anchor,
-        "--max-crl-age",
-        TEST_CRL_AGE,
     ];
+    // --max-crl-age applies to CRLs, and --no-crl-check checks none: the two are not given together.
+    if !more.contains(&"--no-crl-check") {
+        args.extend(["--max-crl-age", TEST_CRL_AGE]);
+    }
     for c in &crls {
         args.extend(["--crl", c.as_str()]);
     }
@@ -185,7 +187,7 @@ fn a_chain_to_the_trust_anchor_verifies_and_names_the_anchor() {
         assert!(out.contains("Integrity: VERIFIED (record)"), "{out}");
         assert!(
             out.contains(&format!(
-                "trust     certificate chain to the trust anchor {anchor} at the verification time; 2 CRL(s) checked\n"
+                "trust     certificate chain to the trust anchor {anchor} at the verification time; 2 CRL(s) checked, each with thisUpdate at most 630720000 s before the verification time (--max-crl-age)\n"
             )),
             "{out}"
         );
@@ -588,7 +590,7 @@ fn the_order_of_crl_arguments_never_decides_whether_a_revoked_signer_verifies() 
         assert_eq!(v.status.code(), Some(0), "{crls:?}: {}", text(&v));
         let out = stdout(&v);
         assert!(
-            out.contains("2 CRL(s) checked\n")
+            out.contains("2 CRL(s) checked, each with thisUpdate at most 630720000 s before the verification time (--max-crl-age)\n")
                 && out.contains(
                     "crl       CN=sfr test inter: CRL number 1, thisUpdate 2026-06-01T00:00:00Z"
                 ),
@@ -744,7 +746,7 @@ fn a_crl_of_another_issuer_never_displaces_the_issuers_own() {
     );
     assert_eq!(v.status.code(), Some(0), "{}", text(&v));
     assert!(!stdout(&v).contains("other_root"), "{}", text(&v));
-    assert!(stdout(&v).contains("2 CRL(s) checked\n"), "{}", text(&v));
+    assert!(stdout(&v).contains("2 CRL(s) checked, each with thisUpdate at most 630720000 s before the verification time (--max-crl-age)\n"), "{}", text(&v));
 }
 
 #[test]
@@ -1242,4 +1244,107 @@ fn an_expired_non_ca_non_signing_or_too_short_trust_anchor_is_refused() {
         "{}",
         text(&o)
     );
+}
+
+/// `--max-crl-age` is printed on the trust line as the value in effect; one longer than a used
+/// CRL's own window (thisUpdate to nextUpdate) is warned about; and it is refused together with
+/// `--no-crl-check`, which checks no CRL.
+#[test]
+fn max_crl_age_is_printed_warned_about_and_refused_without_crl_checks() {
+    let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    // The test CRLs run from 2026-06-01 to 2046-01-01: a window of 618,105,600 s. 7300 days is
+    // longer, so both CRLs are warned about.
+    let v = verify_anchor(&record, "root.pem", &BOTH_CRLS);
+    assert_eq!(v.status.code(), Some(0), "{}", text(&v));
+    assert!(
+        stdout(&v).contains(
+            "each with thisUpdate at most 630720000 s before the verification time (--max-crl-age)"
+        ),
+        "{}",
+        text(&v)
+    );
+    let err = String::from_utf8_lossy(&v.stderr).into_owned();
+    for issuer in ["CN=sfr test root", "CN=sfr test inter"] {
+        assert!(
+            err.contains(&format!(
+                "sfr: warning: --max-crl-age 630720000 s is longer than the validity window of the CRL of {issuer} (618105600 s, thisUpdate to nextUpdate)"
+            )),
+            "{err}"
+        );
+    }
+    // Within the window: no warning.
+    let anchor = pki("root.pem");
+    let (root_crl, inter_crl) = (pki("root.crl"), pki("inter.crl"));
+    let mut args = vec![
+        "verify",
+        "--allow-evaluation-key",
+        record.to_str().unwrap(),
+        "--trust-anchor",
+        &anchor,
+        "--crl",
+        &root_crl,
+        "--crl",
+        &inter_crl,
+        "--max-crl-age",
+        "7000d",
+    ];
+    let v = sfr(&args);
+    assert_eq!(v.status.code(), Some(0), "{}", text(&v));
+    assert!(
+        !text(&v).contains("is longer than the validity window"),
+        "{}",
+        text(&v)
+    );
+    assert!(stdout(&v).contains("at most 604800000 s"), "{}", text(&v));
+    // Together with --no-crl-check: refused, exit 4.
+    args.truncate(5);
+    args.extend(["--no-crl-check", "--max-crl-age", "7d"]);
+    let v = sfr(&args);
+    assert_eq!(v.status.code(), Some(4), "{}", text(&v));
+    assert!(
+        text(&v)
+            .contains("--max-crl-age applies to the CRLs checked, and --no-crl-check checks none"),
+        "{}",
+        text(&v)
+    );
+}
+
+/// A trust anchor or CRL file that webpki cannot read is refused when it is loaded, in a sentence
+/// that names the file, never a library's error name.
+#[test]
+fn an_unreadable_anchor_or_crl_file_is_refused_in_words_naming_the_file() {
+    let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let dir = scratch();
+    // A PEM block whose DER is a SEQUENCE holding one INTEGER: not a certificate.
+    let bad = dir.join("bad_anchor.pem");
+    std::fs::write(
+        &bad,
+        "-----BEGIN CERTIFICATE-----\nMAMCAQA=\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
+    let (root_crl, inter_crl) = (pki("root.crl"), pki("inter.crl"));
+    let v = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        record.to_str().unwrap(),
+        "--trust-anchor",
+        bad.to_str().unwrap(),
+        "--crl",
+        &root_crl,
+        "--crl",
+        &inter_crl,
+    ]);
+    assert_eq!(v.status.code(), Some(4), "{}", text(&v));
+    assert!(
+        text(&v).contains(&format!(
+            "trust anchor {}: the DER encoding is malformed",
+            bad.display()
+        )),
+        "{}",
+        text(&v)
+    );
+    assert!(!text(&v).contains("BadDer"), "{}", text(&v));
+    std::fs::remove_dir_all(dir).unwrap();
 }

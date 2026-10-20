@@ -950,22 +950,27 @@ fn r4(f: &FlightLog) -> RuleResult {
             detail,
         );
     }
-    let mut found = format!("true in flight {failsafes} time(s)");
+    // Only what happened, so no part of the line says "0" beside another that failed.
+    let mut parts = Vec::new();
+    if failsafes > 0 {
+        parts.push(format!("true in flight {failsafes} time(s)"));
+    }
     if quadchutes > 0 {
-        found.push_str(&format!(", quadchute {quadchutes} time(s)"));
+        parts.push(format!("quadchute {quadchutes} time(s)"));
     }
     if !required.is_empty() {
-        found.push_str(&format!(
-            ", required failsafe_flags {} true in flight",
+        parts.push(format!(
+            "required failsafe_flags {} true in flight",
             required.join(", ")
         ));
     }
     if !hazard_names.is_empty() {
-        found.push_str(&format!(
-            ", hazard failsafe_flags {} true for the whole flight",
+        parts.push(format!(
+            "hazard failsafe_flags {} true for the whole flight",
             hazard_names.join(", ")
         ));
     }
+    let mut found = parts.join(", ");
     found.push_str(&warning);
     RuleResult::new("R4", NAME, Status::Fail, expected, found, detail)
 }
@@ -1758,7 +1763,7 @@ mod tests {
         };
         let r = r4(&with_flags(flight.clone()));
         assert_eq!(r.status, Status::Fail);
-        assert_eq!(r.found, "true in flight 0 time(s), quadchute 1 time(s)");
+        assert_eq!(r.found, "quadchute 1 time(s)");
         assert_eq!(
             r.detail,
             [
@@ -1888,7 +1893,7 @@ mod tests {
         };
         let r = r4(&with_flags(flight.clone()));
         assert_eq!(r.status, Status::Fail);
-        assert_eq!(r.found, "true in flight 0 time(s), quadchute 1 time(s)");
+        assert_eq!(r.found, "quadchute 1 time(s)");
     }
 
     #[test]

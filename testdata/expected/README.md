@@ -17,14 +17,16 @@ output to match byte for byte, with the exit code listed there.
 
 ## How the files were reviewed
 
-`oracle/<name>.oracle.json` comes from `scripts/testdata/oracle.py`, an independent implementation of
+`oracle/<name>.oracle.json` comes from `scripts/testdata/oracle.py`, a second implementation of
 SPEC B1.5, B1.6 and B1.7 written on pyulog, with its own ULog record reader for the sealed topic
-digests of `docs/RECORD_FORMAT.md`. It reads the same rules file `<rules>` as the seal above. It
+digests of `docs/RECORD_FORMAT.md`. It is independent of `sfr` for parsing: a different parser
+reads every byte. It is not independent for the rule semantics: it follows the same documents,
+and when a rule changes it is changed with `sfr` by the same maintainers, so a rule that is wrong
+in those documents is wrong in both. It reads the same rules file `<rules>` as the seal above. It
 shares no code with `sfr` and was written without reading `crates/`. Its scope is logs pyulog
-reads as `sfr` does. pyulog ignores a format record in the data section and reads later
-subscriptions with the earlier format, where `sfr` uses the new one; the oracle says so on stderr
-when a log has such a record, and also when pyulog reports file corruption. No golden log has
-either.
+reads as `sfr` does. A log with a format record after the definitions section, a timestamp that
+goes back, or a topic instance subscribed again with another layout is refused by both; the
+oracle says on stderr when pyulog reports file corruption. No golden log has any of these.
 `scripts/testdata/compare_oracle.py` compares, for each log:
 
 - the configuration (every parameter and its typed value) and `config.watched_parameters` (the

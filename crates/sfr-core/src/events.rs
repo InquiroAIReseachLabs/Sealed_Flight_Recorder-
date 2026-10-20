@@ -308,7 +308,12 @@ pub fn flight_armed_intervals(flight: &FlightLog) -> Vec<ArmedInterval> {
     out
 }
 
-/// `arm_disarm_reason_t` from PX4 `src/lib/events/enums.json`.
+/// `arm_disarm_reason_t` from PX4 `src/lib/events/enums.json`, the values Commander writes to
+/// `vehicle_status.latest_arming_reason` and `latest_disarming_reason` (`(uint8_t)calling_reason`
+/// in `ArmStateMachine.cpp` at v1.14, `Commander.cpp` from v1.15). The `ARM_DISARM_REASON_*`
+/// constants of `VehicleStatus.msg` differ from 6 on (6 SAFETY_BUTTON, 7 AUTO_DISARM_LAND, ...)
+/// at every tag v1.14.0 to v1.17.0 and are not what is logged: the golden landings record 6, the
+/// automatic disarm after landing. Value 1 is `rc_stick` before v1.16 and `stick_gesture` after.
 pub fn reason_name(reason: u8, fw: &Firmware) -> Option<&'static str> {
     let series = supported_series(fw)?;
     Some(match reason {
