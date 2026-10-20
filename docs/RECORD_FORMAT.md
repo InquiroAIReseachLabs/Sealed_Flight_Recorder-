@@ -310,7 +310,7 @@ The payload is built from the recorded root and section counts; step 4 shows the
 rec=examples/reports/vtol_transition.sfr
 merkle=$(grep -o '"merkle":{"algorithm":"sha256-rfc6962","leaf_count":[0-9]*,"root":"[0-9a-f]\{64\}","sections":{[^}]*}}' "$rec")
 root=$(printf '%s' "$merkle" | sed 's/.*"root":"\([0-9a-f]*\)".*/\1/')
-count() { printf '%s' "$merkle" | sed "s/.*\"$1\":\([0-9]*\).*/\1/"; }
+count() { printf '%s' "$merkle" | sed "s/.*\"$1\":\([0-9][0-9]*\).*/\1/"; }
 sig=$(grep -o '"signature":{"algorithm":"ed25519","value":"[0-9a-f]\{128\}"}' "$rec" | sed 's/.*"value":"\([0-9a-f]*\)".*/\1/')
 unhex() { printf '%b' "$(printf '%s' "$1" | sed 's/../\\x&/g')"; }
 mkdir -p try
