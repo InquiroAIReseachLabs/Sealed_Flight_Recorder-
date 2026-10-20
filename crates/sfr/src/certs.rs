@@ -8,8 +8,8 @@
 //! supplied trust anchor; every certificate is valid at the verification time, which is the
 //! verifier's clock or the time given with `--at` and never the record's seal time (the sealer's
 //! own claim: a key holder could set it inside a certificate's window); the signer certificate
-//! carries extended key usage code signing; and no certificate in the path is listed in a
-//! supplied CRL. A listed serial counts as revoked whatever its revocation date, for the same
+//! carries the sfr record-signing extended key usage ([`SFR_RECORD_SIGNING`]) and the
+//! keyUsage digitalSignature; and no certificate in the path is listed in a supplied CRL. A listed serial counts as revoked whatever its revocation date, for the same
 //! reason. There is no online check (no OCSP, no CRL download), by design.
 
 use rustls_pki_types::{
@@ -27,8 +27,32 @@ use webpki::{
     RevocationCheckDepth, RevocationOptionsBuilder, UnknownStatusPolicy, anchor_from_trusted_cert,
 };
 
+/// The extended key usage of a certificate for sealing records: the object identifier
+/// `2.25.182460915354635260549596502533646383540`, as DER contents. It is in the arc of
+/// UUID-derived identifiers (ITU-T X.667: 2.25 and the UUID as an integer), made from the version 5
+/// UUID `8944b1ad-aa71-53df-ab6c-2d62d890f9b4` of the name `urn:sfr:eku:record-signing:1` in the
+/// URL namespace, so nobody has to register it and no public usage (code signing, TLS) shares it.
+/// A certificate issued for another purpose is not a record signer, and one issued for records is
+/// not accepted for those purposes by the programs that check the usage.
+pub const SFR_RECORD_SIGNING: &[u8] = &[
+    0x69, 0x82, 0x92, 0xc4, 0xd8, 0xeb, 0xb5, 0xa7, 0x8a, 0xcf, 0xbf, 0xab, 0xb6, 0x8b, 0xac, 0xad,
+    0xc4, 0xc3, 0xf3, 0x34,
+];
+
+/// The text of [`SFR_RECORD_SIGNING`].
+pub const SFR_RECORD_SIGNING_TEXT: &str = "2.25.182460915354635260549596502533646383540";
+
 /// id-kp-codeSigning, 1.3.6.1.5.5.7.3.3 (RFC 5280 section 4.2.1.12), as DER contents.
 const CODE_SIGNING: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x03];
+
+/// id-kp-serverAuth, 1.3.6.1.5.5.7.3.1, as DER contents.
+const SERVER_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
+
+/// anyExtendedKeyUsage, 2.5.29.37.0, as DER contents.
+const ANY_EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25, 0x00];
+
+/// id-ce-keyUsage, 2.5.29.15, as DER contents.
+const KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
 
 /// id-ce-extKeyUsage, 2.5.29.37, as DER contents.
 const EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25];
@@ -54,29 +78,118 @@ fn element(der: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     Some((tag, contents, after))
 }
 
-/// Whether a certificate (already parsed by webpki) carries the extension with this OID.
-fn has_extension(cert: &[u8], oid: &[u8]) -> bool {
-    let found = || -> Option<bool> {
-        let (_, certificate, _) = element(cert)?;
-        let (_, mut tbs, _) = element(certificate)?;
-        // TBSCertificate fields; the extensions are the one tagged [3].
-        while let Some((tag, contents, rest)) = element(tbs) {
-            if tag == 0xa3 {
-                let (_, mut exts, _) = element(contents)?;
-                while let Some((_, ext, rest)) = element(exts) {
-                    let (_, id, _) = element(ext)?;
-                    if id == oid {
-                        return Some(true);
-                    }
-                    exts = rest;
+/// The value of the extension with this OID in a certificate (already parsed by webpki): the
+/// contents of its extnValue OCTET STRING. `None` when the certificate has no such extension.
+fn extension_value<'a>(cert: &'a [u8], oid: &[u8]) -> Option<&'a [u8]> {
+    let (_, certificate, _) = element(cert)?;
+    let (_, mut tbs, _) = element(certificate)?;
+    // TBSCertificate fields; the extensions are the one tagged [3].
+    while let Some((tag, contents, rest)) = element(tbs) {
+        if tag == 0xa3 {
+            let (_, mut exts, _) = element(contents)?;
+            while let Some((_, ext, rest)) = element(exts) {
+                let (_, id, after_id) = element(ext)?;
+                if id == oid {
+                    // [critical BOOLEAN DEFAULT FALSE] extnValue OCTET STRING.
+                    let (tag, first, after) = element(after_id)?;
+                    let (tag, value) = if tag == 0x01 {
+                        let (tag, value, _) = element(after)?;
+                        (tag, value)
+                    } else {
+                        (tag, first)
+                    };
+                    return (tag == 0x04).then_some(value);
                 }
-                return Some(false);
+                exts = rest;
             }
-            tbs = rest;
+            return None;
         }
-        Some(false)
+        tbs = rest;
+    }
+    None
+}
+
+/// The object identifiers (DER contents) in a certificate's extended key usage extension, or
+/// `None` when it has none or it is malformed.
+fn extended_key_usages(cert: &[u8]) -> Option<Vec<&[u8]>> {
+    let value = extension_value(cert, EXTENDED_KEY_USAGE)?;
+    let (tag, mut oids, _) = element(value)?;
+    if tag != 0x30 {
+        return None;
+    }
+    let mut out = Vec::new();
+    while !oids.is_empty() {
+        let (tag, oid, rest) = element(oids)?;
+        if tag != 0x06 {
+            return None;
+        }
+        out.push(oid);
+        oids = rest;
+    }
+    Some(out)
+}
+
+/// Whether a certificate's keyUsage extension is present and sets digitalSignature (bit 0).
+/// `Err` says what is wrong when it is absent, malformed, or lacks the bit.
+fn check_digital_signature(cert: &[u8]) -> Result<(), String> {
+    let Some(value) = extension_value(cert, KEY_USAGE) else {
+        return Err(
+            "the signer certificate has no keyUsage extension; it must carry digitalSignature"
+                .into(),
+        );
     };
-    found().unwrap_or(false)
+    // BIT STRING: the number of unused bits, then the bits, bit 0 first.
+    let bits = element(value)
+        .filter(|(tag, _, _)| *tag == 0x03)
+        .and_then(|(_, bits, _)| bits.get(1).copied());
+    match bits {
+        Some(first) if first & 0x80 != 0 => Ok(()),
+        Some(_) => Err("the signer certificate's keyUsage lacks digitalSignature".into()),
+        None => Err("the signer certificate's keyUsage extension is malformed".into()),
+    }
+}
+
+/// The purposes a signer certificate is issued for, in words, or an error saying why it is not
+/// a record-signing certificate (SPEC B1.3 `verify --trust-anchor`):
+///
+/// - its extended key usage must list [`SFR_RECORD_SIGNING`], so a certificate issued for code
+///   signing or TLS server authentication is not a record signer;
+/// - it must not also list code signing, TLS server authentication or `anyExtendedKeyUsage`, so a
+///   certificate issued for records is not one for those purposes either;
+/// - its keyUsage must be present and set digitalSignature.
+fn check_signer_purpose(cert: &[u8]) -> Result<(), String> {
+    let Some(usages) = extended_key_usages(cert) else {
+        return Err(format!(
+            "the signer certificate has no extended key usage; it must list the sfr record-signing usage {SFR_RECORD_SIGNING_TEXT}"
+        ));
+    };
+    if !usages.contains(&SFR_RECORD_SIGNING) {
+        let listed: Vec<String> = usages
+            .iter()
+            .map(|u| match *u {
+                CODE_SIGNING => "code signing".to_string(),
+                SERVER_AUTH => "TLS server authentication".to_string(),
+                ANY_EXTENDED_KEY_USAGE => "any usage".to_string(),
+                other => oid_text(other),
+            })
+            .collect();
+        return Err(format!(
+            "the signer certificate is not issued for sealing records: its extended key usage lists {} but not the sfr record-signing usage {SFR_RECORD_SIGNING_TEXT}",
+            listed.join(", ")
+        ));
+    }
+    for (oid, what) in [
+        (CODE_SIGNING, "code signing"),
+        (SERVER_AUTH, "TLS server authentication"),
+        (ANY_EXTENDED_KEY_USAGE, "any usage (anyExtendedKeyUsage)"),
+    ] {
+        if usages.contains(&oid) {
+            return Err(format!(
+                "the signer certificate also lists {what}; a key that signs records must not be certified for other purposes"
+            ));
+        }
+    }
+    check_digital_signature(cert)
 }
 
 /// id-ce-cRLNumber, 2.5.29.20, as DER contents.
@@ -460,9 +573,9 @@ fn why(e: &Error) -> String {
                 .into()
         }
         Error::CertRevoked => "a certificate in the chain is revoked by a supplied CRL".into(),
-        Error::RequiredEkuNotFoundContext(_) => {
-            "the signer certificate lacks extended key usage code signing".into()
-        }
+        Error::RequiredEkuNotFoundContext(_) => format!(
+            "a certificate in the chain restricts its extended key usage and does not list the sfr record-signing usage {SFR_RECORD_SIGNING_TEXT}"
+        ),
         Error::CaUsedAsEndEntity => "the signer certificate is a CA certificate".into(),
         Error::EndEntityUsedAsCa => {
             "an intermediate certificate is not a CA certificate (basicConstraints)".into()
@@ -551,9 +664,7 @@ pub fn check_chain(
     let signer_der = CertificateDer::from(signer);
     let ee = EndEntityCert::try_from(&signer_der)
         .map_err(|e| format!("signer certificate: {}", why(&e)))?;
-    if !has_extension(signer, EXTENDED_KEY_USAGE) {
-        return Err("the signer certificate lacks extended key usage code signing".into());
-    }
+    check_signer_purpose(signer)?;
     let anchor_ders: Vec<CertificateDer<'_>> = anchors
         .iter()
         .map(|a| CertificateDer::from(a.as_slice()))
@@ -639,9 +750,10 @@ pub fn check_chain(
             &trust,
             &inter,
             time,
-            // On every certificate of the path: if it lists usages, code signing is one. The
-            // signer certificate must list them (checked above), so it must name code signing.
-            KeyUsage::required_if_present(CODE_SIGNING),
+            // On every certificate of the path: if it lists usages, the record-signing usage is
+            // one, so a CA limited to TLS cannot issue record signers. The signer certificate
+            // must list them (checked above).
+            KeyUsage::required_if_present(SFR_RECORD_SIGNING),
             revocation,
             None,
         )
@@ -715,6 +827,98 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    /// The DER of a certificate in `testdata/pki/`.
+    fn cert(name: &str) -> Vec<u8> {
+        let text = std::fs::read_to_string(format!(
+            "{}/../../testdata/pki/{name}.pem",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        pem_decode_all(&text, "CERTIFICATE").unwrap().remove(0)
+    }
+
+    /// Whether `signer` (issued by `inter`, under `root`) is accepted by webpki for `usage`, at a
+    /// time all of them are valid (2026-10-18): what a program that uses the certificate for a
+    /// purpose other than sealing records would conclude.
+    fn accepted_for(signer: &str, usage: &KeyUsage) -> Result<(), Error> {
+        let (signer, inter, root) = (cert(signer), cert("inter"), cert("root"));
+        let signer_der = CertificateDer::from(signer.as_slice());
+        let ee = EndEntityCert::try_from(&signer_der).unwrap();
+        let root_der = CertificateDer::from(root.as_slice());
+        let trust = [anchor_from_trusted_cert(&root_der).unwrap()];
+        let inter_der = [CertificateDer::from(inter.as_slice())];
+        let time = UnixTime::since_unix_epoch(Duration::from_secs(
+            u64::try_from(parse_seal_time_seconds("2026-10-18T15:00:00Z").unwrap()).unwrap(),
+        ));
+        ee.verify_for_usage(ALGORITHMS, &trust, &inter_der, time, usage, None, None)
+            .map(|_| ())
+    }
+
+    #[test]
+    fn a_record_signing_certificate_is_not_a_certificate_for_other_purposes() {
+        // The signer certificate lists the sfr record-signing usage and nothing else...
+        let signer = cert("signer");
+        assert_eq!(
+            extended_key_usages(&signer).unwrap(),
+            [SFR_RECORD_SIGNING],
+            "only the record-signing usage"
+        );
+        check_signer_purpose(&signer).unwrap();
+        // ... so a program that checks the usage accepts it for records and for nothing else.
+        accepted_for("signer", &KeyUsage::required_if_present(SFR_RECORD_SIGNING)).unwrap();
+        for other in [CODE_SIGNING, SERVER_AUTH] {
+            assert!(
+                matches!(
+                    accepted_for("signer", &KeyUsage::required_if_present(other)),
+                    Err(Error::RequiredEkuNotFoundContext(_))
+                ),
+                "a record-signing certificate was accepted for {}",
+                oid_text(other)
+            );
+        }
+        assert!(matches!(
+            accepted_for("signer", &KeyUsage::server_auth()),
+            Err(Error::RequiredEkuNotFoundContext(_))
+        ));
+    }
+
+    #[test]
+    fn a_certificate_for_another_purpose_is_not_a_record_signer() {
+        // The other direction: the certificates issued for code signing and for TLS server
+        // authentication are good for those purposes (webpki accepts them) and are refused as
+        // record signers, with the reason.
+        accepted_for(
+            "signer_codesign",
+            &KeyUsage::required_if_present(CODE_SIGNING),
+        )
+        .unwrap();
+        accepted_for("signer_server", &KeyUsage::server_auth()).unwrap();
+        for (name, why) in [
+            (
+                "signer_codesign",
+                "lists code signing but not the sfr record-signing usage",
+            ),
+            (
+                "signer_server",
+                "lists TLS server authentication but not the sfr record-signing usage",
+            ),
+            ("signer_both", "also lists code signing"),
+            ("signer_nosig", "keyUsage lacks digitalSignature"),
+            ("signer_nokeyusage", "has no keyUsage extension"),
+        ] {
+            let err = check_signer_purpose(&cert(name)).unwrap_err();
+            assert!(err.contains(why), "{name}: {err}");
+        }
+        for ok in [
+            "signer",
+            "signer_expired",
+            "signer_revoked",
+            "signer_lapsed",
+        ] {
+            check_signer_purpose(&cert(ok)).unwrap();
+        }
     }
 
     #[test]
