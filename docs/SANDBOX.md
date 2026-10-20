@@ -132,7 +132,7 @@ When nothing was written: `{ sealed: false, exitCode: 3 or 4, message, text }`, 
 | `signature` | the signature does not verify | |
 | `status` | the overall status contradicts the results | `sealed`, `found` |
 | `rules_digest` | the embedded rules text does not match its digest | |
-| `custody` | an evaluation key where a hardware key was required | |
+| `custody` | a record that verified but is refused for its custody (text starting `refused:`); the page accepts evaluation keys and has no certificate chain to check, so it never gives this kind | |
 | `record` | the record's form (JSON, schema, fields, order), or any other text | |
 
 The parts are read from the text `sfr-core` writes (`crates/sfr-wasm/src/result.rs`); `crates/sfr/tests/sandbox.rs` and the browser test hold each kind to the text of real changed records and logs, so a change of wording fails CI.

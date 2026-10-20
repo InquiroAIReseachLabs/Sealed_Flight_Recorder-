@@ -53,7 +53,7 @@ for log in "$data"/incoming/*.ulg; do
     mv "$log" "$data/failed/"
     continue
   fi
-  if ! "$sfr" verify "$data/records/$name.sfr" --pubkey "$conf/sfr.pub" --ulog "$log"; then
+  if ! "$sfr" verify "$data/records/$name.sfr" --pubkey "$conf/sfr.pub" --allow-evaluation-key --ulog "$log"; then
     echo "sfr-seal-incoming: $name: the new record does not verify; moved to failed/" >&2
     mv "$log" "$data/failed/"
     continue
@@ -143,7 +143,7 @@ Copy the records from `/var/lib/sfr/records/` off the vehicle with the logs; any
 ```sh doc-test
 mkdir -p try
 check_record() { # check_record <record.sfr> <sfr.pub> <log.ulg>
-  if ! target/release/sfr verify "$1" --pubkey "$2" --ulog "$3" --json > try/verify.json; then
+  if ! target/release/sfr verify "$1" --pubkey "$2" --allow-evaluation-key --ulog "$3" --json > try/verify.json; then
     echo "FAIL: $1 does not verify: $(grep '"first_mismatch"' try/verify.json)"
     return 1
   fi
@@ -173,7 +173,7 @@ In a pipeline script run with `set -e`, the `return 1` stops the job; the `|| ec
 ## Keys
 
 - **Keep the signing key off the vehicle where you can.** A key on a vehicle goes wherever the vehicle goes. If logs reach a ground station soon after landing, sealing there keeps the key off the vehicle at the cost of a longer disarm-to-seal window; sealing on the companion computer shortens the window but puts a key on board. Choose per operation, and use one key per vehicle, so that a lost vehicle costs the records of one key.
-- **Seal operational records with a hardware key.** A key file (`sfr keygen --evaluation-only`) is for evaluation: every record it seals holds custody `file-evaluation` and says EVALUATION KEY, and the file is protected only by its permissions (mode 0600). The two hardware key sources are below. Custody is what the sealer declares; [THREAT_MODEL.md](THREAT_MODEL.md#keys) says what each protects against.
+- **Seal operational records with a hardware key.** A key file (`sfr keygen --evaluation-only`) is for evaluation: every record it seals holds custody `file-evaluation` and says EVALUATION KEY, `sfr verify` refuses such a record (`Integrity: REFUSED`) unless given `--allow-evaluation-key`, and the file is protected only by its permissions (mode 0600). The two hardware key sources are below. Custody is what the sealer declares, and `sfr verify` prints it as unattested unless the signer's certificate chains to your trust anchor; [THREAT_MODEL.md](THREAT_MODEL.md#keys) says what each protects against.
 - **`sfr` does not manage keys beyond `keygen`.** It does not rotate, revoke, back up, escrow or distribute them. Keep a list of which fingerprint belongs to which vehicle and when it was in service; when a key is lost or stolen, stop trusting records with its fingerprint from that time ([THREAT_MODEL.md](THREAT_MODEL.md)).
 - **Give verifiers the public key, or a trust anchor, out of band.** `verify --pubkey` checks a record against the `sfr.pub` it is given; a record re-signed by someone else verifies against their key. Publish each vehicle's public key and fingerprint where your verifiers can check it. With a CA, seal with the vehicle's certificate (`seal --cert vehicle.pem --chain intermediates.pem`) and give verifiers the root and a CRL for every issuer in the chain, root included (`verify --trust-anchor root.pem --crl root.crl --crl ca.crl`; keep them current, because a CRL past its `nextUpdate` fails verification): a key whose certificate you revoke stops verifying from then on, for records sealed before the revocation too.
 - **Use `--seal-time` only for reproducible examples.** Without it, the seal time is the sealing machine's clock, which is still the sealer's claim, not proof: `verify` prints it as claimed, judges certificates at the verifier's own clock (or `--at`), and refuses a seal time in the verifier's future ([THREAT_MODEL.md](THREAT_MODEL.md)).

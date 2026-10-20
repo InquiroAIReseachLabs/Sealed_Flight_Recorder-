@@ -92,7 +92,7 @@ The record holds no sealed topic digests.
 
 - Seal time (claimed by the sealer, not proven): 2026\-10\-18T15\:00\:00Z
 - Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
-- Key custody: file\-evaluation
+- Key custody (declared by the sealer; this report cannot attest it): file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
 - Merkle root: `aa5b77bc94c76c2a287e476db453ed28ef9ff63bf5bea2d91957e0ffaef4601b` (sha256\-rfc6962, 34 leaves)
 - Schema version: 2
@@ -102,7 +102,7 @@ The record holds no sealed topic digests.
 With the public key whose fingerprint is `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
-sfr verify vtol_transition.sfr --pubkey sfr.pub --ulog vtol_transition.ulg
+sfr verify vtol_transition.sfr --pubkey sfr.pub --allow-evaluation-key --ulog vtol_transition.ulg
 ```
 
 Without `--ulog`, `sfr verify` checks the record alone.

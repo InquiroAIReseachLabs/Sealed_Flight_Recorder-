@@ -290,7 +290,15 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
             "{log}: the report is not the record's rendering"
         );
         report_facts::check(&parsed, &String::from_utf8(md).unwrap());
-        let o = sfr(&["verify", &record, "--pubkey", &public, "--ulog", log]);
+        let o = sfr(&[
+            "verify",
+            "--allow-evaluation-key",
+            &record,
+            "--pubkey",
+            &public,
+            "--ulog",
+            log,
+        ]);
         assert_eq!(o.status.code(), Some(0), "{log}: {}", text(&o));
         let t = text(&o);
         assert!(
@@ -299,7 +307,13 @@ fn every_golden_log_seals_byte_identically_twice_and_replays() {
             ),
             "{t}"
         );
-        let o = sfr(&["verify", &record, "--pubkey", &public]);
+        let o = sfr(&[
+            "verify",
+            "--allow-evaluation-key",
+            &record,
+            "--pubkey",
+            &public,
+        ]);
         assert_eq!(o.status.code(), Some(0), "{log}: {}", text(&o));
     }
 }
@@ -327,6 +341,7 @@ fn the_example_reports_render_from_their_records_and_verify() {
         let log = format!("testdata/sitl/v1.17.0/{name}.ulg");
         let o = sfr(&[
             "verify",
+            "--allow-evaluation-key",
             &record,
             "--pubkey",
             "examples/reports/sfr.pub",
@@ -540,14 +555,14 @@ fn a_thousand_seeded_byte_flips_in_a_record_all_fail_verification() {
     let bytes = std::fs::read(&record).unwrap();
     let pk = pubkey(&public);
     let crypto = RustCrypto;
-    assert!(verify(&bytes, None, &crypto, &pk, false).is_ok());
+    assert!(verify(&bytes, None, &crypto, &pk).is_ok());
     let mut rng = Rng(0x5eed_0001);
     for i in 0..1000 {
         let mut t = bytes.clone();
         let at = (rng.next() % t.len() as u64) as usize;
         let x = (rng.next() % 255 + 1) as u8;
         t[at] ^= x;
-        match verify(&t, None, &crypto, &pk, false) {
+        match verify(&t, None, &crypto, &pk) {
             Err(VerifyError::Mismatch(_)) => {}
             other => panic!("flip {i} at byte {at} (xor {x:#04x}) was not detected: {other:?}"),
         }
@@ -571,14 +586,14 @@ fn a_thousand_seeded_byte_flips_in_a_log_all_fail_verification() {
     let ulg = std::fs::read(root().join(log)).unwrap();
     let pk = pubkey(&public);
     let crypto = RustCrypto;
-    assert!(verify(&rec, Some(&mut &ulg[..]), &crypto, &pk, false).is_ok());
+    assert!(verify(&rec, Some(&mut &ulg[..]), &crypto, &pk).is_ok());
     let mut rng = Rng(0x5eed_0002);
     for i in 0..1000 {
         let mut t = ulg.clone();
         let at = (rng.next() % t.len() as u64) as usize;
         let x = (rng.next() % 255 + 1) as u8;
         t[at] ^= x;
-        match verify(&rec, Some(&mut &t[..]), &crypto, &pk, false) {
+        match verify(&rec, Some(&mut &t[..]), &crypto, &pk) {
             Err(VerifyError::Mismatch(_)) => {}
             other => panic!("flip {i} at byte {at} (xor {x:#04x}) was not detected: {other:?}"),
         }
@@ -669,7 +684,7 @@ fn flips_in_sealed_topic_messages(case: SealedCase, rng_seed: u64) {
     let topic = case.0;
     let (rec, ulg, pk) = sealed_topic_record(case);
     let crypto = RustCrypto;
-    assert!(verify(&rec, Some(&mut &ulg[..]), &crypto, &pk, false).is_ok());
+    assert!(verify(&rec, Some(&mut &ulg[..]), &crypto, &pk).is_ok());
     let spans: Vec<(usize, usize, u8)> = data_records(&ulg)
         .into_iter()
         .filter(|(_, _, t, _)| t == topic)
@@ -684,7 +699,7 @@ fn flips_in_sealed_topic_messages(case: SealedCase, rng_seed: u64) {
         let mut t = ulg.clone();
         t[at] ^= x;
         let named = format!("sealed topic {topic} instance {multi_id} ");
-        match verify(&rec, Some(&mut &t[..]), &crypto, &pk, false) {
+        match verify(&rec, Some(&mut &t[..]), &crypto, &pk) {
             Err(VerifyError::Mismatch(m)) => {
                 let all: Vec<&String> = std::iter::once(&m.first).chain(&m.also).collect();
                 assert!(
@@ -744,7 +759,7 @@ fn flips_in_a_sealed_topic_digest(case: SealedCase, rng_seed: u64) {
         let x = (rng.next() % 255 + 1) as u8;
         let mut t = rec.clone();
         t[at] ^= x;
-        match verify(&t, None, &crypto, &pk, false) {
+        match verify(&t, None, &crypto, &pk) {
             Err(VerifyError::Mismatch(_)) => {}
             other => {
                 panic!(
@@ -753,8 +768,7 @@ fn flips_in_a_sealed_topic_digest(case: SealedCase, rng_seed: u64) {
             }
         }
         // A flip that leaves the record readable is named by deep verify.
-        if let Err(VerifyError::Mismatch(m)) = verify(&t, Some(&mut &ulg[..]), &crypto, &pk, false)
-        {
+        if let Err(VerifyError::Mismatch(m)) = verify(&t, Some(&mut &ulg[..]), &crypto, &pk) {
             let readable = sfr_core::json::parse(&t).is_ok() && !m.first.contains("canonical");
             if readable && !m.first.starts_with("field ") && !m.first.starts_with("unknown field") {
                 let entry = entries.iter().rev().find(|(from, _)| *from <= at);
@@ -817,7 +831,7 @@ fn the_sfr_verify_fuzz_seeds_verify_and_are_listed_in_the_target() {
         let name = p.file_name().unwrap().to_string_lossy().into_owned();
         let rec = std::fs::read(&p).unwrap();
         assert!(
-            verify(&rec, None, &RustCrypto, &pk, false).is_ok(),
+            verify(&rec, None, &RustCrypto, &pk).is_ok(),
             "fuzz seed {name} no longer verifies; re-seal the seeds (fuzz/README.md)"
         );
         assert!(
@@ -856,6 +870,7 @@ fn mismatches_are_named_precisely() {
     std::fs::write(&bad, &flipped).unwrap();
     let o = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         bad.to_str().unwrap(),
         "--pubkey",
         &public,
@@ -870,7 +885,13 @@ fn mismatches_are_named_precisely() {
         ),
         "{t}"
     );
-    let o = sfr(&["verify", bad.to_str().unwrap(), "--pubkey", &public]);
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        bad.to_str().unwrap(),
+        "--pubkey",
+        &public,
+    ]);
     assert_eq!(o.status.code(), Some(1));
     // The record declares an evaluation key: the warning comes first even when it fails.
     assert!(
@@ -882,6 +903,7 @@ fn mismatches_are_named_precisely() {
     );
     let j = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         bad.to_str().unwrap(),
         "--pubkey",
         &public,
@@ -907,6 +929,7 @@ fn mismatches_are_named_precisely() {
     std::fs::write(&edited, &ulg).unwrap();
     let o = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         &record,
         "--pubkey",
         &public,
@@ -932,6 +955,7 @@ fn mismatches_are_named_precisely() {
     std::fs::write(&edited, &ulg).unwrap();
     let o = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         &record,
         "--pubkey",
         &public,
@@ -962,7 +986,13 @@ fn unknown_schema_version_wrong_key_and_evaluation_custody_are_refused() {
     let v3 = rec.replacen("\"schema_version\":2", "\"schema_version\":3", 1);
     let bad = dir.join("v3.sfr");
     std::fs::write(&bad, v3).unwrap();
-    let o = sfr(&["verify", bad.to_str().unwrap(), "--pubkey", &public]);
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        bad.to_str().unwrap(),
+        "--pubkey",
+        &public,
+    ]);
     assert_eq!(o.status.code(), Some(1));
     assert!(
         text(&o).contains("unknown schema_version 3; this verifier knows schema 1 and 2"),
@@ -973,7 +1003,13 @@ fn unknown_schema_version_wrong_key_and_evaluation_custody_are_refused() {
     // its signature (over the schema version) no longer verifies either.
     let v1 = rec.replacen("\"schema_version\":2", "\"schema_version\":1", 1);
     std::fs::write(&bad, v1).unwrap();
-    let o = sfr(&["verify", bad.to_str().unwrap(), "--pubkey", &public]);
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        bad.to_str().unwrap(),
+        "--pubkey",
+        &public,
+    ]);
     assert_eq!(o.status.code(), Some(1));
     assert!(
         text(&o).contains("`seal.allow_untested_version` is not a schema 1 field"),
@@ -981,7 +1017,13 @@ fn unknown_schema_version_wrong_key_and_evaluation_custody_are_refused() {
         text(&o)
     );
 
-    let o = sfr(&["verify", &record, "--pubkey", &other_pub]);
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        &record,
+        "--pubkey",
+        &other_pub,
+    ]);
     assert_eq!(o.status.code(), Some(1));
     assert!(
         text(&o).contains("not by the given public key"),
@@ -991,16 +1033,24 @@ fn unknown_schema_version_wrong_key_and_evaluation_custody_are_refused() {
 
     let o = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         &record,
         "--pubkey",
         &public,
         "--require-hardware-key",
     ]);
     assert_eq!(o.status.code(), Some(1));
-    assert!(text(&o).contains("evaluation key"), "{}", text(&o));
+    assert!(
+        text(&o).contains(
+            "Integrity: REFUSED: --require-hardware-key does not accept a record that declares custody file-evaluation"
+        ),
+        "{}",
+        text(&o)
+    );
 
     let o = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         &record,
         "--pubkey",
         &public,
@@ -1066,7 +1116,7 @@ fn seal_key_sources_and_seal_time_are_checked() {
 fn integrity_and_flight_rules_are_reported_apart() {
     let record = "examples/reports/gz_x500_vision_hover.sfr";
     let key = "examples/reports/sfr.pub";
-    let o = sfr(&["verify", record, "--pubkey", key]);
+    let o = sfr(&["verify", "--allow-evaluation-key", record, "--pubkey", key]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
     let out = String::from_utf8_lossy(&o.stdout).to_string();
     assert!(
@@ -1076,7 +1126,14 @@ fn integrity_and_flight_rules_are_reported_apart() {
         "{out}"
     );
     assert!(!out.contains("\nstatus "), "{out}");
-    let o = sfr(&["verify", record, "--pubkey", key, "--json"]);
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        record,
+        "--pubkey",
+        key,
+        "--json",
+    ]);
     let json = String::from_utf8_lossy(&o.stdout).to_string();
     for part in [
         "\"integrity\": \"VERIFIED\"",
@@ -1088,6 +1145,7 @@ fn integrity_and_flight_rules_are_reported_apart() {
     // A record whose rules all pass.
     let o = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         "examples/reports/vtol_transition.sfr",
         "--pubkey",
         key,
@@ -1103,7 +1161,13 @@ fn integrity_and_flight_rules_are_reported_apart() {
     let sealed = std::fs::read_to_string(root().join(record)).unwrap();
     let bad = dir.join("changed.sfr");
     std::fs::write(&bad, sealed.replacen("\"command\":", "\"command\":1", 1)).unwrap();
-    let o = sfr(&["verify", bad.to_str().unwrap(), "--pubkey", key]);
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        bad.to_str().unwrap(),
+        "--pubkey",
+        key,
+    ]);
     assert_eq!(o.status.code(), Some(1));
     let out = String::from_utf8_lossy(&o.stdout).to_string();
     assert!(out.contains("\nIntegrity: FAILED: "), "{out}");
@@ -1113,7 +1177,7 @@ fn integrity_and_flight_rules_are_reported_apart() {
     );
     // The key and custody it names are shown, marked as unproven claims.
     assert!(
-        out.ends_with("(declared by the record, not proven)\n"),
+        out.ends_with("custody   unattested (declared file-evaluation)\n"),
         "{out}"
     );
     std::fs::remove_dir_all(dir).unwrap();
@@ -1132,7 +1196,7 @@ fn verify_without_a_trusted_key_says_the_signer_is_not_checked() {
         "Integrity: NOT CHECKED (no trusted key given)\n",
         "Flight rules: UNKNOWN (the record's integrity was not checked)\n",
         "key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51 (named by the record, not proven)\n",
-        "custody   file-evaluation (declared by the record, not proven)\n",
+        "custody   unattested (declared file-evaluation)\n",
         "through a channel you trust",
     ] {
         assert!(out.contains(part), "{part} in {out}");
@@ -1159,7 +1223,13 @@ fn an_edited_report_fails_verification_and_names_the_line() {
     let report = format!("{record}.md");
     let original = std::fs::read_to_string(&report).unwrap();
     // The sibling report matches.
-    let o = sfr(&["verify", &record, "--pubkey", &public]);
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        &record,
+        "--pubkey",
+        &public,
+    ]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
     assert!(
         String::from_utf8_lossy(&o.stdout)
@@ -1207,7 +1277,13 @@ fn an_edited_report_fails_verification_and_names_the_line() {
     for (what, edited, line) in edits {
         assert_ne!(edited, original, "{what}: the edit changed nothing");
         std::fs::write(&report, &edited).unwrap();
-        let o = sfr(&["verify", &record, "--pubkey", &public]);
+        let o = sfr(&[
+            "verify",
+            "--allow-evaluation-key",
+            &record,
+            "--pubkey",
+            &public,
+        ]);
         assert_eq!(o.status.code(), Some(1), "{what}: {}", text(&o));
         let shown = String::from_utf8_lossy(&o.stdout).to_string();
         assert!(
@@ -1231,6 +1307,7 @@ fn an_edited_report_fails_verification_and_names_the_line() {
     assert_eq!(code, 0);
     let o = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         &record,
         "--pubkey",
         &public,
@@ -1245,6 +1322,7 @@ fn an_edited_report_fails_verification_and_names_the_line() {
     );
     let o = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         &record,
         "--pubkey",
         &public,
@@ -1254,7 +1332,13 @@ fn an_edited_report_fails_verification_and_names_the_line() {
     assert_eq!(o.status.code(), Some(4), "{}", text(&o));
     // Without a report beside it the report is not checked, and verify says so.
     std::fs::remove_file(&report).unwrap();
-    let o = sfr(&["verify", &record, "--pubkey", &public]);
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        &record,
+        "--pubkey",
+        &public,
+    ]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
     assert!(
         String::from_utf8_lossy(&o.stdout)
@@ -1329,7 +1413,13 @@ fn an_untested_px4_version_is_refused_unless_allowed_and_then_recorded() {
         report.contains(sfr_core::report::UNTESTED_VERSION_LINE),
         "{report}"
     );
-    let v = sfr(&["verify", record.to_str().unwrap(), "--pubkey", &public]);
+    let v = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        record.to_str().unwrap(),
+        "--pubkey",
+        &public,
+    ]);
     assert_eq!(v.status.code(), Some(0), "{}", text(&v));
     // The flag is signed: turning it off breaks the record.
     let off = dir.join("off.sfr");
@@ -1341,7 +1431,13 @@ fn an_untested_px4_version_is_refused_unless_allowed_and_then_recorded() {
         ),
     )
     .unwrap();
-    let v = sfr(&["verify", off.to_str().unwrap(), "--pubkey", &public]);
+    let v = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        off.to_str().unwrap(),
+        "--pubkey",
+        &public,
+    ]);
     assert_eq!(v.status.code(), Some(1), "{}", text(&v));
     // A tested version: the flag changes nothing, and the record says false.
     let tested = dir.join("tested");
@@ -1370,6 +1466,7 @@ fn an_untested_px4_version_is_refused_unless_allowed_and_then_recorded() {
     // A schema 1 record (sealed before schema 2) still verifies.
     let v = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         "fuzz/seeds/sfr_verify/sitl_v1.17.0_failsafe_gps_loss_shrunk.sfr",
         "--pubkey",
         "fuzz/seeds/sfr_verify_key.pub",

@@ -47,7 +47,7 @@ Each report gives the `sfr verify` command for a directory that holds the record
 
 ```sh doc-test
 for name in vtol_transition failsafe_gps_loss gz_quadtailsitter_transition gz_x500_vision_hover; do
-  target/release/sfr verify "examples/reports/$name.sfr" --pubkey examples/reports/sfr.pub \
+  target/release/sfr verify "examples/reports/$name.sfr" --pubkey examples/reports/sfr.pub --allow-evaluation-key \
     --ulog "testdata/sitl/v1.17.0/$name.ulg" | grep -E '^(Integrity|Flight rules)'
 done
 ```

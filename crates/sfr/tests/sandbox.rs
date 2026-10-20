@@ -301,6 +301,7 @@ fn the_in_browser_key_seals_an_evaluation_record_the_cli_verifies() {
         &dir,
         &[
             "verify",
+            "--allow-evaluation-key",
             "flight.sfr",
             "--pubkey",
             "sfr.pub",
@@ -314,7 +315,13 @@ fn the_in_browser_key_seals_an_evaluation_record_the_cli_verifies() {
 
 /// The CLI's verify output in `dir`, and the sandbox's for the same files.
 fn both_verify(dir: &Path, record: &str, log: Option<&str>) -> (Output, sfr_wasm::VerifyOutput) {
-    let mut args = vec!["verify", record, "--pubkey", "sfr.pub"];
+    let mut args = vec![
+        "verify",
+        "--allow-evaluation-key",
+        record,
+        "--pubkey",
+        "sfr.pub",
+    ];
     if let Some(l) = log {
         args.extend(["--ulog", l]);
     }

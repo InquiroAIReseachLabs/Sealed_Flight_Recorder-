@@ -23,9 +23,9 @@ use sfr_core::seal::{
     this_tool,
 };
 use sfr_core::verify::{
-    ClaimedSeal, INTEGRITY_NOT_CHECKED, MAX_RECORD_BYTES, Mismatch, TRUST_PUBKEY, VerifyError,
-    check_record_size, claimed_lines, claimed_seal, failed_text, report_line, time_line,
-    verified_text, verify,
+    Attestation, ClaimedSeal, CustodyPolicy, INTEGRITY_NOT_CHECKED, MAX_RECORD_BYTES, Mismatch,
+    TRUST_PUBKEY, VerifyError, check_record_size, claimed_lines, claimed_seal, custody_policy,
+    custody_text, failed_text, is_refusal, report_line, time_line, verified_text, verify,
 };
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -43,8 +43,8 @@ const USAGE: &str = "usage:
            (--key-uri pkcs11:... | --key-uri tpm-sealed:<dir> | --key <sfr.key> --evaluation-only | --dry-run)
            [--out <dir>] [--seal-time <RFC3339>] [--allow-untested-version] [--json]
   sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> ([--crl <crl>]... | --no-crl-check))
-             [--ulog <flight.ulg>] [--report <name.sfr.md>] [--require-hardware-key]
-             [--at <RFC3339>] [--json]
+             [--ulog <flight.ulg>] [--report <name.sfr.md>] [--allow-evaluation-key]
+             [--require-hardware-key] [--at <RFC3339>] [--json]
   sfr pubkey --key-uri (pkcs11:... | tpm-sealed:<dir>) [--json]
   sfr --version [--json]";
 
@@ -867,6 +867,14 @@ fn chain_trust_line(ok: &certs::ChainOk) -> String {
     t
 }
 
+/// What attests the custody of a record whose certificate chain was checked as `chain`: the chain
+/// to the trust anchor, or nothing but the sealer's word.
+fn attestation_of(chain: Option<&certs::ChainOk>) -> Attestation {
+    chain.map_or(Attestation::Unattested, |ok| Attestation::Chain {
+        anchor: ok.anchor.clone(),
+    })
+}
+
 fn verify_cmd(
     args: &[String],
     crypto: &RustCrypto,
@@ -882,7 +890,12 @@ fn verify_cmd(
             "--report",
             "--at",
         ],
-        &["--require-hardware-key", "--no-crl-check", "--json"],
+        &[
+            "--allow-evaluation-key",
+            "--require-hardware-key",
+            "--no-crl-check",
+            "--json",
+        ],
     )?;
     let record_path = a.one_positional("record")?.to_string();
     let json_out = a.flag("--json");
@@ -1018,13 +1031,7 @@ fn verify_cmd(
         })),
         Ok(public) => {
             let log: Option<&mut dyn Read> = log_file.as_mut().map(|f| f as &mut dyn Read);
-            verify(
-                &record,
-                log,
-                crypto,
-                &public,
-                a.flag("--require-hardware-key"),
-            )
+            verify(&record, log, crypto, &public)
         }
     };
     // The seal time is the sealer's claim: it may not lie in the verifier's future.
@@ -1072,6 +1079,27 @@ fn verify_cmd(
         (Ok(v), Trust::PublicKey(_)) => Ok((v, None)),
         (Err(e), _) => Err(e),
     };
+    // The custody a record declares is the sealer's own word. Only a certificate chain to a
+    // trust anchor the verifier supplied attests it, and an evaluation key is accepted only when
+    // asked for.
+    let policy = CustodyPolicy {
+        allow_evaluation_key: a.flag("--allow-evaluation-key"),
+        require_hardware_key: a.flag("--require-hardware-key"),
+    };
+    let outcome = match outcome {
+        Ok((v, chain)) => {
+            let attestation = attestation_of(chain.as_ref());
+            match custody_policy(v.custody, &attestation, policy) {
+                Ok(()) => Ok((v, chain)),
+                Err(first) => Err(VerifyError::Mismatch(Mismatch {
+                    first,
+                    also: Vec::new(),
+                    custody: Some(v.custody),
+                })),
+            }
+        }
+        Err(e) => Err(e),
+    };
     // The report must be, byte for byte, the one the verified record renders (SPEC B1.8).
     let outcome = match (outcome, &report_path) {
         (Ok((v, chain)), Some(path)) => {
@@ -1091,16 +1119,11 @@ fn verify_cmd(
     match outcome {
         Err(VerifyError::Io(e)) => Err(fail(exit_code::USAGE, format!("log: {e}"))),
         Ok((v, chain, report)) => {
-            let (trust_line, custody_note) = match &chain {
-                None => (TRUST_PUBKEY.to_string(), "declared".to_string()),
-                Some(ok) => (
-                    chain_trust_line(ok),
-                    format!(
-                        "declared; the key's certificate chains to the trust anchor {}",
-                        ok.anchor
-                    ),
-                ),
+            let trust_line = match &chain {
+                None => TRUST_PUBKEY.to_string(),
+                Some(ok) => chain_trust_line(ok),
             };
+            let attestation = attestation_of(chain.as_ref());
             let text = if json_out {
                 json::pretty(
                     &Obj::new()
@@ -1134,7 +1157,7 @@ fn verify_cmd(
                                 .map_or(Value::Null, |c| Value::str(c.anchor.clone())),
                         )
                         .field("key_custody", Value::str(v.custody.as_str()))
-                        .field("key_custody_proven", Value::Bool(false))
+                        .field("custody_attested", Value::Bool(attestation.is_attested()))
                         .field(
                             "crl_check",
                             chain
@@ -1187,7 +1210,7 @@ fn verify_cmd(
                     &record_path,
                     &v,
                     &trust_line,
-                    &custody_note,
+                    &custody_text(v.custody.as_str(), &attestation),
                     &report_line(report),
                     time.as_deref(),
                 ));
@@ -1201,7 +1224,10 @@ fn verify_cmd(
                 json::pretty(
                     &Obj::new()
                         .field("verified", Value::Bool(false))
-                        .field("integrity", Value::str("FAILED"))
+                        .field(
+                            "integrity",
+                            Value::str(if is_refusal(&m) { "REFUSED" } else { "FAILED" }),
+                        )
                         .field("flight_rules", Value::str("UNKNOWN"))
                         .field("record", Value::str(record_path.clone()))
                         .field("deep", Value::Bool(deep))

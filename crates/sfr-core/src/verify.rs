@@ -32,7 +32,8 @@ pub const MAX_RECORD_BYTES: usize = 512 * 1024 * 1024;
 /// What a successful verification established.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verified {
-    /// Declared key custody.
+    /// The key custody the sealer declared (`seal.key_custody`). A statement, not a fact: see
+    /// [`Attestation`].
     pub custody: Custody,
     /// Key fingerprint.
     pub fingerprint: String,
@@ -123,14 +124,18 @@ pub fn report_line(checked: Option<&str>) -> String {
 /// The `Integrity:` line of `sfr verify` given neither `--pubkey` nor `--trust-anchor`.
 pub const INTEGRITY_NOT_CHECKED: &str = "Integrity: NOT CHECKED (no trusted key given)";
 
+/// The `Flight rules:` line of `sfr verify` for a record that was refused ([`REFUSED_PREFIX`]).
+pub const FLIGHT_RULES_REFUSED: &str =
+    "Flight rules: UNKNOWN (the record was refused, so its rule results are not accepted)";
+
 /// The `Flight rules:` line of `sfr verify` for a record that did not verify.
 pub const FLIGHT_RULES_UNKNOWN: &str = "Flight rules: UNKNOWN (the record failed its integrity check, so its rule results cannot be trusted)";
 
 /// What `sfr verify` prints for a record that verified, after any evaluation key line.
 ///
-/// `trust` says what the signature was checked against (the `trust` line), and `custody_note`
-/// qualifies the custody, which the sealer declares: `declared`, or what a certificate chain
-/// added to it.
+/// `trust` says what the signature was checked against (the `trust` line), and `custody` is the
+/// text of the `custody` line ([`custody_text`]): the custody the sealer declares, and whether
+/// anything beyond the sealer's word attests it.
 ///
 /// `report` is the `report` line: [`report_line`]. `time` is the `time` line ([`time_line`]),
 /// given when the verification time decided something or was set with `--at`.
@@ -138,16 +143,15 @@ pub fn verified_text(
     record_path: &str,
     v: &Verified,
     trust: &str,
-    custody_note: &str,
+    custody: &str,
     report: &str,
     time: Option<&str>,
 ) -> String {
     let time = time.map_or_else(String::new, |t| format!("time      {t}\n"));
     format!(
-        "{}\n{}\nrecord    {record_path}\nreport    {report}\ntrust     {trust}\n{time}custody   {} ({custody_note})\nkey       {}\ncrypto    {} (crate versions)\nseal time {} ({SEAL_TIME_CLAIM})\nevents    {}\n",
+        "{}\n{}\nrecord    {record_path}\nreport    {report}\ntrust     {trust}\n{time}custody   {custody}\nkey       {}\ncrypto    {} (crate versions)\nseal time {} ({SEAL_TIME_CLAIM})\nevents    {}\n",
         integrity_line(v),
         flight_rules_line(v),
-        v.custody.as_str(),
         v.fingerprint,
         v.crypto_crates,
         v.claimed_time_utc,
@@ -173,9 +177,97 @@ pub fn time_line(verification_time: i64, source: &str, used_for_chain: bool) -> 
     )
 }
 
-/// The `Integrity:` line of `sfr verify` for a record that did not verify: the first mismatch.
+/// What stands behind the custody a record declares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Attestation {
+    /// Nothing but the sealer's own statement: `seal.key_custody` is a string the sealer wrote,
+    /// and a key file can say `pkcs11-token` as easily as a token can.
+    Unattested,
+    /// The record's signer certificate chains to a trust anchor the verifier supplied. The
+    /// verifier trusts that anchor's operator to have issued the certificate only for a key held
+    /// as declared; `sfr` cannot see that policy.
+    Chain {
+        /// `sha256:` and the hex SHA-256 of the trust anchor certificate.
+        anchor: String,
+    },
+}
+
+impl Attestation {
+    /// Whether a certificate chain attests the custody.
+    pub fn is_attested(&self) -> bool {
+        matches!(self, Attestation::Chain { .. })
+    }
+}
+
+/// The text of the `custody` line of `sfr verify`: never the declared custody alone, always with
+/// whether it is attested.
+pub fn custody_text(declared: &str, attestation: &Attestation) -> String {
+    match attestation {
+        Attestation::Unattested => format!("unattested (declared {declared})"),
+        Attestation::Chain { anchor } => format!(
+            "attested by certificate chain to the trust anchor {anchor} (declared {declared})"
+        ),
+    }
+}
+
+/// What `verify` requires of a record's custody, beyond its signature.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CustodyPolicy {
+    /// `--allow-evaluation-key`: accept a record that declares custody `file-evaluation`.
+    pub allow_evaluation_key: bool,
+    /// `--require-hardware-key`: accept only custody attested by a certificate chain, and not
+    /// `file-evaluation`.
+    pub require_hardware_key: bool,
+}
+
+/// Applies the policy to a record whose signature verified. `Err` is the reason it is refused.
+/// A record is refused for its custody, never for its signature: its signature did verify.
+pub fn custody_policy(
+    declared: Custody,
+    attestation: &Attestation,
+    policy: CustodyPolicy,
+) -> Result<(), String> {
+    let name = declared.as_str();
+    if declared == Custody::FileEvaluation && !policy.allow_evaluation_key {
+        return Err(format!(
+            "{REFUSED_PREFIX}the record is signed with an evaluation key (declared custody {name}), \
+             which is for evaluation only; its signature does verify. --allow-evaluation-key accepts it"
+        ));
+    }
+    if policy.require_hardware_key {
+        if declared == Custody::FileEvaluation {
+            return Err(format!(
+                "{REFUSED_PREFIX}--require-hardware-key does not accept a record that declares custody {name}"
+            ));
+        }
+        if !attestation.is_attested() {
+            return Err(format!(
+                "{REFUSED_PREFIX}--require-hardware-key needs custody attested by a certificate chain to a \
+                 trust anchor you give with --trust-anchor; this record declares custody {name}, \
+                 which is only the sealer's statement and proves nothing by itself"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Starts the first mismatch of a record whose signature verified but that `verify` does not
+/// accept, because of what its custody is or is not ([`custody_policy`]). It is refused, not
+/// failed: nothing about the record is wrong.
+pub const REFUSED_PREFIX: &str = "refused: ";
+
+/// Whether the mismatch is a refusal ([`REFUSED_PREFIX`]) rather than a failed check.
+pub fn is_refusal(m: &Mismatch) -> bool {
+    m.first.starts_with(REFUSED_PREFIX)
+}
+
+/// The `Integrity:` line of `sfr verify` for a record that did not verify: the first mismatch,
+/// or `REFUSED` and the reason for a record that [`custody_policy`] refuses.
 pub fn failed_line(m: &Mismatch) -> String {
-    format!("Integrity: FAILED: {}", m.first)
+    match m.first.strip_prefix(REFUSED_PREFIX) {
+        Some(why) => format!("Integrity: REFUSED: {why}"),
+        None => format!("Integrity: FAILED: {}", m.first),
+    }
 }
 
 /// What `sfr verify` prints for a record that did not verify, after any evaluation key line:
@@ -190,7 +282,11 @@ pub fn failed_text(m: &Mismatch, claimed: Option<&ClaimedSeal>) -> String {
     if m.also.len() > 20 {
         t.push_str(&format!("  and {} more\n", m.also.len() - 20));
     }
-    t.push_str(FLIGHT_RULES_UNKNOWN);
+    t.push_str(if is_refusal(m) {
+        FLIGHT_RULES_REFUSED
+    } else {
+        FLIGHT_RULES_UNKNOWN
+    });
     t.push('\n');
     t.push_str(&claimed_lines(claimed));
     t
@@ -202,12 +298,11 @@ pub fn claimed_lines(claimed: Option<&ClaimedSeal>) -> String {
     let key = claimed
         .and_then(|c| c.fingerprint.as_deref())
         .unwrap_or("unreadable");
-    let custody = claimed
-        .and_then(|c| c.custody.as_deref())
-        .unwrap_or("unreadable");
-    format!(
-        "key       {key} (named by the record, not proven)\ncustody   {custody} (declared by the record, not proven)\n"
-    )
+    let custody = claimed.and_then(|c| c.custody.as_deref()).map_or_else(
+        || "unreadable".to_string(),
+        |c| custody_text(c, &Attestation::Unattested),
+    );
+    format!("key       {key} (named by the record, not proven)\ncustody   {custody}\n")
 }
 
 /// What a record's `seal` says about its key, read without verifying anything: only what the
@@ -329,7 +424,6 @@ fn standalone(
     bytes: &[u8],
     crypto: &dyn CryptoBackend,
     public_key: &[u8; 32],
-    require_hardware_key: bool,
 ) -> Result<Parsed, Mismatch> {
     check_record_size(bytes.len()).map_err(fail)?;
     let spans = match scan_canonical(bytes) {
@@ -624,9 +718,6 @@ fn standalone(
     let custody_text = string(seal, "key_custody")?;
     let custody = Custody::parse(custody_text)
         .ok_or_else(|| fail(format!("unknown key custody `{custody_text}`")))?;
-    if require_hardware_key && custody == Custody::FileEvaluation {
-        problems.push("sealed with an evaluation key (custody file-evaluation); --require-hardware-key refuses it".to_string());
-    }
 
     let mut crates = Vec::new();
     for c in array(seal, "crypto_crates")? {
@@ -845,10 +936,8 @@ pub fn verify(
     log: Option<&mut dyn Read>,
     crypto: &dyn CryptoBackend,
     public_key: &[u8; 32],
-    require_hardware_key: bool,
 ) -> Result<Verified, VerifyError> {
-    let parsed = standalone(record_bytes, crypto, public_key, require_hardware_key)
-        .map_err(VerifyError::Mismatch)?;
+    let parsed = standalone(record_bytes, crypto, public_key).map_err(VerifyError::Mismatch)?;
     let custody = parsed.verified.custody;
     verify_parsed(parsed, record_bytes, log, crypto).map_err(|e| match e {
         VerifyError::Mismatch(mut m) => {
@@ -1039,7 +1128,6 @@ mod tests {
             None,
             &TestBackend,
             &pk,
-            false,
         ));
         assert!(
             m.first
@@ -1051,7 +1139,6 @@ mod tests {
             None,
             &TestBackend,
             &pk,
-            false,
         ));
         assert_eq!(
             m.first,
@@ -1066,7 +1153,7 @@ mod tests {
         assert_eq!(rule_id_key("r1"), None);
         // A record that cannot be read declares nothing.
         assert_eq!(
-            mismatch(verify(b"{}", None, &TestBackend, &pk, false)).custody,
+            mismatch(verify(b"{}", None, &TestBackend, &pk)).custody,
             None
         );
     }
@@ -1080,13 +1167,7 @@ mod tests {
                 c.insert("firmware".into(), Value::str("1.16.0"));
             }
         });
-        let m = mismatch(verify(
-            &edited,
-            Some(&mut &log[..]),
-            &TestBackend,
-            &pk,
-            false,
-        ));
+        let m = mismatch(verify(&edited, Some(&mut &log[..]), &TestBackend, &pk));
         assert_eq!(m.first, "config firmware: sealed 1.16.0, found 1.17.0");
         let edited = resigned(&bytes, &key, |r| {
             if let Some(Value::Object(l)) = r.get_mut("log")
@@ -1095,13 +1176,7 @@ mod tests {
                 f.insert("version".into(), Value::str("1.16.0"));
             }
         });
-        let m = mismatch(verify(
-            &edited,
-            Some(&mut &log[..]),
-            &TestBackend,
-            &pk,
-            false,
-        ));
+        let m = mismatch(verify(&edited, Some(&mut &log[..]), &TestBackend, &pk));
         assert!(
             m.first.starts_with("log firmware: sealed {")
                 && m.first.contains("\"version\":\"1.16.0\"")
@@ -1133,7 +1208,7 @@ mod tests {
         };
         let sealed = seal(&ing, &eval, &rules, &baseline, &params, &TestBackend, &key).unwrap();
         let pk = key.public_key();
-        let v = verify(&sealed.bytes, None, &TestBackend, &pk, false).unwrap();
+        let v = verify(&sealed.bytes, None, &TestBackend, &pk).unwrap();
         assert_eq!(
             (v.custody, v.events, v.leaf_count),
             (
@@ -1143,7 +1218,7 @@ mod tests {
             )
         );
         assert!(
-            verify(&sealed.bytes, Some(&mut &log[..]), &TestBackend, &pk, false)
+            verify(&sealed.bytes, Some(&mut &log[..]), &TestBackend, &pk)
                 .unwrap()
                 .deep
         );
@@ -1152,10 +1227,10 @@ mod tests {
         assert_eq!(sealed.bytes, again.bytes);
         // A different key does not verify; nor does any record with one byte changed.
         let other = TestKey::new(8).public_key();
-        assert!(verify(&sealed.bytes, None, &TestBackend, &other, false).is_err());
+        assert!(verify(&sealed.bytes, None, &TestBackend, &other).is_err());
         let mut bad = sealed.bytes.clone();
         let mid = bad.len() / 2;
         bad[mid] ^= 0x20;
-        assert!(verify(&bad, None, &TestBackend, &pk, false).is_err());
+        assert!(verify(&bad, None, &TestBackend, &pk).is_err());
     }
 }
