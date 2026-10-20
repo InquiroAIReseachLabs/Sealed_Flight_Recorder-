@@ -819,6 +819,86 @@
     "what": "control for failsafe_flags_gap"
   },
   {
+    "baseline": "failsafe_flags_end_gap.params",
+    "case": "failsafe_flags_end_gap",
+    "expect": {
+      "exit": 0,
+      "found": {
+        "R4": "warning: failsafe_flags 1 gap(s) over 1000 ms in flight, longest 3000 ms"
+      },
+      "results": {
+        "R4": "WARN"
+      },
+      "status": "WARN"
+    },
+    "item": "3.10",
+    "kind": "attack",
+    "log": "failsafe_flags_end_gap.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "failsafe_flags samples stopped before the disarm, where a required flag was true"
+  },
+  {
+    "baseline": "failsafe_flags_end_gap_control.params",
+    "case": "failsafe_flags_end_gap_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "required failsafe_flags global_position_invalid true in flight"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "3.10",
+    "kind": "control",
+    "log": "failsafe_flags_end_gap_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for failsafe_flags_end_gap"
+  },
+  {
+    "baseline": "failsafe_flags_start_gap.params",
+    "case": "failsafe_flags_start_gap",
+    "expect": {
+      "exit": 0,
+      "found": {
+        "R4": "warning: failsafe_flags 1 gap(s) over 1000 ms in flight, longest 2000 ms"
+      },
+      "results": {
+        "R4": "WARN"
+      },
+      "status": "WARN"
+    },
+    "item": "3.10",
+    "kind": "attack",
+    "log": "failsafe_flags_start_gap.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "failsafe_flags samples begun after the arm, where a required flag was true"
+  },
+  {
+    "baseline": "failsafe_flags_start_gap_control.params",
+    "case": "failsafe_flags_start_gap_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "required failsafe_flags global_position_invalid true in flight"
+      },
+      "results": {
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "3.10",
+    "kind": "control",
+    "log": "failsafe_flags_start_gap_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for failsafe_flags_start_gap"
+  },
+  {
     "baseline": "ignore_union.params",
     "case": "ignore_union",
     "expect": {

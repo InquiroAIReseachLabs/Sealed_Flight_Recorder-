@@ -949,6 +949,7 @@ def run(path, rules, required, ptime, param_index, debug):
             bad = False
             warned = False
             windows = []
+            window_closed = []  # whether the window ends at a disarming sample
             for t, st in zip(vs_topics, states):
                 rows = st['armed_rows']
                 win = [bool(rows[i]) or (i > 0 and bool(rows[i - 1])) for i in range(t.n)]
@@ -959,8 +960,10 @@ def run(path, rules, required, ptime, param_index, debug):
                 for i in range(t.n):
                     if win[i] and (i == 0 or not win[i - 1]):
                         windows.append([ts[i], ts[i]])
+                        window_closed.append(not bool(rows[i]))
                     elif win[i]:
                         windows[-1][1] = ts[i]
+                        window_closed[-1] = not bool(rows[i])
             # A nav_state in a window at or above NAVIGATION_STATE_MAX of every tag the log's
             # version selects: no mode requirement names it, so R4 cannot evaluate (FAIL).
             nav_max = max(PX4['msgs'][r['topics']['vehicle_status']]['constants']['NAVIGATION_STATE_MAX']
@@ -1013,11 +1016,21 @@ def run(path, rules, required, ptime, param_index, debug):
                             warned = True
             # A gap over 1 s between failsafe_flags samples that overlaps a window: a warning
             # (sfr's FAILSAFE_FLAGS_MAX_GAP_US; PX4 publishes them at least every 600 ms).
+            # The same where no sample lies on that side of a window: from its start (the ARM) to
+            # the first sample, or to its end (the DISARM) when that comes first; and from the last
+            # sample, or the ARM if the last sample precedes it, to the DISARM. A window that does
+            # not end at a disarming sample has no end to measure.
             for fft in ff_by_inst.values():
                 ts = sorted(fft['timestamp'])
                 for x, y in zip(ts, ts[1:]):
                     if y - x > 1_000_000 and any(x < b and y > a for a, b in windows):
                         warned = True
+                if ts:
+                    for (a, b), closed in zip(windows, window_closed):
+                        if ts[0] > a and (min(b, ts[0]) if closed else ts[0]) - a > 1_000_000:
+                            warned = True
+                        if closed and ts[-1] < b and b - max(ts[-1], a) > 1_000_000:
+                            warned = True
             results['R4'] = 'FAIL' if bad else ('WARN' if warned else 'PASS')
         # R5: every ARM followed by a DISARM, per instance; no ARM and no DISARM is N/A.
         if not vs_ok(['arming_state']):

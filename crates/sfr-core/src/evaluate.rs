@@ -614,25 +614,53 @@ pub const HAZARD_FLAGS: [(&str, &str); 12] = [
 /// golden logs' longest gap in flight is 600 ms.
 pub const FAILSAFE_FLAGS_MAX_GAP_US: u64 = 1_000_000;
 
-/// Gaps longer than [`FAILSAFE_FLAGS_MAX_GAP_US`] between consecutive `failsafe_flags` samples of
-/// one instance where the gap overlaps a flight: (count, longest, its start), over every instance.
+/// Gaps longer than [`FAILSAFE_FLAGS_MAX_GAP_US`] in which R4 could not see the flags of one
+/// instance during a flight: (count, longest, its start), over every instance. A gap is the time
+/// between two consecutive samples that overlaps a flight, and, where no sample lies on that side
+/// of the flight, the stretch from the ARM to the first sample, or from the last sample to the
+/// DISARM (the whole flight when no sample falls inside it). A stretch the pairs of consecutive
+/// samples already measure (a sample lies before the ARM, or after the disarming sample) is not
+/// counted twice. A flight with no DISARM has no end to measure.
 fn failsafe_flags_gaps(f: &FlightLog, armed: &[ArmedInterval]) -> Option<(usize, u64, u64)> {
     let mut count = 0usize;
     let mut longest: Option<(u64, u64)> = None;
+    let mut note = |gap: u64, start: u64| {
+        if gap > FAILSAFE_FLAGS_MAX_GAP_US {
+            count += 1;
+            if longest.is_none_or(|(g, _)| gap > g) {
+                longest = Some((gap, start));
+            }
+        }
+    };
     for fs in std::iter::once(&f.failsafe_flags).chain(&f.failsafe_flags_others) {
         let mut ts: Vec<u64> = fs.rows.iter().map(|r| r.id.ts).collect();
         ts.sort_unstable();
         for w in ts.iter().zip(ts.iter().skip(1)) {
             let (a, b) = (*w.0, *w.1);
-            let gap = b - a;
             let in_flight = armed
                 .iter()
                 .any(|i| a < i.disarm.unwrap_or(u64::MAX) && b > i.arm);
-            if gap > FAILSAFE_FLAGS_MAX_GAP_US && in_flight {
-                count += 1;
-                if longest.is_none_or(|(g, _)| gap > g) {
-                    longest = Some((gap, a));
-                }
+            if in_flight {
+                note(b - a, a);
+            }
+        }
+        // An instance with no sample at all is a missing input, which R4 fails elsewhere.
+        let (Some(&first), Some(&last)) = (ts.first(), ts.last()) else {
+            continue;
+        };
+        for i in armed {
+            // No sample at or before the ARM: unseen from the ARM to the first sample, or to the
+            // DISARM when that comes first.
+            if first > i.arm {
+                let end = i.disarm.map_or(first, |d| d.min(first));
+                note(end - i.arm, i.arm);
+            }
+            // No sample at or after the DISARM: unseen from the last sample (or the ARM, if the
+            // last sample precedes it) to the DISARM.
+            if let Some(d) = i.disarm
+                && last < d
+            {
+                note(d - last.max(i.arm), last.max(i.arm));
             }
         }
     }
@@ -868,7 +896,7 @@ fn r4(f: &FlightLog) -> RuleResult {
     if let Some((n, g, t)) = gaps {
         detail.push(|| {
             format!(
-                "warning: failsafe_flags has {n} gap(s) over {} ms between samples in flight, the longest {} ms from boot_us {t}: R4 did not see the flags in those gaps",
+                "warning: failsafe_flags has {n} gap(s) over {} ms in flight (between samples, or between the ARM or the DISARM and the nearest sample), the longest {} ms from boot_us {t}: R4 did not see the flags in those gaps",
                 FAILSAFE_FLAGS_MAX_GAP_US / 1000,
                 g / 1000
             )
@@ -2511,6 +2539,84 @@ mod tests {
             .filter(|&t| !(10_600_000..12_000_000).contains(&t))
             .collect();
         assert_eq!(r4(&flight(&straddling)).status, Status::Warn);
+    }
+
+    #[test]
+    fn r4_warns_when_failsafe_flags_stop_or_start_inside_the_flight() {
+        use crate::ingest::{FailsafeFlags, FailsafeRow, RowId};
+        let fields: Vec<String> = VEHICLE_STATUS_FIELDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // Armed at 1 s, disarmed by the sample at 11 s; failsafe_flags samples at the given times.
+        let rows: Vec<_> = (0..14u64)
+            .map(|i| {
+                let mut r = vtol_row(
+                    i,
+                    if (1..=10).contains(&i) { 2 } else { 1 },
+                    false,
+                    false,
+                    1,
+                );
+                r.id.ts = i * 1_000_000;
+                r
+            })
+            .collect();
+        let flight = |times: &[u64]| FlightLog {
+            vehicle_status: rows.clone(),
+            vehicle_status_fields: fields.clone(),
+            failsafe_flags: FailsafeFlags {
+                flags: vec![crate::ingest::FlagDef::for_test("gcs_connection_lost")],
+                rows: times
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &ts)| FailsafeRow {
+                        id: RowId {
+                            ts,
+                            instance: 0,
+                            index: i as u64,
+                        },
+                        active: vec![false].into(),
+                        mode_req: vec![0].into(),
+                    })
+                    .collect(),
+                ..FailsafeFlags::default()
+            },
+            ..FlightLog::default()
+        };
+        let steps = |from: u64, to: u64| (from..=to).step_by(500_000).collect::<Vec<u64>>();
+        let warns = |times: &[u64], longest_ms: u64| {
+            let r = r4(&flight(times));
+            assert_eq!(r.status, Status::Warn, "{times:?}: {}", r.found);
+            let want = format!(
+                "warning: failsafe_flags 1 gap(s) over 1000 ms in flight, longest {longest_ms} ms"
+            );
+            assert!(r.found.contains(&want), "{times:?}: {}", r.found);
+        };
+        // The samples stop at 5 s and none follows the disarming sample: 6 s of flight unseen.
+        warns(&steps(0, 5_000_000), 6000);
+        // The first sample comes at 3 s and none precedes the ARM: 2 s of flight unseen.
+        warns(&steps(3_000_000, 14_000_000), 2000);
+        // No sample inside the flight: a sample before the ARM and none after the disarm.
+        warns(&[0, 500_000], 10_000);
+        // No sample inside the flight: the first comes after the disarming sample.
+        warns(&[12_000_000, 12_500_000], 10_000);
+        // A sample at the ARM and at the disarming sample, then every 500 ms: PASS.
+        assert_eq!(
+            r4(&flight(&steps(1_000_000, 11_000_000))).status,
+            Status::Pass
+        );
+        // The first sample 1 s after the ARM, the last 1 s before the disarming sample: the bound
+        // is "more than", so PASS; 1 ms more at either end: WARN.
+        let mut inside = steps(2_000_000, 10_000_000);
+        assert_eq!(r4(&flight(&inside)).status, Status::Pass);
+        inside[0] += 1;
+        assert_eq!(r4(&flight(&inside)).status, Status::Warn);
+        let mut inside = steps(2_000_000, 10_000_000);
+        *inside.last_mut().unwrap() -= 1;
+        assert_eq!(r4(&flight(&inside)).status, Status::Warn);
+        // Samples before the ARM and after the disarm cover the ends as before.
+        assert_eq!(r4(&flight(&steps(0, 13_000_000))).status, Status::Pass);
     }
 
     #[test]

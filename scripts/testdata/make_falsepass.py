@@ -422,6 +422,42 @@ def failsafe_flags_gap(control):
     return log
 
 
+def failsafe_flags_end_gap(control):
+    """failsafe_flags samples stop at 4 s and none follows, 3 s before the disarm at 7 s: the
+    sample at 5 s had global_position_invalid true, which AUTO_LOITER requires clear, so a
+    reader that measures only the time between samples sees no flag and no gap. The flags go
+    unseen for the last 3 s of the flight. The control keeps every sample: R4 fails on the flag."""
+    log = Log().firmware()
+    log.format("vehicle_status", VS).format("failsafe_flags", FS)
+    log.param_i("SYS_AUTOSTART", 4001).param_f("MPC_XY_VEL_MAX", 12.0)
+    log.sub(0, 0, "vehicle_status").sub(0, 1, "failsafe_flags")
+    for i in range(1, 9):
+        ts = i * S
+        if control or i <= 4:
+            log.data(1, {"timestamp": ts, "mode_req_global_position": 1 << 4,
+                         "global_position_invalid": 1 if i == 5 else 0})
+        log.data(0, vs_row(ts, in_flight(i)))
+    return log
+
+
+def failsafe_flags_start_gap(control):
+    """failsafe_flags samples begin at 4 s and none precedes, 2 s after the arm at 2 s: the
+    sample at 3 s had global_position_invalid true, which AUTO_LOITER requires clear. The flags
+    go unseen for the first 2 s of the flight. The control keeps every sample: R4 fails on the
+    flag."""
+    log = Log().firmware()
+    log.format("vehicle_status", VS).format("failsafe_flags", FS)
+    log.param_i("SYS_AUTOSTART", 4001).param_f("MPC_XY_VEL_MAX", 12.0)
+    log.sub(0, 0, "vehicle_status").sub(0, 1, "failsafe_flags")
+    for i in range(1, 9):
+        ts = i * S
+        if control or i >= 4:
+            log.data(1, {"timestamp": ts, "mode_req_global_position": 1 << 4,
+                         "global_position_invalid": 1 if i == 3 else 0})
+        log.data(0, vs_row(ts, in_flight(i)))
+    return log
+
+
 def unknown_messages(control):
     """A record of an unknown type and a data record for a message id never subscribed."""
     def extra(log, i):
@@ -755,6 +791,20 @@ CASES = [
      failsafe_flags_gap, RULES, [],
      {"exit": 0, "status": "WARN", "results": {"R4": "WARN"},
       "found": {"R4": "warning: failsafe_flags 1 gap(s) over 1000 ms in flight, longest 4000 ms"}},
+     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
+      "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}}),
+    ("failsafe_flags_end_gap", "3.10",
+     "failsafe_flags samples stopped before the disarm, where a required flag was true",
+     failsafe_flags_end_gap, RULES, [],
+     {"exit": 0, "status": "WARN", "results": {"R4": "WARN"},
+      "found": {"R4": "warning: failsafe_flags 1 gap(s) over 1000 ms in flight, longest 3000 ms"}},
+     {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
+      "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}}),
+    ("failsafe_flags_start_gap", "3.10",
+     "failsafe_flags samples begun after the arm, where a required flag was true",
+     failsafe_flags_start_gap, RULES, [],
+     {"exit": 0, "status": "WARN", "results": {"R4": "WARN"},
+      "found": {"R4": "warning: failsafe_flags 1 gap(s) over 1000 ms in flight, longest 2000 ms"}},
      {"exit": 1, "status": "FAIL", "results": {"R4": "FAIL"},
       "found": {"R4": "required failsafe_flags global_position_invalid true in flight"}}),
     ("ignore_union", "3.8", "63 ignore patterns, one per first character, that together hide a parameter difference",
