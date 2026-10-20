@@ -23,6 +23,8 @@ Designs for closing some of these gaps (a time from outside the sealer, a chain 
 
 ## Attacks and what detects them
 
+The attacks of this table that were fixed after the first red team (seal time, custody, CRL handling, the report, the signed structure, the signer certificate usage) are re-run by `scripts/t12_attacks.sh` against an earlier build, where each must succeed, and against the current build, where each must fail, after a control that must verify. Its output for the build before the fixes and the current one is in `docs/receipts/t12.txt`.
+
 | Attack | Detected by | Shown by |
 |---|---|---|
 | Change any byte of a record | standalone verify: canonical form, field set, Merkle root, signature | `a_thousand_seeded_byte_flips_in_a_record_all_fail_verification` (`crates/sfr/tests/seal_verify.rs`) |
