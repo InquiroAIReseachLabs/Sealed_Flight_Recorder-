@@ -1330,7 +1330,8 @@ fn an_edited_report_fails_verification_and_names_the_line() {
         "/nonexistent.sfr.md",
     ]);
     assert_eq!(o.status.code(), Some(4), "{}", text(&o));
-    // Without a report beside it the report is not checked, and verify says so.
+    // Without a report beside it the record does not verify: a report that was not checked
+    // proves nothing about the report a reader has. --no-report opts out, and says so.
     std::fs::remove_file(&report).unwrap();
     let o = sfr(&[
         "verify",
@@ -1339,10 +1340,30 @@ fn an_edited_report_fails_verification_and_names_the_line() {
         "--pubkey",
         &public,
     ]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o));
+    assert!(
+        text(&o).contains("Integrity: FAILED: report: no report found beside the record: expected"),
+        "{}",
+        text(&o)
+    );
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        &record,
+        "--pubkey",
+        &public,
+        "--no-report",
+    ]);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
     assert!(
-        String::from_utf8_lossy(&o.stdout)
-            .contains("report    not checked (no report given or found beside the record)\n"),
+        String::from_utf8_lossy(&o.stdout).contains(
+            "report    NOT CHECKED (--no-report): the report was not compared with the record, so it proves nothing\n"
+        ),
+        "{}",
+        text(&o)
+    );
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("sfr: notice: --no-report:"),
         "{}",
         text(&o)
     );
@@ -1470,6 +1491,7 @@ fn an_untested_px4_version_is_refused_unless_allowed_and_then_recorded() {
         "fuzz/seeds/sfr_verify/sitl_v1.17.0_failsafe_gps_loss_shrunk.sfr",
         "--pubkey",
         "fuzz/seeds/sfr_verify_key.pub",
+        "--no-report",
     ]);
     assert_eq!(v.status.code(), Some(0), "{}", text(&v));
     assert!(text(&v).contains("Integrity: VERIFIED"), "{}", text(&v));

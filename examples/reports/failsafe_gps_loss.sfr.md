@@ -2,6 +2,9 @@ EVALUATION KEY: not for operational use
 
 # Sealed flight record: failsafe\_gps\_loss\.ulg
 
+- Merkle root: `c05aa62a80822c2c78406652a99a79c5f0e2b5509a9f7b5725a81e0bc32dc707` (sha256\-rfc6962, 39 leaves)
+- Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
+
 **Status: FAIL**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0, v1.0 evaluation release. This report is generated from the record failsafe\_gps\_loss\.sfr alone.
 
 ## Rules

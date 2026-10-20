@@ -8,6 +8,7 @@
 
 use sfr_core::crypto::rustcrypto::{FileKey, RustCrypto};
 use sfr_core::crypto::{CryptoBackend, Custody, Signer};
+use sfr_core::display::terminal_safe;
 use sfr_core::evaluate::{Evaluation, Status, evaluate};
 use sfr_core::exit_code;
 use sfr_core::ingest::{FlightLogIngestor, IngestError, Ingested, Px4Ingestor};
@@ -43,7 +44,7 @@ const USAGE: &str = "usage:
            (--key-uri pkcs11:... | --key-uri tpm-sealed:<dir> | --key <sfr.key> --evaluation-only | --dry-run)
            [--out <dir>] [--seal-time <RFC3339>] [--allow-untested-version] [--json]
   sfr verify <record.sfr> (--pubkey <sfr.pub> | --trust-anchor <ca.pem> ([--crl <crl>]... | --no-crl-check))
-             [--ulog <flight.ulg>] [--report <name.sfr.md>] [--allow-evaluation-key]
+             [--ulog <flight.ulg>] (--report <name.sfr.md> | --no-report) [--allow-evaluation-key]
              [--require-hardware-key] [--at <RFC3339>] [--json]
   sfr pubkey --key-uri (pkcs11:... | tpm-sealed:<dir>) [--json]
   sfr --version [--json]";
@@ -186,9 +187,13 @@ fn read_text(path: &str, what: &str, code: i32) -> Result<String, Failure> {
     })
 }
 
+/// Writes `text` to standard output. Every control character but the newline, and every
+/// character that hides or reorders text, is written out as `<U+202E>` first: a file name, a
+/// parameter name or a log message in the output could be built to move the cursor or to make
+/// the reader see something else.
 fn write_out(stdout: &mut dyn Write, text: &str) -> Result<(), Failure> {
     stdout
-        .write_all(text.as_bytes())
+        .write_all(terminal_safe(text).as_bytes())
         .and_then(|()| stdout.flush())
         .map_err(|e| fail(exit_code::USAGE, format!("cannot write output: {e}")))
 }
@@ -684,7 +689,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             // and the record says it was given.
             return Err(fail(exit_code::USAGE, refusal));
         }
-        let _ = writeln!(io::stderr().lock(), "{warning}");
+        let _ = writeln!(io::stderr().lock(), "{}", terminal_safe(&warning));
     }
 
     let Some(key) = key else {
@@ -894,11 +899,25 @@ fn verify_cmd(
             "--allow-evaluation-key",
             "--require-hardware-key",
             "--no-crl-check",
+            "--no-report",
             "--json",
         ],
     )?;
     let record_path = a.one_positional("record")?.to_string();
     let json_out = a.flag("--json");
+    let no_report = a.flag("--no-report");
+    if no_report && a.value("--report").is_some() {
+        return Err(usage(
+            "--report and --no-report contradict each other: name the report to check, or skip the check",
+        ));
+    }
+    if no_report {
+        // To stderr as well as in the output, so a pipeline that reads only one of them sees it.
+        let _ = writeln!(
+            io::stderr().lock(),
+            "sfr: notice: --no-report: the report is NOT compared with the record, so it proves nothing"
+        );
+    }
     // The verification time: the verifier's clock, or the time given with --at. Certificate
     // validity is judged at this time and never at the record's claimed seal time, and a claimed
     // seal time later than it is refused.
@@ -930,6 +949,8 @@ fn verify_cmd(
         None => Some(format!("{record_path}.md"))
             .filter(|p| record_path.ends_with(".sfr") && Path::new(p).is_file()),
     };
+    // --no-report looks at no report, not even one beside the record.
+    let report_path = report_path.filter(|_| !no_report);
     let crl_paths = a.values("--crl");
     let trust = match (a.value("--pubkey"), a.value("--trust-anchor")) {
         (Some(_), Some(_)) => {
@@ -1100,7 +1121,9 @@ fn verify_cmd(
         }
         Err(e) => Err(e),
     };
-    // The report must be, byte for byte, the one the verified record renders (SPEC B1.8).
+    // The report must be, byte for byte, the one the verified record renders (SPEC B1.8), and it
+    // must be there: a verified record whose report was never looked at proves nothing about the
+    // report a reader has in front of them. Only --no-report skips it.
     let outcome = match (outcome, &report_path) {
         (Ok((v, chain)), Some(path)) => {
             let report = read_capped(path, "report", MAX_RECORD_BYTES as u64)?;
@@ -1113,12 +1136,29 @@ fn verify_cmd(
                 })),
             }
         }
-        (Ok((v, chain)), None) => Ok((v, chain, None)),
+        (Ok((v, chain)), None) if no_report => Ok((v, chain, None)),
+        (Ok((v, _)), None) => Err(VerifyError::Mismatch(Mismatch {
+            first: format!(
+                "report: no report found beside the record: expected {}. A verified record whose report was not checked proves nothing about the report you read. Give the report with --report <file>, or verify the record alone with --no-report",
+                if record_path.ends_with(".sfr") {
+                    format!("{record_path}.md")
+                } else {
+                    "<record>.sfr.md (the record's name does not end in .sfr, so it cannot be found by name)".to_string()
+                }
+            ),
+            also: Vec::new(),
+            custody: Some(v.custody),
+        })),
         (Err(e), _) => Err(e),
     };
     match outcome {
         Err(VerifyError::Io(e)) => Err(fail(exit_code::USAGE, format!("log: {e}"))),
         Ok((v, chain, report)) => {
+            // The log's content is what deep verify binds, not its name; say so when they differ.
+            let renamed_log = a
+                .value("--ulog")
+                .map(file_name)
+                .filter(|given| v.deep && *given != v.log_file_name);
             let trust_line = match &chain {
                 None => TRUST_PUBKEY.to_string(),
                 Some(ok) => chain_trust_line(ok),
@@ -1141,6 +1181,13 @@ fn verify_cmd(
                         )
                         .field("record", Value::str(record_path.clone()))
                         .field("report", Value::opt_str(report.map(str::to_string)))
+                        .field("report_checked", Value::Bool(report.is_some()))
+                        .field("merkle_root", Value::str(v.merkle_root.clone()))
+                        .field("log_file_name", Value::str(v.log_file_name.clone()))
+                        .field(
+                            "log_file_name_given",
+                            Value::opt_str(a.value("--ulog").map(file_name)),
+                        )
                         .field("deep", Value::Bool(v.deep))
                         .field(
                             "trust",
@@ -1214,6 +1261,12 @@ fn verify_cmd(
                     &report_line(report),
                     time.as_deref(),
                 ));
+                if let Some(given) = &renamed_log {
+                    t.push_str(&format!(
+                        "note      the log given is named {given}, the record was sealed from one named {}; the content matches, so this changes nothing, but it is not the name the sealer wrote\n",
+                        v.log_file_name
+                    ));
+                }
                 t
             };
             write_out(stdout, &text)?;
@@ -1385,7 +1438,7 @@ fn main() -> ExitCode {
                 io::stderr().lock(),
                 "{}: {}",
                 sfr_core::TOOL_NAME,
-                f.message
+                terminal_safe(&f.message)
             );
             f.code
         }

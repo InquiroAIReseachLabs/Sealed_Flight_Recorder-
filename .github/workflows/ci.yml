@@ -218,6 +218,13 @@ jobs:
             export SFR_FORBIDDEN_TERMS_FILE="$RUNNER_TEMP/forbidden-terms"
           fi
           scripts/check_language.sh
+      # sfr shows the Unicode format characters (bidirectional controls, zero-width characters) as
+      # <U+202E> in its report and output; the table of them must match the Unicode database.
+      - name: The format-character table matches the Unicode database (scripts/check_format_characters.py)
+        run: |
+          set -euo pipefail
+          python3 -I scripts/check_format_characters.py --self-test
+          python3 -I scripts/check_format_characters.py
       - name: No private key in the repository (scripts/check_no_private_keys.sh)
         run: |
           set -euo pipefail

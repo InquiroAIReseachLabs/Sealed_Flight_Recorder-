@@ -37,6 +37,11 @@ pub struct Verified {
     pub custody: Custody,
     /// Key fingerprint.
     pub fingerprint: String,
+    /// The Merkle root the signature covers, lowercase hex: the same value the report shows
+    /// under its title.
+    pub merkle_root: String,
+    /// The name of the log the record was sealed from (`log.file_name`), as the sealer wrote it.
+    pub log_file_name: String,
     /// The seal time the sealer claimed (`seal.time_utc`), UTC. Signed, so it cannot change
     /// after sealing, but it is the sealer's statement: nothing here proves it.
     pub claimed_time_utc: String,
@@ -112,12 +117,17 @@ pub fn flight_rules_line(v: &Verified) -> String {
 pub const TRUST_PUBKEY: &str =
     "the public key given with --pubkey (trusted as far as its source is)";
 
+/// The `report` line of `sfr verify` for a record that verified and was told not to look at a
+/// report (`--no-report`, or the browser page, which takes none).
+pub const REPORT_NOT_CHECKED: &str =
+    "NOT CHECKED (--no-report): the report was not compared with the record, so it proves nothing";
+
 /// The `report` line of `sfr verify` for a record that verified: the report checked against it,
-/// or that none was given.
+/// or that it was not checked.
 pub fn report_line(checked: Option<&str>) -> String {
     match checked {
         Some(name) => format!("{name} matches the record"),
-        None => "not checked (no report given or found beside the record)".to_string(),
+        None => REPORT_NOT_CHECKED.to_string(),
     }
 }
 
@@ -149,10 +159,12 @@ pub fn verified_text(
 ) -> String {
     let time = time.map_or_else(String::new, |t| format!("time      {t}\n"));
     format!(
-        "{}\n{}\nrecord    {record_path}\nreport    {report}\ntrust     {trust}\n{time}custody   {custody}\nkey       {}\ncrypto    {} (crate versions)\nseal time {} ({SEAL_TIME_CLAIM})\nevents    {}\n",
+        "{}\n{}\nrecord    {record_path}\nreport    {report}\ntrust     {trust}\n{time}custody   {custody}\nkey       {}\nmerkle    {} ({} leaves)\ncrypto    {} (crate versions)\nseal time {} ({SEAL_TIME_CLAIM})\nevents    {}\n",
         integrity_line(v),
         flight_rules_line(v),
         v.fingerprint,
+        v.merkle_root,
+        v.leaf_count,
         v.crypto_crates,
         v.claimed_time_utc,
         v.events
@@ -484,6 +496,7 @@ fn standalone(
     for k in [
         "tool",
         "seal",
+        "log",
         "rules",
         "results",
         "sealed_topics",
@@ -525,6 +538,7 @@ fn standalone(
     let event_count = find("events").map_or(0, |m| m.elements.len());
 
     let seal = obj(record, "seal")?;
+    let log_member = obj(record, "log")?;
     let merkle_obj = obj(record, "merkle")?;
     let signature_obj = obj(record, "signature")?;
     let rules = obj(record, "rules")?;
@@ -731,6 +745,8 @@ fn standalone(
     let verified = Verified {
         custody,
         fingerprint: recorded_fp.to_string(),
+        merkle_root: recorded_root.to_string(),
+        log_file_name: string(log_member, "file_name")?.to_string(),
         claimed_time_utc: string(seal, "time_utc")?.to_string(),
         crypto_crates: crates.join(", "),
         status: status.to_string(),

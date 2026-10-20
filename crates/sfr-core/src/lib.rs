@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod crypto;
+pub mod display;
 pub mod evaluate;
 pub mod events;
 pub mod ingest;

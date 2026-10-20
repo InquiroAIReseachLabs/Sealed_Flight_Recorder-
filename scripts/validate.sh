@@ -53,6 +53,9 @@ run "deny-list check" scripts/check_deny_list.sh
 # 4. Language rules (SPEC B1.12).
 run "language self-test" scripts/check_language.sh --self-test
 run "language check" scripts/check_language.sh
+# The Unicode format characters the report and the terminal output show instead of acting on.
+run "format-character table self-test" python3 -I scripts/check_format_characters.py --self-test
+run "format-character table matches the Unicode database" python3 -I scripts/check_format_characters.py
 run "README numbers script self-test" scripts/regen_readme_numbers.sh --self-test
 run "README numbers match docs/receipts/ci-run.txt" scripts/regen_readme_numbers.sh --check
 # Docs tests (the docs CI job): every doc command runs (b3sum and openssl 3 must be installed),

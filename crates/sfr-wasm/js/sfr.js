@@ -302,8 +302,8 @@ export async function runTamperDemo({ onStep } = {}) {
     const c1 = await verify({ record: record(sealed), publicKey: pub });
     const c2 = await verifyWithLog({ record: record(sealed), publicKey: pub, log: s.log });
     step('c', 'verify the record alone, then with the log', [
-      { command: `sfr verify sealed/${sealed.recordName} --pubkey key/sfr.pub --allow-evaluation-key`, result: c1 },
-      { command: `sfr verify sealed/${sealed.recordName} --pubkey key/sfr.pub --allow-evaluation-key --ulog ${s.path}`, result: c2 },
+      { command: `sfr verify sealed/${sealed.recordName} --pubkey key/sfr.pub --allow-evaluation-key --no-report`, result: c1 },
+      { command: `sfr verify sealed/${sealed.recordName} --pubkey key/sfr.pub --allow-evaluation-key --no-report --ulog ${s.path}`, result: c2 },
     ], c1.verified && c2.verified && c2.checked === 'record and log', 'VERIFIED twice');
 
     const changed = changeCommand(sealed.record);
@@ -311,8 +311,8 @@ export async function runTamperDemo({ onStep } = {}) {
     const d1 = await verify({ record: tampered, publicKey: pub });
     const d2 = await verifyWithLog({ record: tampered, publicKey: pub, log: s.log });
     step('d', 'change one byte of a COMMAND event in a copy of the record', [
-      { command: 'sfr verify tampered.sfr --pubkey key/sfr.pub --allow-evaluation-key', result: d1 },
-      { command: `sfr verify tampered.sfr --pubkey key/sfr.pub --allow-evaluation-key --ulog ${s.path}`, result: d2 },
+      { command: 'sfr verify tampered.sfr --pubkey key/sfr.pub --allow-evaluation-key --no-report', result: d1 },
+      { command: `sfr verify tampered.sfr --pubkey key/sfr.pub --allow-evaluation-key --no-report --ulog ${s.path}`, result: d2 },
     ], d1.exitCode === 1 && d1.mismatch.kind === 'merkle_root' && d2.exitCode === 1 && d2.mismatch.kind === 'event'
       && d2.mismatch.eventKind === 'COMMAND' && d2.mismatch.field === 'command',
     'exit 1 twice: the Merkle root, then the event, its kind and field, with the sealed and found values', changed.description);
@@ -320,7 +320,7 @@ export async function runTamperDemo({ onStep } = {}) {
     const param = await changeParameter(s.log, s.parameter, 7.0);
     const e1 = await verifyWithLog({ record: record(sealed), publicKey: pub, log: { name: 'changed.ulg', data: param.blob } });
     step('e', `change ${s.parameter} in a copy of the log`, [
-      { command: `sfr verify sealed/${sealed.recordName} --pubkey key/sfr.pub --allow-evaluation-key --ulog changed.ulg`, result: e1 },
+      { command: `sfr verify sealed/${sealed.recordName} --pubkey key/sfr.pub --allow-evaluation-key --no-report --ulog changed.ulg`, result: e1 },
     ], e1.exitCode === 1 && e1.mismatch.kind === 'parameter' && e1.mismatch.parameter === s.parameter && e1.mismatch.found === 'f32:7',
     `exit 1 naming ${s.parameter} with its sealed value and found f32:7`, param.description);
     return { passed: true, seconds: (performance.now() - started) / 1000, sample: s, steps };

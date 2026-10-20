@@ -7,8 +7,12 @@
 //!
 //! Every value from the record goes through [`escape`]: each ASCII punctuation character gets a
 //! backslash, which CommonMark defines as that character shown literally, so no value can form
-//! a Markdown or HTML construct (emphasis, a link, an entity, a table cell, a list). Digests
-//! and the key fingerprint are hexadecimal and shown in code spans. A host that adds to
+//! a Markdown or HTML construct (emphasis, a link, an entity, a table cell, a list). A control
+//! character becomes a space, and a character that hides or reorders text (a bidirectional
+//! control such as U+202E, a zero-width character, any Unicode format character) is written out
+//! as `<U+202E>`, so it shows. Digests and the key fingerprint are hexadecimal and shown in code
+//! spans. The Merkle root and the key fingerprint come first, under the title, so a reader can
+//! compare them with what `sfr verify` printed. A host that adds to
 //! rendered text after Markdown (GitHub and GitLab turn `:name:` into an emoji, `@name` or
 //! `#123` into a link) still does so; Markdown cannot escape that.
 
@@ -88,12 +92,21 @@ fn s(o: &Obj, key: &str, path: &str) -> Result<String, ReportError> {
 }
 
 /// Escapes text for Markdown, in a table cell, a list item, or running text: control
-/// characters become spaces, and every ASCII punctuation character gets a backslash.
+/// characters become spaces, a character that hides or reorders text (a Unicode format character,
+/// the line and paragraph separators) is written out as its marker, `<U+202E>`, and every ASCII
+/// punctuation character, the marker's included, gets a backslash.
 pub fn escape(t: &str) -> String {
     let mut out = String::with_capacity(t.len());
     for c in t.chars() {
         if c.is_control() {
             out.push(' ');
+        } else if crate::display::is_hidden(c) {
+            for m in crate::display::marker(c).chars() {
+                if m.is_ascii_punctuation() {
+                    out.push('\\');
+                }
+                out.push(m);
+            }
         } else {
             if c.is_ascii_punctuation() {
                 out.push('\\');
@@ -261,6 +274,23 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         "# Sealed flight record: {}\n\n",
         escape(&file_name)
     ));
+    // Under the title, where a reader checks them first against what `sfr verify` printed.
+    item(
+        &mut out,
+        "Merkle root",
+        &format!(
+            "{} ({}, {} leaves)",
+            code(&s(merkle, "root", "merkle")?),
+            escape(&s(merkle, "algorithm", "merkle")?),
+            escape(&s(merkle, "leaf_count", "merkle")?)
+        ),
+    );
+    item(
+        &mut out,
+        "Key fingerprint",
+        &code(&s(seal, "key_fingerprint", "seal")?),
+    );
+    out.push('\n');
     out.push_str(&format!(
         "**Status: {}**. Sealed (time claimed by the sealer) {} by {} {}, v1.0 evaluation release. \
          This report is generated from the record {} alone.\n\n",
@@ -582,15 +612,18 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
 /// A file name as one shell word that `sfr` reads as that file: `./` in front of a name that
 /// starts with `-` (else it would be read as an option); then unchanged when it holds only
 /// letters, digits, `.`, `_`, `-`, and `/`; in `$'...'` with each byte of a control character
-/// as a three-digit octal escape when it holds one (POSIX dollar-single-quotes, as in bash,
-/// zsh, and ksh), so the command stays on one line; else in single quotes.
+/// or of a character that hides or reorders text (a bidirectional control, a zero-width
+/// character) as a three-digit octal escape when it holds one (POSIX dollar-single-quotes, as in
+/// bash, zsh, and ksh), so the command stays on one line and shows what it holds; else in single
+/// quotes.
 pub fn shell_word(name: &str) -> String {
     let name = if name.starts_with('-') {
         format!("./{name}")
     } else {
         name.to_string()
     };
-    if name.chars().any(char::is_control) {
+    let odd = |c: char| c.is_control() || crate::display::is_hidden(c);
+    if name.chars().any(odd) {
         let mut w = String::from("$'");
         for c in name.chars() {
             match c {
@@ -598,7 +631,7 @@ pub fn shell_word(name: &str) -> String {
                     w.push('\\');
                     w.push(c);
                 }
-                c if c.is_control() => {
+                c if odd(c) => {
                     let mut buf = [0u8; 4];
                     for b in c.encode_utf8(&mut buf).bytes() {
                         w.push_str(&format!("\\{b:03o}"));
@@ -661,6 +694,13 @@ mod tests {
                 .all(|p| p[0] == '\\' && p[1].is_ascii_punctuation())
         );
         assert_eq!(escape("a\tb\nc\u{85}d e"), "a b c d e");
+        // A format character is written out and escaped like any other punctuation, so a
+        // Markdown viewer shows `<U+202E>` as text.
+        assert_eq!(escape("PASS\u{202e}FAIL"), "PASS\\<U\\+202E\\>FAIL");
+        assert_eq!(
+            escape("a\u{200b}b\u{2028}c"),
+            "a\\<U\\+200B\\>b\\<U\\+2028\\>c"
+        );
         assert_eq!(escape("VT_TYPE 1.5"), "VT\\_TYPE 1\\.5");
         assert_eq!(escape("\u{e9}t\u{e9} 2"), "\u{e9}t\u{e9} 2");
     }
@@ -675,6 +715,8 @@ mod tests {
         assert_eq!(shell_word("a\tb'\\.ulg"), "$'a\\011b\\'\\\\.ulg'");
         assert_eq!(shell_word("-\n"), "$'./-\\012'");
         assert_eq!(shell_word("c\u{85}.ulg"), "$'c\\302\\205.ulg'");
+        // A bidirectional override is written out, so the command shows it.
+        assert_eq!(shell_word("a\u{202e}b.ulg"), "$'a\\342\\200\\256b.ulg'");
     }
 
     #[test]
