@@ -16,9 +16,11 @@ use crate::json::{Obj, Value, canonical};
 use crate::keys::{base64_encode, fingerprint};
 use crate::merkle;
 use crate::params::Baseline;
-use crate::record::{baseline_json, config_json, events_json, log_json, sealed_topics_json};
+use crate::record::{
+    baseline_json, config_json, events_json, log_json, schema_for, sealed_topics_json,
+};
 use crate::rules::Rules;
-use crate::{SCHEMA_VERSION, SIGNED_PAYLOAD_PREFIX, TOOL_NAME, hex};
+use crate::{SCHEMA_VERSION_5, SIGNED_PAYLOAD_PREFIX, TOOL_NAME, hex};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -366,6 +368,10 @@ pub struct SealParams {
     /// sealed only because of `seal --allow-untested-version`. Recorded as
     /// `seal.allow_untested_version`.
     pub allow_untested_version: bool,
+    /// True when the log's ULog file format version is above 1 and it was sealed only because
+    /// of `seal --allow-untested-version`. Recorded as `seal.allow_untested_ulog_version`, in
+    /// schema 5 only (a schema 4 record has no such log).
+    pub allow_untested_ulog_version: bool,
     /// True when the rules file ignores every parameter (`ignore = ["*"]`) and was accepted
     /// only because of `seal --allow-ignore-all`. Recorded as `seal.allow_ignore_all`.
     pub allow_ignore_all: bool,
@@ -391,6 +397,26 @@ pub fn untested_version_messages(
         format!(
             "sfr: warning: log {log}: {what}, and sfr is tested on PX4 v1.14 to v1.17 only; \
              sealed under --allow-untested-version, and version-dependent names are null"
+        ),
+    )
+}
+
+/// What `seal` says about a log whose ULog file format version is above 1
+/// ([`crate::ingest::LogIdentity::untested_ulog_version`]): the refusal without
+/// `--allow-untested-version`, and the warning with it.
+pub fn untested_ulog_version_messages(log: &str, version: u8) -> (String, String) {
+    let what = format!(
+        "ULog file format version {version}, and sfr is tested on versions 0 and 1 only (the ULog \
+         specification gives the current file format version as 1)"
+    );
+    (
+        format!(
+            "log {log}: {what}; nothing written. To seal it anyway, add --allow-untested-version: \
+             the record and its report will say so"
+        ),
+        format!(
+            "sfr: warning: log {log}: {what}; read as version 1 and sealed under \
+             --allow-untested-version"
         ),
     )
 }
@@ -422,11 +448,17 @@ pub fn seal(
     let public = signer.public_key();
     let fp = fingerprint(crypto, &public);
     let tool = this_tool();
+    // A log with an untested ULog file format version is sealed only with the flag, and the
+    // record states it (SPEC B1.4).
+    if params.allow_untested_ulog_version != ing.identity.untested_ulog_version() {
+        return Err(SealError(format!(
+            "seal.allow_untested_ulog_version is {} for a log of ULog file format version {}; nothing was written",
+            params.allow_untested_ulog_version, ing.identity.ulog_version
+        )));
+    }
+    let schema = schema_for(&ing.identity);
     let mut record = BTreeMap::new();
-    record.insert(
-        "schema_version".to_string(),
-        Value::Int(i64::from(SCHEMA_VERSION)),
-    );
+    record.insert("schema_version".to_string(), Value::Int(i64::from(schema)));
     record.insert(
         "tool".to_string(),
         Obj::new()
@@ -435,9 +467,16 @@ pub fn seal(
             .field("build_commit", Value::str(tool.build_commit))
             .build(),
     );
+    let mut seal_obj = Obj::new();
+    if schema == SCHEMA_VERSION_5 {
+        seal_obj.set(
+            "allow_untested_ulog_version",
+            Value::Bool(params.allow_untested_ulog_version),
+        );
+    }
     record.insert(
         "seal".to_string(),
-        Obj::new()
+        seal_obj
             .field("time_utc", Value::str(params.time_utc.clone()))
             .field(
                 "allow_untested_version",
@@ -493,7 +532,7 @@ pub fn seal(
     record.insert("status".to_string(), Value::str(eval.status.as_str()));
 
     let (root, shape) = merkle_root(crypto, &record).map_err(SealError)?;
-    let payload = signed_payload(SCHEMA_VERSION, &shape, &root);
+    let payload = signed_payload(schema, &shape, &root);
     let signature = signer
         .sign(&payload)
         .map_err(|e| SealError(format!("signing failed: {e}")))?;

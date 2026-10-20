@@ -11,7 +11,7 @@ sfr: log flight.ulg: the number of events exceeds the input limit of 100000 even
 sfr: rules file rules.toml: line 3: `required_topics` exceeds the input limit of 256 entries (SPEC B1.4)
 ```
 
-A message for a name, version or length rule ends with a parenthesis that states the rule and cites SPEC B1.4, for example `unsupported ULog file format version 2 (versions 0 and 1 are read; SPEC B1.4)`. `seal` names the byte offset (log) or line (rules file, baseline) where it met the limit. It names only the file for two counts (parameters at log start, events), the file sizes and TOML dotted-key depth. `verify` reports a limit in the record or in the `--ulog` log as its first mismatch (`FAILED: ...`); a public key over its limit exits 4.
+A message for a name, version or length rule ends with a parenthesis that states the rule and cites SPEC B1.4, for example `` `P!` is not a parameter name (1 to 16 letters, digits, `_`; SPEC B1.4) ``. `seal` names the byte offset (log) or line (rules file, baseline) where it met the limit. It names only the file for two counts (parameters at log start, events), the file sizes and TOML dotted-key depth. `verify` reports a limit in the record or in the `--ulog` log as its first mismatch (`FAILED: ...`); a public key over its limit exits 4.
 
 | Command | Input | Exit code |
 |---|---|---|
@@ -24,7 +24,7 @@ A message for a name, version or length rule ends with a parenthesis that states
 
 | Limit | Value | Why | Enforced in |
 |---|---|---|---|
-| ULog file format version | 0 or 1 | Later versions may change the layout. | `ulog.rs` `read` |
+| ULog file format version | any, read as version 1; above 1 only with `seal --allow-untested-version`, which the record and report state | The ULog specification gives the current version as 1 and asks parsers to read later ones; a later version may change the layout, and `sfr` is tested on versions 0 and 1. | `seal.rs` `untested_ulog_version_messages`, `main.rs` `seal_cmd` |
 | Format nesting | 8 levels below a subscribed format | Bounds the recursion of flattening. | `ulog.rs` `MAX_NESTING` |
 | One flattened format | 65,535 bytes, 65,535 fields | A record's length field is 16 bits. Every field is at least one byte, so the byte limit is reached first. | `ulog.rs` `MAX_LAYOUT_SIZE` |
 | Array length | 1 to 65,535 | The same 16-bit bound; a zero-length array has no meaning. | `ulog.rs` `parse_type` |

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """T4 Verify with no trusted key must print NOT CHECKED and exit non-zero. T5 Versions and formats: the PX4 range,
---allow-untested-version, malformed and damaged logs, ArduPilot and MAVLink files. Needs the key T2 made."""
+--allow-untested-version, malformed and damaged logs (a log that ends in the middle of a record is sealed, stating
+where), ArduPilot and MAVLink files. Needs the key T2 made."""
 import os, shutil, struct, subprocess, json, random, sys
 R=os.environ["A_REPO"]; SFR=os.environ["A_SFR"]; AW=os.environ["A_WORK"]; W=AW+"/t04_05"; shutil.rmtree(W, ignore_errors=True); os.makedirs(W)
 KEY=AW+"/t02/key"
@@ -63,6 +64,8 @@ cases={
  "corrupted tail: garbage appended": vt+bytes(random.randrange(256) for _ in range(300)),
  "corrupted middle: 64 bytes of 0xFF in the data section": vt[:200000]+b"\xff"*64+vt[200064:],
 }
+# The cases that end in the middle of a record, and the offset of that record.
+ENDS_MID_RECORD={"corrupted tail: cut mid-message": 181699, "corrupted tail: garbage appended": len(vt)}
 def mavlink_tlog():
     # .tlog: 8-byte big-endian microsecond timestamp, then a MAVLink 2 frame (HEARTBEAT, id 0), repeated
     pay=struct.pack("<IBBBBB",0,2,3,81,4,3)
@@ -86,6 +89,20 @@ for name,data in cases.items():
     show(f"T5 {name}",["sfr","seal","<file>","..."],rc,out,3,verdict)
     if "corrupted tail: last 100" in name or "corrupted middle" in name:
         print("  OBSERVATION: sealed without a warning; the seal covers the bytes as they are (damage inside well-formed records is not detectable at seal time)")
+    elif name in ENDS_MID_RECORD:
+        # The ULog specification asks a parser to handle a log that ends in the middle of a message
+        # and discard the unfinished one. Appended garbage whose first bytes declare a record longer
+        # than the rest of the file reads the same way.
+        offset=ENDS_MID_RECORD[name]; trailing=len(data)-offset
+        line=f"log ended mid-record at byte {offset}; {trailing} trailing bytes not parsed"
+        recs=[f for f in os.listdir(d+"/out") if f.endswith(".sfr")] if wrote else []
+        r=open(d+"/out/"+recs[0]).read() if recs else ""
+        stated=f'"truncated":{{"offset":"{offset}","trailing_bytes":"{trailing}"}}' in r and '"schema_version":5' in r
+        inrep=bool(recs) and line in open(d+"/out/"+recs[0]+".md").read()
+        rc2,out2=run([SFR,"verify",d+"/out/"+recs[0],"--pubkey",KEY+"/sfr.pub","--allow-evaluation-key","--ulog",p]) if recs else (None,"")
+        print(f"  => {line}: in the signed record {stated}; in the report {inrep}; verify --ulog exit {rc2}")
+        expect(not crash and rc in (0,1,2) and stated and inrep and rc2==0 and "Integrity: VERIFIED (record and log)" in out2,
+               f"{name}: sealed, the record and report state where it ends, and it verifies against the file")
     else:
         expect(not crash and rc in (3,4) and not wrote, f"{name}: clear refusal (exit {rc}), nothing written, no crash")
 

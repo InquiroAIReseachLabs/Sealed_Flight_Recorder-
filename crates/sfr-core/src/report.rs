@@ -29,6 +29,47 @@ pub const REPORT_EXTENSION: &str = "sfr.md";
 pub const UNTESTED_VERSION_LINE: &str = "**Untested PX4 version.** Sealed with `--allow-untested-version`: \
 sfr is tested on PX4 v1.14 to v1.17 logs only, and this log's version is outside them or could not be read.";
 
+/// The report line of a record whose log has a ULog file format version above 1, sealed with
+/// `--allow-untested-version` (`seal.allow_untested_ulog_version`, schema 5), for that version.
+pub fn untested_ulog_version_line(version: &str) -> String {
+    format!(
+        "**Untested ULog file version.** Sealed with `--allow-untested-version`: this log's ULog \
+         file format version is {version}, and sfr is tested on versions 0 and 1 only (the ULog \
+         specification gives the current file format version as 1). It was read as version 1."
+    )
+}
+
+/// The report line of a record whose log ends in the middle of a record (`log.truncated`,
+/// schema 5): [`crate::ulog::Truncation::line`] and what it means for the seal and the rules.
+pub fn truncated_line(t: &crate::ulog::Truncation) -> String {
+    format!(
+        "**Log ended mid-record.** {}. The digests and size cover every byte of the file; the \
+         rules read only the complete records before byte {}, and the unfinished record is \
+         discarded, as the ULog specification asks of a parser.",
+        t.line(),
+        t.offset
+    )
+}
+
+/// [`truncated_line`] from a record's `log.truncated`, when it is not null.
+fn truncated_line_of(log: &Obj) -> Result<Option<String>, ReportError> {
+    match log.get("truncated") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(t)) => {
+            let n = |k: &str| -> Result<u64, ReportError> {
+                s(t, k, "log.truncated")?
+                    .parse()
+                    .map_err(|_| ReportError(format!("log.truncated.{k}")))
+            };
+            Ok(Some(truncated_line(&crate::ulog::Truncation {
+                offset: n("offset")?,
+                trailing_bytes: n("trailing_bytes")?,
+            })))
+        }
+        Some(_) => Err(ReportError("log.truncated".into())),
+    }
+}
+
 /// The report line of a record sealed with `--allow-ignore-all` (`seal.allow_ignore_all`).
 pub const IGNORE_ALL_LINE: &str = "**R3 ignores every parameter.** Sealed with `--allow-ignore-all`: \
 an ignore pattern in the rules file matches every parameter name, so R3 compared none.";
@@ -350,8 +391,23 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         out.push_str(UNTESTED_VERSION_LINE);
         out.push_str("\n\n");
     }
+    // Schema 5: a ULog file format version above 1, sealed with the flag.
+    if seal.get("allow_untested_ulog_version") == Some(&Value::Bool(true)) {
+        out.push_str(&untested_ulog_version_line(&escape(&s(
+            log,
+            "ulog_version",
+            "log",
+        )?)));
+        out.push_str("\n\n");
+    }
     if seal.get("allow_ignore_all") == Some(&Value::Bool(true)) {
         out.push_str(IGNORE_ALL_LINE);
+        out.push_str("\n\n");
+    }
+    // Schema 5: a log that ends in the middle of a record.
+    if let Some(line) = truncated_line_of(log)? {
+        // Digits and fixed text only: nothing from the log to escape.
+        out.push_str(&line);
         out.push_str("\n\n");
     }
     if let Some(line) = skipped_line_of(log)? {

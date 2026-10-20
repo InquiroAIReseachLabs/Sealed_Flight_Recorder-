@@ -55,11 +55,18 @@ pub const RECORD_EXTENSION: &str = "sfr";
 /// beside the new form. Schema 4 adds the WARN result status, the overall statuses WARN and
 /// NO ARMED FLIGHT, `log.vehicle_status_instances`, `log.skipped`, `baseline.sha256` and
 /// `seal.allow_ignore_all`; a schema 3 record is refused, as its results were computed under
-/// rules that read less of the log.
+/// rules that read less of the log. Schema 5 ([`SCHEMA_VERSION_5`]) is schema 4 plus
+/// `log.truncated`, `log.ulog_version` and `seal.allow_untested_ulog_version`; `seal` writes it
+/// only for a log that ends in the middle of a record or has a ULog file format version above 1,
+/// and schema 4, byte for byte as before, for every other log.
 pub const SCHEMA_VERSION: u32 = 4;
 
+/// The schema `seal` writes for a log that ends in the middle of a record or whose ULog file
+/// format version is above 1 (SPEC B1.7): what a schema 4 record cannot state.
+pub const SCHEMA_VERSION_5: u32 = 5;
+
 /// The schema versions `verify` accepts.
-pub const KNOWN_SCHEMA_VERSIONS: [u32; 1] = [4];
+pub const KNOWN_SCHEMA_VERSIONS: [u32; 2] = [4, 5];
 
 /// The PX4 versions `sfr` is tested on, as (major, minor) series, inclusive: v1.14 to v1.17.
 /// `seal` refuses a log outside them, or one whose version it cannot read, unless given
@@ -94,9 +101,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_version_is_four_and_only_four_verifies() {
+    fn schema_versions_four_and_five_verify() {
         assert_eq!(SCHEMA_VERSION, 4, "SPEC B1.7: schema 4");
-        assert_eq!(KNOWN_SCHEMA_VERSIONS, [4]);
+        assert_eq!(SCHEMA_VERSION_5, 5, "SPEC B1.7: schema 5");
+        assert_eq!(KNOWN_SCHEMA_VERSIONS, [4, 5]);
     }
 
     #[test]

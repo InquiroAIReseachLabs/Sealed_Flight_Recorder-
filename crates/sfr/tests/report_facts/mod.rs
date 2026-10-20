@@ -340,9 +340,29 @@ pub fn check(record: &Value, md: &str) {
         l.expect(sfr_core::report::UNTESTED_VERSION_LINE);
         l.expect("");
     }
+    // Schema 5: the untested ULog file version line exactly when the record says the flag was
+    // given for it, naming the version the record states.
+    if seal.get("allow_untested_ulog_version") == Some(&Value::Bool(true)) {
+        let v = match log.get("ulog_version") {
+            Some(Value::Int(v)) => *v,
+            other => panic!("log.ulog_version: {other:?}"),
+        };
+        l.expect(&format!(
+            "**Untested ULog file version.** Sealed with `--allow-untested-version`: this log's ULog file format version is {v}, and sfr is tested on versions 0 and 1 only (the ULog specification gives the current file format version as 1). It was read as version 1."
+        ));
+        l.expect("");
+    }
     // Schema 4: the ignore-everything line exactly when the record says the flag was given.
     if seal.get("allow_ignore_all") == Some(&Value::Bool(true)) {
         l.expect(sfr_core::report::IGNORE_ALL_LINE);
+        l.expect("");
+    }
+    // Schema 5: where a log that ends in the middle of a record stops, when it does.
+    if let Some(Value::Object(t)) = log.get("truncated") {
+        let (offset, trailing) = (plain(f(t, "offset")), plain(f(t, "trailing_bytes")));
+        l.expect(&format!(
+            "**Log ended mid-record.** log ended mid-record at byte {offset}; {trailing} trailing bytes not parsed. The digests and size cover every byte of the file; the rules read only the complete records before byte {offset}, and the unfinished record is discarded, as the ULog specification asks of a parser."
+        ));
         l.expect("");
     }
     // Schema 4: what the reader skipped, when it skipped anything.

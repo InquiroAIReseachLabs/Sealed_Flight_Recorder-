@@ -382,13 +382,97 @@ pub fn claimed_key_fingerprint(bytes: &[u8]) -> Option<String> {
 }
 
 /// What a verifier says about a schema version it does not know.
-const KNOWN_SCHEMAS: &str = "this verifier knows schema 4 only (schema 1 and 2 records do not sign the shape of the tree or bind each leaf to its section, and schema 3 results were computed by rules that read less of the log; seal the log again with this version of sfr)";
+const KNOWN_SCHEMAS: &str = "this verifier knows schemas 4 and 5 only (schema 1 and 2 records do not sign the shape of the tree or bind each leaf to its section, and schema 3 results were computed by rules that read less of the log; seal the log again with this version of sfr)";
 
 /// The schema version, if it is one this verifier knows (`crate::KNOWN_SCHEMA_VERSIONS`).
 fn known_schema(v: i64) -> Option<u32> {
     u32::try_from(v)
         .ok()
         .filter(|v| crate::KNOWN_SCHEMA_VERSIONS.contains(v))
+}
+
+/// The members schema 5 adds (SPEC B1.7): `log.truncated`, `log.ulog_version` and
+/// `seal.allow_untested_ulog_version`. A schema 4 record has none of them. A schema 5 record has
+/// all three, consistent with each other and with `log.size`, and is written only for a log that
+/// ends in the middle of a record or has a ULog file format version above 1, so each log has one
+/// record form.
+fn schema_5_members(schema: u32, seal: &Map, log: &Map) -> Result<(), Mismatch> {
+    let added = [
+        (
+            "seal",
+            "allow_untested_ulog_version",
+            seal.get("allow_untested_ulog_version"),
+        ),
+        ("log", "truncated", log.get("truncated")),
+        ("log", "ulog_version", log.get("ulog_version")),
+    ];
+    if schema != crate::SCHEMA_VERSION_5 {
+        if let Some((section, k, _)) = added.iter().find(|(_, _, v)| v.is_some()) {
+            return Err(fail(format!(
+                "`{section}.{k}` is not a schema {schema} member (schema 5 adds it)"
+            )));
+        }
+        return Ok(());
+    }
+    let allow = match seal.get("allow_untested_ulog_version") {
+        Some(Value::Bool(b)) => *b,
+        _ => {
+            return Err(fail(
+                "`seal.allow_untested_ulog_version` must be true or false",
+            ));
+        }
+    };
+    let version = match log.get("ulog_version") {
+        Some(Value::Int(v)) if (0..=255).contains(v) => *v,
+        _ => return Err(fail("`log.ulog_version` must be an integer from 0 to 255")),
+    };
+    if allow != (version > 1) {
+        return Err(fail(format!(
+            "seal.allow_untested_ulog_version is {allow} but log.ulog_version is {version}"
+        )));
+    }
+    let decimal = |m: &Map, k: &str| -> Option<u64> {
+        match m.get(k) {
+            Some(Value::Str(s))
+                if !s.is_empty()
+                    && s.bytes().all(|b| b.is_ascii_digit())
+                    && (s == "0" || !s.starts_with('0')) =>
+            {
+                s.parse().ok()
+            }
+            _ => None,
+        }
+    };
+    let truncated = match log.get("truncated") {
+        Some(Value::Null) => false,
+        Some(Value::Object(t)) => {
+            let ok = t
+                .keys()
+                .map(String::as_str)
+                .eq(["offset", "trailing_bytes"]);
+            let (offset, trailing, size) = (
+                decimal(t, "offset"),
+                decimal(t, "trailing_bytes"),
+                decimal(log, "size"),
+            );
+            match (ok, offset, trailing, size) {
+                (true, Some(o), Some(k), Some(n)) if k > 0 && o.checked_add(k) == Some(n) => {}
+                _ => {
+                    return Err(fail(
+                        "`log.truncated` must be null, or offset and trailing_bytes as decimal strings, trailing_bytes above 0, adding up to log.size",
+                    ));
+                }
+            }
+            true
+        }
+        _ => return Err(fail("`log.truncated` is missing or not null or an object")),
+    };
+    if !truncated && version <= 1 {
+        return Err(fail(
+            "a schema 5 record is for a log that ends in the middle of a record or has a ULog file format version above 1; this one states neither (seal writes schema 4 for it)",
+        ));
+    }
+    Ok(())
 }
 
 /// The sort key of a rule id: its letter, then its number (`R2` < `R10` < `X1`).
@@ -835,6 +919,8 @@ fn standalone(
     if !matches!(seal.get("allow_untested_version"), Some(Value::Bool(_))) {
         return Err(fail("`seal.allow_untested_version` must be true or false"));
     }
+    // log.truncated, log.ulog_version and seal.allow_untested_ulog_version: schema 5 only.
+    schema_5_members(schema, seal, log_member)?;
     let ignore_all = match seal.get("allow_ignore_all") {
         Some(Value::Bool(b)) => *b,
         _ => return Err(fail("`seal.allow_ignore_all` must be true or false")),
@@ -1104,7 +1190,14 @@ fn compare(record: &Map, derived: &Map) -> Vec<String> {
             break;
         }
     }
-    for k in ["firmware", "vehicle", "vehicle_status_instances", "skipped"] {
+    for k in [
+        "firmware",
+        "vehicle",
+        "vehicle_status_instances",
+        "skipped",
+        "truncated",
+        "ulog_version",
+    ] {
         if rl.get(k) != dl.get(k) {
             out.push(format!(
                 "log {k}: sealed {}, found {}",
@@ -1258,6 +1351,7 @@ mod tests {
             signer_certificate: None,
             certificate_chain: Vec::new(),
             allow_untested_version: false,
+            allow_untested_ulog_version: false,
             allow_ignore_all: false,
         };
         let sealed = seal(&ing, &eval, &rules, &baseline, &params, &TestBackend, &key).unwrap();
@@ -1394,6 +1488,7 @@ mod tests {
             signer_certificate: None,
             certificate_chain: Vec::new(),
             allow_untested_version: false,
+            allow_untested_ulog_version: false,
             allow_ignore_all: false,
         };
         let sealed = seal(&ing, &eval, &rules, &baseline, &params, &TestBackend, &key).unwrap();

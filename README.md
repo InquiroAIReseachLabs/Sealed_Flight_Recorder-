@@ -14,6 +14,8 @@ This repository is the only way to get `sfr` today: build it from source (below)
 - **The seal time is a claim.** It is the sealing machine's clock, or `--seal-time`. It is signed, but nothing checks it. With `--trust-anchor`, certificates are judged at the verifier's clock (or `--at <RFC3339>`; a past time needs `--allow-past-at`, and the output then says first that the record verified as of that time and whether the certificate is valid now), and a claimed seal time more than 5 minutes after that time fails.
 - **Evaluation keys are refused unless allowed.** A record with custody `file-evaluation` (the keys in the examples below) prints `Integrity: REFUSED` and exits 1 although its signature is good. `--allow-evaluation-key` accepts it, and the EVALUATION KEY banner stays.
 - **PX4 versions.** Tested on logs from PX4 v1.14.4 and v1.17.0 (`testdata/sitl/`); v1.15 and v1.16 are decoded from the PX4 message definitions but have no test log. `seal` refuses a log outside v1.14 to v1.17, or one whose version it cannot read, unless given `--allow-untested-version`, which is recorded in the signed record and the report.
+- **ULog file format version.** The ULog specification (`docs/en/dev_log/ulog_file_format.md` in PX4-Autopilot) gives the current version as 1 (line 65) and asks parsers to read later versions too (line 475). `sfr` reads them as version 1 but is tested on versions 0 and 1 only: `seal` refuses a log of a version above 1 unless given `--allow-untested-version`, and then the signed record and the report say `Untested ULog file version`. [docs/VALIDATION.md](docs/VALIDATION.md#the-ulog-specification) names the tests.
+- **Logs that end in the middle of a record.** The same specification asks that a parser "correctly handle logs that end abruptly, in the middle of a message" and discard the unfinished one (lines 477 and 478). `seal` reads every complete record and seals the log; the signed record and the report say `log ended mid-record at byte N; K trailing bytes not parsed`, and the file's size and digests still cover every byte. The rules treat the missing tail as input that never arrived, so a log that ends armed fails R5. A log that ends before its first data record holds no flight and is refused, exit 3. [docs/RULES.md](docs/RULES.md#how-the-rules-read-the-log) says how each rule reads it.
 
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) lists the attacks that are and are not detected.
 
@@ -157,7 +159,7 @@ From `crates/sfr-core/src/lib.rs` (`exit_code`):
 | 0 | status PASS or WARN; record written | `Integrity: VERIFIED`, whatever the `Rule checks:` line says |
 | 1 | a rule FAIL, or no armed flight (status NO ARMED FLIGHT); the record is still written | `Integrity: FAILED` (record, log or certificate chain does not check, or an input limit is exceeded) or `Integrity: REFUSED` (good signature, but an evaluation key without `--allow-evaluation-key`, or custody `--require-hardware-key` does not accept) |
 | 2 | a required topic or field is missing (R1 FAIL); the record is still written | not used |
-| 3 | the log, rules file or baseline is malformed, truncated, or over an input limit; nothing written | not used |
+| 3 | the log, rules file or baseline is malformed, truncated before the log's first data record, or over an input limit; nothing written | not used |
 | 4 | a usage, key or file error; nothing written | a usage, key or file error, or no trust source given (`Integrity: NOT CHECKED`) |
 
 `sfr keygen` and `sfr --version` exit 0 or 4.

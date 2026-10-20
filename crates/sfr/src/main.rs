@@ -571,6 +571,9 @@ fn table(
     }
     out.push('\n');
     out.push_str(&format!("{:<10}{}\n", "events", ing.events.len()));
+    if let Some(t) = &id.truncated {
+        out.push_str(&format!("{:<10}{}\n", "cut", t.line()));
+    }
     if let Some(line) = sfr_core::report::skipped_line(&id.skipped) {
         out.push_str(&format!("{:<10}{line}\n", "skipped"));
     }
@@ -758,6 +761,27 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         }
         let _ = writeln!(io::stderr().lock(), "{}", terminal_safe(&warning));
     }
+    // The same flag covers a ULog file format version above 1: the specification gives the
+    // current version as 1, and sfr is tested on versions 0 and 1 only. The record says so
+    // (schema 5).
+    let untested_ulog = ing.identity.untested_ulog_version();
+    if untested_ulog {
+        let (refusal, warning) =
+            sfr_core::seal::untested_ulog_version_messages(&log, ing.identity.ulog_version);
+        if !a.flag("--allow-untested-version") {
+            return Err(fail(exit_code::USAGE, refusal));
+        }
+        let _ = writeln!(io::stderr().lock(), "{}", terminal_safe(&warning));
+    }
+    // ULog spec, "Requirements for Parsers": a log that ends in the middle of a message is read
+    // up to it and the unfinished message discarded. The record and its report say where.
+    if let Some(t) = &ing.identity.truncated {
+        let _ = writeln!(
+            io::stderr().lock(),
+            "{}",
+            terminal_safe(&format!("sfr: note: log {log}: {}", t.line()))
+        );
+    }
 
     let Some(key) = key else {
         let text = if a.flag("--json") {
@@ -795,6 +819,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         signer_certificate,
         certificate_chain,
         allow_untested_version: allow_untested,
+        allow_untested_ulog_version: untested_ulog,
         allow_ignore_all: rules.ignores_everything(),
     };
     let sealed = seal(

@@ -1,6 +1,6 @@
 # Record format (`.sfr`)
 
-This page specifies schema version 4 of the record `sfr seal` writes, in enough detail to write an independent verifier. SPEC B1.7 is the normative summary. The code is `crates/sfr-core/src/seal.rs` (fields, leaves, signed payload), `json.rs` (canonical JSON), `merkle.rs` (the tree), `keys.rs` (keys and fingerprint) and `verify.rs` (verification), all in `crates/sfr-core/src/`. The last section checks a golden record with `openssl`, `b3sum` and the Python standard library, without `sfr`.
+This page specifies schema versions 4 and 5 of the record `sfr seal` writes, in enough detail to write an independent verifier. SPEC B1.7 is the normative summary. The code is `crates/sfr-core/src/seal.rs` (fields, leaves, signed payload), `json.rs` (canonical JSON), `merkle.rs` (the tree), `keys.rs` (keys and fingerprint) and `verify.rs` (verification), all in `crates/sfr-core/src/`. The last section checks a golden record with `openssl`, `b3sum` and the Python standard library, without `sfr`.
 
 ## The file
 
@@ -42,7 +42,7 @@ A record holds exactly these thirteen fields (`RECORD_FIELDS` in `crates/sfr-cor
 | `merkle` | object | `algorithm`, `leaf_count`, `root`, `sections` |
 | `results` | array | one result per rule, in rule-id order |
 | `rules` | object | the rules file: `sha256`, `text` |
-| `schema_version` | integer | `4`. Schemas 1 and 2 are not verified: their leaves are not bound to a section and the signature does not cover the tree's shape. Schema 3 is not verified: its results come from rules that read less of the log (one `vehicle_status` instance, field names without their types). Seal the log again |
+| `schema_version` | integer | `4`, or `5` for a log schema 4 cannot describe: one that ends in the middle of a record, or has a ULog file format version above 1 ([Schema 5](#schema-5)). `seal` writes schema 4 for every other log, byte for byte as before. Schemas 1 and 2 are not verified: their leaves are not bound to a section and the signature does not cover the tree's shape. Schema 3 is not verified: its results come from rules that read less of the log (one `vehicle_status` instance, field names without their types). Seal the log again |
 | `seal` | object | who sealed, when, and how the key is held |
 | `sealed_topics` | array | one digest per instance of each sealed topic; empty without `[sealed_topics]` |
 | `signature` | object | `algorithm`, `value` |
@@ -58,6 +58,7 @@ A record holds exactly these thirteen fields (`RECORD_FIELDS` in `crates/sfr-cor
 | Member | Value |
 |---|---|
 | `allow_ignore_all` | `true` when the rules file has an ignore pattern that matches every parameter name (`*`), so R3 compared none, and `seal` was given `--allow-ignore-all`; else `false` |
+| `allow_untested_ulog_version` | schema 5 only: `true` when the log's ULog file format version is above 1 and `seal` was given `--allow-untested-version`; else `false`. It is `true` exactly when `log.ulog_version` is above 1 |
 | `allow_untested_version` | `true` when the log's PX4 version is outside v1.14 to v1.17, or unreadable, and `seal` was given `--allow-untested-version`; else `false` |
 | `certificate_chain` | `null`, or beside a signer certificate, the intermediate CA certificates given with `seal --chain`, nearest the signer first, each the padded standard base64 (RFC 4648) of its DER |
 | `crypto_crates` | array of `{"name": ..., "version": ...}`, sorted by name: `blake3`, `ed25519-dalek`, `sha2` (`RUSTCRYPTO_CRATES` in `crates/sfr-core/src/crypto.rs`) |
@@ -79,12 +80,18 @@ A record holds exactly these thirteen fields (`RECORD_FIELDS` in `crates/sfr-cor
 | `file_name` | the file name, without directories |
 | `firmware` | `git`: the `ver_sw` info message, or null; `ver_sw_release`: that info message as `0x` and eight lowercase hex digits, or null; `version`: `major.minor.patch` with a `-rc`, `-beta`, `-alpha` or `-dev` suffix from its last byte (`version_string` in `crates/sfr-core/src/ingest.rs`), or null |
 | `sha256` | lowercase hex SHA-256 of the whole file |
-| `size` | length in bytes, a decimal string |
+| `size` | length in bytes, a decimal string: every byte of the file, also when it ends in the middle of a record |
+| `truncated` | schema 5 only: `null`, or for a log that ends in the middle of a record, `{"offset": ..., "trailing_bytes": ...}`: the byte offset of the unfinished record and the bytes from there to the end of the file, decimal strings; `trailing_bytes` is above 0 and the two add up to `size` |
+| `ulog_version` | schema 5 only: the ULog file format version, byte 7 of the file header, an integer from 0 to 255 |
 | `skipped` | what the reader skipped: `unknown_records` (records of a type it does not know), `orphan_data_records` (data records for a message id with no subscription), `regions` (regions skipped to reach an appended-data offset, a record crossing the offset dropped) and `region_bytes` (their bytes, a decimal string); the report says `sealed with N skipped messages` when any count is above 0 |
 | `vehicle_status_instances` | the number of `vehicle_status` instances with data records; the rules read every one |
 | `vehicle` | `system_type` (MAVLink `MAV_TYPE`, integer) and `is_vtol` (boolean) from the first `vehicle_status` sample, each null when absent; `vtol_type`: null for a vehicle that is not VTOL, else `{"name": ..., "value": ...}` from parameter `VT_TYPE` (`tailsitter` for 0, `tiltrotor` for 1, `standard` for 2, `unknown(<n>)` otherwise, and `unknown` with value null without an int32 `VT_TYPE`) |
 
 A vehicle counts as VTOL when `vehicle_status.is_vtol` is true on any sample, so `vtol_type` can be set while `is_vtol`, taken from the first sample, is false.
+
+#### Schema 5
+
+Schema 5 is schema 4 with three more members: `log.truncated`, `log.ulog_version` and `seal.allow_untested_ulog_version` (`schema_for` in `crates/sfr-core/src/record.rs`). `seal` writes it only for a log that ends in the middle of a record (`log.truncated` not null) or whose ULog file format version is above 1 (`seal.allow_untested_ulog_version` true). A schema 4 record holds none of the three members; a schema 5 record holds all three, and states at least one of those two facts. Nothing else differs: the leaves, the tree and the signed payload are built the same way, with `schema_version` 5 in the payload. The ULog specification asks a parser to handle both kinds of log; [VALIDATION.md](VALIDATION.md#the-ulog-specification) cites it and names the tests.
 
 ### `config`, `baseline`, `rules`, `results`, `status`
 
@@ -161,7 +168,7 @@ The signed payload is, byte for byte (`signed_payload` in `crates/sfr-core/src/s
 |---|---|
 | ASCII `SFR-RECORD-V1` | the domain separation prefix |
 | `0x00` | a separator |
-| `0x00 0x00 0x00 0x04` | `schema_version` as a 4-byte big-endian unsigned integer |
+| `0x00 0x00 0x00 0x04` (or `0x05`) | `schema_version` as a 4-byte big-endian unsigned integer |
 | 8 bytes | the tree size (`merkle.leaf_count`), big-endian unsigned |
 | 8 times 8 bytes | the number of leaves in each section, big-endian unsigned, in this order: seal context, `log`, `config`, `baseline`, `rules`, `results`, `sealed_topics`, `events` (the values of `merkle.sections`; the first five are always 1) |
 | the Merkle root | its raw bytes, not hex |
@@ -179,7 +186,7 @@ The signature is pure Ed25519 (RFC 8032, no prehash) over that payload, stored a
 `sfr verify --pubkey <sfr.pub>` (standalone) checks, in this order (`standalone` in `crates/sfr-core/src/verify.rs`):
 
 1. The size is at most `MAX_RECORD_BYTES`.
-2. `schema_version` is `4`. Any other value is rejected, never guessed at; `sfr` names an unknown version when the file parses within the value subset, even if not canonical, and otherwise reports the parse error.
+2. `schema_version` is `4` or `5`. Any other value is rejected, never guessed at; `sfr` names an unknown version when the file parses within the value subset, even if not canonical, and otherwise reports the parse error.
 3. The bytes are canonical, and the object holds exactly the thirteen fields.
 4. Every `results` element is an object whose `id` is a rule id, in strictly increasing order, with a `status` of `PASS`, `WARN`, `FAIL` or `N/A`; R1 to R7 each appear exactly once, and any other id is X1 to X5; every `sealed_topics` element is an object with a string `topic` and an integer `multi_id`, in strictly increasing order; event `i` has `seq` `i`.
 5. `merkle` holds exactly its four members, the algorithm is `sha256-rfc6962`, and `leaf_count`, `root` and `sections` equal the values recomputed from the leaves.
@@ -189,7 +196,7 @@ The signature is pure Ed25519 (RFC 8032, no prehash) over that payload, stored a
 9. `signature` holds exactly `algorithm` `ed25519` and `value`; `value` is 128 and `merkle.root` 64 lowercase hex digits; the signature over the payload, built from the recorded root and the leaf counts the arrays hold, verifies under the given key.
 10. `seal.key_custody` is one of the three values.
 11. `seal.crypto_crates` is an array of objects with string `name` and `version`, and `seal.time_utc` is a string.
-12. `seal.allow_untested_version` and `seal.allow_ignore_all` are booleans, and `seal.allow_ignore_all` is true exactly when the embedded rules file ignores every parameter.
+12. `seal.allow_untested_version` and `seal.allow_ignore_all` are booleans, and `seal.allow_ignore_all` is true exactly when the embedded rules file ignores every parameter. In schema 4, `log.truncated`, `log.ulog_version` and `seal.allow_untested_ulog_version` are absent. In schema 5 all three are present: `seal.allow_untested_ulog_version` is a boolean, true exactly when `log.ulog_version`, an integer from 0 to 255, is above 1; `log.truncated` is null, or holds exactly `offset` and `trailing_bytes`, decimal strings, `trailing_bytes` above 0, adding up to `log.size`; and the record states a cut or a version above 1 (`schema_5_members` in `crates/sfr-core/src/verify.rs`).
 13. `seal.signer_certificate` is null or base64, and `seal.certificate_chain` is null or, beside a signer certificate, a non-empty array of base64 strings.
 
 With `--trust-anchor` instead of `--pubkey`, step 9 uses the key in `seal.signer_certificate`, and once the record verifies:

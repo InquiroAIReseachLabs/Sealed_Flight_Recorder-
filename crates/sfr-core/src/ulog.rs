@@ -1,7 +1,11 @@
-//! Streaming PX4 ULog reader (file format versions 0 and 1), bounded and panic-free.
+//! Streaming PX4 ULog reader, bounded and panic-free.
 //!
 //! Design rules: every read is bounds-checked and errors
-//! carry the byte offset; a record whose size exceeds the bytes left is `Truncated`, never padded;
+//! carry the byte offset; a record whose size exceeds the bytes left is never padded: a log that
+//! ends inside a record is read up to that record, the unfinished record is discarded, and
+//! [`Summary::truncated`] says where (ULog spec, "Requirements for Parsers"); a file format
+//! version above 1 is read as version 1 and reported in [`Header::version`], and the caller
+//! decides whether to accept it;
 //! formats flatten lazily at subscription time with nesting depth at most 8 and a flattened size
 //! of at most 65,535 bytes; unknown incompatible flag bits are rejected; unknown message types
 //! are skipped by size; appended sections follow the flag-bits offsets, and a record that
@@ -412,7 +416,8 @@ pub enum Section {
 /// The 16-byte file header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Header {
-    /// File format version byte (0 or 1).
+    /// File format version byte. The specification gives the current version as 1; any other
+    /// value is read the same way.
     pub version: u8,
     /// Logging start timestamp, boot-time microseconds.
     pub timestamp: u64,
@@ -465,6 +470,28 @@ pub struct Summary {
     pub skipped_bytes: u64,
     /// Whether the flag bits announced appended data.
     pub data_appended: bool,
+    /// Set when the log ends inside a record: the records before it were read, the unfinished
+    /// one was discarded.
+    pub truncated: Option<Truncation>,
+}
+
+/// Where a log that ends inside a record stops being read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Truncation {
+    /// Byte offset of the unfinished record (its 3-byte header or its payload).
+    pub offset: u64,
+    /// Bytes from `offset` to the end of the file, none of them parsed (at least 1).
+    pub trailing_bytes: u64,
+}
+
+impl Truncation {
+    /// `log ended mid-record at byte N; K trailing bytes not parsed`.
+    pub fn line(&self) -> String {
+        format!(
+            "log ended mid-record at byte {}; {} trailing bytes not parsed",
+            self.offset, self.trailing_bytes
+        )
+    }
 }
 
 struct Src<R> {
@@ -853,6 +880,32 @@ fn skip_to_offset<R: Read>(
     Ok(())
 }
 
+/// The input ended inside the record at `start` (its header or payload), with the file ending at
+/// `end`. The ULog specification: "A parser must be able to correctly handle logs that end
+/// abruptly, in the middle of a message. The unfinished message should just be discarded." So
+/// this is not an error: the reader stops, and the summary says where. The exception is a log
+/// that announced appended data at an offset it never reached: its appended data is missing,
+/// which is refused as before.
+fn ended_mid_record(
+    summary: &mut Summary,
+    pending: &[u64],
+    start: u64,
+    end: u64,
+    what: &'static str,
+) -> Result<(), UlogError> {
+    if pending.first().is_some_and(|&off| off > start) {
+        return Err(UlogError::Truncated {
+            offset: start,
+            what,
+        });
+    }
+    summary.truncated = Some(Truncation {
+        offset: start,
+        trailing_bytes: end.saturating_sub(start),
+    });
+    Ok(())
+}
+
 /// Reads a whole ULog stream, calling `visitor` for each record in file order.
 pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, UlogError> {
     let mut src = Src {
@@ -883,15 +936,8 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
         version: hc.u8("version")?,
         timestamp: hc.u64("start timestamp")?,
     };
-    if header.version > 1 {
-        return Err(malformed(
-            7,
-            format!(
-                "unsupported ULog file format version {} (versions 0 and 1 are read; SPEC B1.4)",
-                header.version
-            ),
-        ));
-    }
+    // A version above 1 is read as version 1, as the specification asks of a parser ("Parse
+    // future/unknown file format versions as well"); `seal` refuses it unless told otherwise.
     visitor.header(&header);
 
     let mut summary = Summary::default();
@@ -924,10 +970,8 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
             Fill::Full => {}
             Fill::Eof => break,
             Fill::Partial => {
-                return Err(UlogError::Truncated {
-                    offset: start,
-                    what: "record header",
-                });
+                ended_mid_record(&mut summary, &pending, start, src.pos, "record header")?;
+                break;
             }
         }
         let [s0, s1, ty] = mh;
@@ -943,10 +987,8 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
         match src.fill(&mut body)? {
             Fill::Full => {}
             Fill::Eof | Fill::Partial => {
-                return Err(UlogError::Truncated {
-                    offset: start,
-                    what: record_name(ty),
-                });
+                ended_mid_record(&mut summary, &pending, start, src.pos, record_name(ty))?;
+                break;
             }
         }
         summary.records = summary.records.saturating_add(1);
@@ -1258,9 +1300,13 @@ pub(crate) mod tests {
         params: Vec<(String, String, Section, u64)>,
         data: Vec<(u16, u64, usize)>,
         subs: Vec<(u16, String, usize)>,
+        header: Option<Header>,
     }
 
     impl Visitor for Collect {
+        fn header(&mut self, header: &Header) {
+            self.header = Some(*header);
+        }
         fn parameter(&mut self, name: &str, value: ParamValue, section: Section, last: u64) {
             self.params
                 .push((name.into(), value.to_string(), section, last));
@@ -1318,18 +1364,78 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn every_truncation_is_an_error_never_a_panic() {
+    fn every_cut_is_read_up_to_the_unfinished_record_never_a_panic() {
         let full = sample().bytes;
+        // Record starts, to tell a cut at a boundary from a cut inside a record.
+        let mut starts = Vec::new();
+        let mut at = 16usize;
+        while at < full.len() {
+            starts.push(at);
+            at += 3 + usize::from(u16::from_le_bytes([full[at], full[at + 1]]));
+        }
+        let mut whole = Collect::default();
+        read(&full[..], &mut whole).unwrap();
         for cut in 0..full.len() {
-            let r = read(&full[..cut], &mut Collect::default());
-            // Cutting exactly at a record boundary is indistinguishable from a complete file.
-            if let Err(e) = r {
-                assert!(
-                    matches!(e, UlogError::Truncated { .. } | UlogError::NotUlog),
-                    "cut {cut}: {e}"
-                );
+            let mut v = Collect::default();
+            match read(&full[..cut], &mut v) {
+                // Only a cut inside the 16-byte file header is an error: there is no log yet.
+                Err(e) => {
+                    assert!(cut < 16, "cut {cut}: {e}");
+                    assert!(
+                        matches!(e, UlogError::Truncated { .. } | UlogError::NotUlog),
+                        "cut {cut}: {e}"
+                    );
+                }
+                Ok(s) => {
+                    assert!(cut >= 16, "cut {cut}");
+                    // The digests the caller computes cover every byte: the reader consumed all.
+                    assert_eq!(s.bytes, cut as u64, "cut {cut}");
+                    let last = starts
+                        .iter()
+                        .copied()
+                        .filter(|&o| o <= cut)
+                        .max()
+                        .unwrap_or(16);
+                    if starts.contains(&cut) {
+                        assert_eq!(s.truncated, None, "cut {cut} at a record boundary");
+                    } else {
+                        assert_eq!(
+                            s.truncated,
+                            Some(Truncation {
+                                offset: last as u64,
+                                trailing_bytes: (cut - last) as u64
+                            }),
+                            "cut {cut}"
+                        );
+                    }
+                    // The records read are the complete ones before the cut, in order.
+                    assert!(whole.data.starts_with(&v.data), "cut {cut}");
+                }
             }
         }
+    }
+
+    #[test]
+    fn a_cut_record_header_and_a_cut_payload_name_their_offset_and_tail() {
+        let full = sample().bytes;
+        let first = 16usize;
+        let size = usize::from(u16::from_le_bytes([full[first], full[first + 1]]));
+        let second = first + 3 + size;
+        // Two bytes of the second record's 3-byte header.
+        let s = read(&full[..second + 2], &mut Collect::default()).unwrap();
+        assert_eq!(
+            s.truncated.unwrap().line(),
+            format!("log ended mid-record at byte {second}; 2 trailing bytes not parsed")
+        );
+        // The first record's header and half its payload.
+        let s = read(&full[..first + 3 + size / 2], &mut Collect::default()).unwrap();
+        assert_eq!(
+            s.truncated,
+            Some(Truncation {
+                offset: first as u64,
+                trailing_bytes: (3 + size / 2) as u64
+            })
+        );
     }
 
     #[test]
@@ -1409,6 +1515,12 @@ pub(crate) mod tests {
         assert_eq!(b.bytes.len(), 59);
         let err = read(&b.bytes[..], &mut Collect::default()).expect_err("truncated");
         assert!(matches!(err, UlogError::Truncated { .. }), "{err}");
+        // The same with a record cut short before the offset: the appended data is missing,
+        // so this is refused, not read as a log that ends mid-record.
+        let mut cut = Builder::new(0).flags(&[70]).bytes;
+        cut.extend_from_slice(&[20, 0, b'D', 0]);
+        let err = read(&cut[..], &mut Collect::default()).expect_err("appended data missing");
+        assert!(matches!(err, UlogError::Truncated { .. }), "{err}");
         let b = Builder::new(0).flags(&[59]);
         read(&b.bytes[..], &mut Collect::default()).expect("offset at the end is fine");
     }
@@ -1445,18 +1557,17 @@ pub(crate) mod tests {
 
     #[test]
     fn version_parameter_name_and_array_length_limits_are_named() {
-        let mut b = sample().bytes;
-        b[7] = 2;
-        let e = read(&b[..], &mut Collect::default()).expect_err("version 2");
-        assert!(
-            e.to_string()
-                .contains("version 2 (versions 0 and 1 are read; SPEC B1.4)"),
-            "{e}"
-        );
-        for v in [0u8, 1] {
+        // Every file format version is read the same way; the header says which it was, and
+        // seal decides whether to accept it.
+        let mut whole = Collect::default();
+        read(&sample().bytes[..], &mut whole).unwrap();
+        for v in [0u8, 1, 2, 255] {
             let mut b = sample().bytes;
             b[7] = v;
-            read(&b[..], &mut Collect::default()).expect("versions 0 and 1");
+            let mut c = Collect::default();
+            read(&b[..], &mut c).expect("any version");
+            assert_eq!(c.data, whole.data, "version {v}");
+            assert_eq!(c.header.map(|h| h.version), Some(v));
         }
 
         let at = Builder::new(0).flags(&[]).param_f(&"P".repeat(16), 1.0);

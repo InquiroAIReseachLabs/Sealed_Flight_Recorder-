@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sfr_ref_verify.py: a reference verifier for Sealed Flight Record files, schema 4.
+"""sfr_ref_verify.py: a reference verifier for Sealed Flight Record files, schemas 4 and 5.
 
 It follows docs/RECORD_FORMAT.md and shares no code with sfr (it imports nothing from it); it is
 maintained in the same repository, so it checks the format as that document states it. It needs
@@ -13,7 +13,9 @@ What it checks (the standalone checks of RECORD_FORMAT.md, "What a verifier chec
     floating-point number, NaN or infinity, integers within +-(2^53 - 1) and never -0, no
     unpaired surrogate, nesting at most 64 levels;
   - the bytes are exactly their RFC 8785 canonical form;
-  - schema_version 4, exactly the thirteen top-level fields, the member types;
+  - schema_version 4 or 5, exactly the thirteen top-level fields, the member types; the members
+    schema 5 adds (log.truncated, log.ulog_version, seal.allow_untested_ulog_version) only in
+    schema 5, all three there, consistent with each other and with log.size;
   - results: R1 to R7 exactly once each, other ids only X1 to X5, strictly increasing rule-id
     order, every status PASS, WARN, FAIL or N/A; the overall status equals the one the results
     give; sealed topics and events in order;
@@ -392,8 +394,8 @@ def check(raw, pem):
     r = parse(raw)
     if not isinstance(r, dict):
         raise Bad("the record is not an object")
-    if r.get("schema_version") != 4 or isinstance(r.get("schema_version"), bool):
-        raise Bad("unknown schema_version %s; this verifier knows schema 4 only"
+    if r.get("schema_version") not in (4, 5) or isinstance(r.get("schema_version"), bool):
+        raise Bad("unknown schema_version %s; this verifier knows schemas 4 and 5 only"
                   % jcs(r.get("schema_version")) if "schema_version" in r else "no schema_version")
     if jcs(r).encode("utf-8") != raw:
         raise Bad("the record is not in canonical form (RFC 8785)")
@@ -449,6 +451,7 @@ def check(raw, pem):
     for k in ("allow_untested_version", "allow_ignore_all"):
         if not isinstance(seal.get(k), bool):
             raise Bad("seal.%s must be a boolean" % k)
+    schema_5_members(r["schema_version"], seal, r["log"])
     try:
         ignore = tomllib.loads(rules["text"]).get("parameters", {}).get("ignore", [])
     except tomllib.TOMLDecodeError:
@@ -481,9 +484,53 @@ def check(raw, pem):
     if set(sig) != {"algorithm", "value"} or sig["algorithm"] != "ed25519" \
             or not (string(sig["value"]) and re.fullmatch(r"[0-9a-f]{128}", sig["value"])):
         raise Bad("signature must hold exactly algorithm ed25519 and 128 lowercase hex digits")
-    if not ed25519_verify(public, signed_payload(4, sections, root), bytes.fromhex(sig["value"])):
+    if not ed25519_verify(public, signed_payload(r["schema_version"], sections, root),
+                          bytes.fromhex(sig["value"])):
         raise Bad("signature does not verify")
     return None
+
+
+def decimal(v):
+    """The value of a decimal string with no sign and no leading zero, else None."""
+    if isinstance(v, str) and re.fullmatch(r"0|[1-9][0-9]*", v):
+        return int(v)
+    return None
+
+
+def schema_5_members(schema, seal, log):
+    """RECORD_FORMAT.md, schema 5: log.truncated, log.ulog_version and
+    seal.allow_untested_ulog_version appear in schema 5 only, all three, and a schema 5 record is
+    for a log that ends in the middle of a record or has a ULog file format version above 1."""
+    added = [("seal", "allow_untested_ulog_version", seal), ("log", "truncated", log),
+             ("log", "ulog_version", log)]
+    if schema != 5:
+        for section, k, m in added:
+            if k in m:
+                raise Bad("%s.%s is not a schema %d member (schema 5 adds it)" % (section, k, schema))
+        return
+    allow = seal.get("allow_untested_ulog_version")
+    if not isinstance(allow, bool):
+        raise Bad("seal.allow_untested_ulog_version must be a boolean")
+    version = log.get("ulog_version")
+    if type(version) is not int or not 0 <= version <= 255:
+        raise Bad("log.ulog_version must be an integer from 0 to 255")
+    if allow != (version > 1):
+        raise Bad("seal.allow_untested_ulog_version is %s but log.ulog_version is %d"
+                  % (jcs(allow), version))
+    if "truncated" not in log:
+        raise Bad("log.truncated is missing")
+    t = log["truncated"]
+    if t is not None:
+        ok = isinstance(t, dict) and set(t) == {"offset", "trailing_bytes"}
+        offset = decimal(t.get("offset")) if ok else None
+        trailing = decimal(t.get("trailing_bytes")) if ok else None
+        size = decimal(log.get("size"))
+        if None in (offset, trailing, size) or trailing == 0 or offset + trailing != size:
+            raise Bad("log.truncated must be null, or offset and trailing_bytes as decimal strings, "
+                      "trailing_bytes above 0, adding up to log.size")
+    elif version <= 1:
+        raise Bad("a schema 5 record states neither a log that ends in the middle of a record "
+                  "nor a ULog file format version above 1")
 
 
 def verify(raw, pem):

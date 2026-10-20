@@ -13,6 +13,11 @@ define, custom_detection, with a nested type (detection_box), in three instances
 with five messages, instance 1 with two, and instance 2 subscribed with none. A rules file that
 lists it in [sealed_topics] seals it without knowing its structure.
 
+cut_control.ulg, cut_mid_message.ulg, cut_mid_header.ulg, cut_after_arm.ulg: a complete
+multicopter flight and three copies of it that end in the middle of a record (cut_logs()).
+
+ulog_version_2.ulg: the same complete flight with ULog file format version 2 in the header.
+
 usage: make_synthetic_logs.py <out dir>
 """
 import os
@@ -119,12 +124,73 @@ def custom_detection():
     return out
 
 
+def mc_flight(version=1):
+    """A complete multicopter flight: eight seconds, armed from 2 s through 6 s, disarmed at 7 s.
+
+    Returns the bytes and the byte offset of every data record, in file order, as
+    (offset, topic, boot_us) with topic "failsafe_flags" or "vehicle_status".
+    """
+    out = MAGIC + bytes([version]) + struct.pack("<Q", 0)
+    out += rec("B", bytes(16) + struct.pack("<QQQ", 0, 0, 0))
+    out += info("char[40] ver_sw", b"d6f12ad1c4f70ad3230afd7d86e971421e02fef4")
+    out += info("uint32_t ver_sw_release", struct.pack("<I", 0x011100FF))
+    out += rec("F", VS.encode()) + rec("F", FS.encode())
+    out += param_i("SYS_AUTOSTART", 10040) + param_i("COM_DISARM_LAND", 2)
+    out += rec("A", struct.pack("<BH", 0, 0) + b"vehicle_status")
+    out += rec("A", struct.pack("<BH", 0, 1) + b"failsafe_flags")
+    starts = []
+    s = 1_000_000
+    for i in range(1, 9):
+        ts = i * s
+        starts.append((len(out), "failsafe_flags", ts))
+        out += data(1, struct.pack("<QB", ts, 0))
+        starts.append((len(out), "vehicle_status", ts))
+        out += data(0, mc_vs(ts, 2 <= i <= 6))  # ARM at 2 s, DISARM at 7 s
+    return out, starts
+
+
+def cut_logs():
+    """The ULog specification, "Requirements for Parsers": "A parser must be able to correctly
+    handle logs that end abruptly, in the middle of a message. The unfinished message should just
+    be discarded." Three cuts of mc_flight(), and its control:
+
+    cut_control.ulg      the complete flight.
+    cut_mid_message.ulg  ends 7 bytes into the payload of the last vehicle_status record
+                         (boot_us 8000000), after the DISARM.
+    cut_mid_header.ulg   ends 2 bytes into the 3-byte header of that same record.
+    cut_after_arm.ulg    ends 7 bytes into the payload of the record right after the ARM sample
+                         (failsafe_flags at boot_us 3000000): the log ends armed.
+    """
+    whole, starts = mc_flight()
+    last_vs = [o for o, t, ts in starts if t == "vehicle_status" and ts == 8_000_000][0]
+    arm = [i for i, (o, t, ts) in enumerate(starts) if t == "vehicle_status" and ts == 2_000_000][0]
+    after_arm = starts[arm + 1][0]
+    return {
+        "cut_control.ulg": whole,
+        "cut_mid_message.ulg": whole[: last_vs + 3 + 7],
+        "cut_mid_header.ulg": whole[: last_vs + 2],
+        "cut_after_arm.ulg": whole[: after_arm + 3 + 7],
+    }
+
+
+def ulog_version_2():
+    """mc_flight() with file format version 2 in the header: the specification describes version
+    1, and asks a parser to "parse future/unknown file format versions as well (but it can print
+    a warning)". sfr seals it only with --allow-untested-version."""
+    return mc_flight(version=2)[0]
+
+
 def main():
     d = sys.argv[1]
     with open(os.path.join(d, "r4_quadchute_on_disarm.ulg"), "wb") as f:
         f.write(r4_quadchute_on_disarm())
     with open(os.path.join(d, "custom_detection.ulg"), "wb") as f:
         f.write(custom_detection())
+    for name, b in cut_logs().items():
+        with open(os.path.join(d, name), "wb") as f:
+            f.write(b)
+    with open(os.path.join(d, "ulog_version_2.ulg"), "wb") as f:
+        f.write(ulog_version_2())
 
 
 if __name__ == "__main__":
