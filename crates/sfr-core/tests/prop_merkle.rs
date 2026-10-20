@@ -453,7 +453,7 @@ proptest! {
     /// RECORD_FORMAT: a leaf's hash is over `0x00 || tag || bytes` and a node's over
     /// `0x01 || left || right` (65 bytes), and nothing else is hashed. The preimages the code
     /// hands to the backend are exactly the reference's: one per leaf, and one per interior node
-    /// (`n - 1`), whatever the hash function.
+    /// (`n - 1`). This checks what is hashed, not the hash function.
     #[test]
     fn the_tree_hashes_exactly_the_documented_preimages(
         tag in any::<u8>(),
@@ -510,7 +510,7 @@ proptest! {
 
 #[test]
 fn all_single_edits_of_small_trees_give_distinct_roots() {
-    // For counts 0 to 17 and 31 to 33 (the first five powers of two and their neighbours): the
+    // For counts 0 to 17 and 31 to 33 (the powers of two from 1 to 32 and their neighbours): the
     // tree, and every tree got from it by dropping a leaf, inserting a new leaf anywhere,
     // duplicating a leaf in place, duplicating the last leaf, swapping two leaves, or flipping
     // one bit of one leaf (every bit up to 17 leaves, the lowest and the highest bit of each
@@ -564,9 +564,9 @@ fn all_single_edits_of_small_trees_give_distinct_roots() {
 
 #[test]
 fn a_tree_of_equal_leaves_has_a_different_root_for_every_count() {
-    // The shape that duplicates an odd node gives [a, b, c] and [a, b, c, c] one root; this tree
-    // does not (RECORD_FORMAT: "nothing is duplicated"). With every leaf equal, the root is
-    // different for each count from 1 to 130.
+    // A tree that duplicated an odd node would hash [a, b, c] as it hashes [a, b, c, c]; this
+    // tree does not (RECORD_FORMAT: "nothing is duplicated"). With every leaf equal, the root is
+    // different for each count from 0 (no root) to 130.
     let leaf = vec![0xabu8; 5];
     let roots: HashSet<Option<Hash>> = (0..=130usize)
         .map(|n| tree_root(0x08, &vec![leaf.clone(); n]))
