@@ -51,11 +51,11 @@ The scripts are in [scripts/claims_audit/](../scripts/claims_audit/). Run alone,
 
 ## Results
 
-[receipts/claims-audit.txt](receipts/claims-audit.txt) holds the latest run: the commit, the machine, PASS or FAIL per test, the T1 cold-start time, what T4 and T5 observed, and the T12 table. Full logs are not committed.
+[receipts/claims-audit.txt](receipts/claims-audit.txt) holds the latest run: the commit, the machine, PASS or FAIL per test, the T1 cold-start time, what T4 and T5 observed, the T12a table and the T12b and T13 summaries. Full logs are not committed.
 
-The first run passed T1 to T10 and T12 and failed T11, which found internal wording in test comments and two docs. That wording is removed, and T11 now fails any change that adds it back.
+The latest run passed T1 to T13 on the commit it names. Two earlier runs failed: the first failed T11 on internal wording in test comments and two docs, since removed; the second failed T11 on a pull-request number in the commit subject the runner printed (it no longer prints it), and showed that T1 built the default branch instead of the audited commit, so every test of that run used the default branch's binary. T1 now checks out the audited commit and checks that it did.
 
-Two observations from that run:
+Two observations from these runs:
 
 - A damaged but well-formed log (the last bytes zeroed, or bytes overwritten in the data section) is sealed without a warning. The seal covers the bytes as they are; it does not say the log is complete. A log cut mid-message or with trailing garbage is refused.
 - If the host that serves the Rust installer is blocked, T1 fetches the same installer from `static.rust-lang.org` and notes the deviation.
