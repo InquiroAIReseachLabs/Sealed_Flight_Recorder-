@@ -2,10 +2,13 @@
 //!
 //! **Standalone:** the bytes must parse, carry a known `schema_version`, be exactly their own
 //! canonical form, hold exactly the record's fields, and their recomputed Merkle root, rules
-//! digest, overall status, key fingerprint and Ed25519 signature must all check.
-//! **Deep (with the log):** the log is re-read and re-analysed with the embedded rules and
-//! baseline; configuration, events, and results must be identical to the sealed ones, and the
-//! log digest must match. The first mismatch is named as precisely as the evidence allows: a
+//! digest, key fingerprint and Ed25519 signature must all check; the results must hold R1 to R7
+//! exactly once each, each with a known status, and the overall status must be the one computed
+//! from them.
+//! **Deep (with the log):** the log is re-read and the rules run again on it, with the rules file
+//! and baseline embedded in the record (whose digests the record states); configuration,
+//! events, results and the overall status must be identical to the sealed ones, and the log
+//! digest must match. The first mismatch is named as precisely as the evidence allows: a
 //! parameter with its sealed and found values, an event sequence number and field, a result
 //! and field, or "log digest mismatch".
 
@@ -436,6 +439,63 @@ struct Parsed {
 }
 
 /// Parses one member's bytes (small members only; events are never parsed standalone).
+/// The overall statuses a record may hold.
+pub const OVERALL_STATUSES: [&str; 4] = ["PASS", "WARN", "FAIL", "NO ARMED FLIGHT"];
+
+/// The optional rules a record may hold besides R1 to R7.
+pub const OPTIONAL_RULES: [&str; 5] = ["X1", "X2", "X3", "X4", "X5"];
+
+/// What is wrong with a record's `results` as a set: a result that is not an object, a status
+/// outside PASS, WARN, FAIL and N/A, an unknown rule id, a core rule missing or repeated.
+fn results_problems(results: &[Value]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    for (i, r) in results.iter().enumerate() {
+        let Value::Object(m) = r else {
+            out.push(format!("result {i} is not an object"));
+            continue;
+        };
+        let id = match m.get("id") {
+            Some(Value::Str(s)) => s.clone(),
+            _ => {
+                out.push(format!("result {i} has no string id"));
+                continue;
+            }
+        };
+        *seen.entry(id.clone()).or_insert(0) += 1;
+        if !crate::evaluate::CORE_RULES.contains(&id.as_str())
+            && !OPTIONAL_RULES.contains(&id.as_str())
+        {
+            out.push(format!("result {id} is not a rule sfr has"));
+        }
+        match m.get("status") {
+            Some(Value::Str(s)) if Status::parse(s).is_some() => {}
+            Some(other) => out.push(format!(
+                "result {id} has status {}, not PASS, WARN, FAIL or N/A",
+                canonical(other)
+            )),
+            None => out.push(format!("result {id} has no status")),
+        }
+    }
+    let missing: Vec<&str> = crate::evaluate::CORE_RULES
+        .iter()
+        .copied()
+        .filter(|id| !seen.contains_key(*id))
+        .collect();
+    if !missing.is_empty() {
+        out.push(format!(
+            "results lack {}: a record holds R1 to R7 exactly once each",
+            missing.join(", ")
+        ));
+    }
+    for (id, n) in &seen {
+        if *n > 1 {
+            out.push(format!("result {id} appears {n} times"));
+        }
+    }
+    out
+}
+
 fn member(bytes: &[u8], span: &std::ops::Range<usize>) -> Result<Value, Mismatch> {
     parse(bytes.get(span.clone()).unwrap_or(b""))
         .map_err(|e| fail(format!("record is not valid JSON at {e}")))
@@ -607,6 +667,10 @@ fn standalone(
         }
         last_id = Some(key);
     }
+    // The results themselves (SPEC B1.7): R1 to R7 exactly once each, any other id an optional
+    // rule X1 to X5, every status one of the four, so the overall status below is computed from
+    // a complete set.
+    problems.extend(results_problems(results));
     let mut last_topic: Option<(String, i64)> = None;
     for d in array(record, "sealed_topics")? {
         let key = match d {
@@ -709,7 +773,21 @@ fn standalone(
             _ => (String::new(), None),
         })
         .collect();
-    let status = string(record, "status")?;
+    let status = match record.get("status") {
+        Some(Value::Str(s)) => s.as_str(),
+        Some(other) => {
+            return Err(fail(format!(
+                "status is {}, not a string",
+                canonical(other)
+            )));
+        }
+        None => return Err(fail("missing field `status`")),
+    };
+    if !OVERALL_STATUSES.contains(&status) {
+        problems.push(format!(
+            "status is {status:?}, not PASS, WARN, FAIL or NO ARMED FLIGHT"
+        ));
+    }
     let expected_status = Overall::of(
         statuses
             .iter()
@@ -761,17 +839,17 @@ fn standalone(
     };
     // A rules file that ignores every parameter seals only with --allow-ignore-all, which the
     // record states.
-    if let Ok(parsed) = parse_rules(string(rules, "text")?)
-        && parsed.ignores_everything() != ignore_all
-    {
-        problems.push(format!(
+    match parse_rules(string(rules, "text")?) {
+        Err(e) => problems.push(format!("the embedded rules file does not parse: {e}")),
+        Ok(parsed) if parsed.ignores_everything() != ignore_all => problems.push(format!(
             "seal.allow_ignore_all is {ignore_all} but the embedded rules file {} every parameter",
             if parsed.ignores_everything() {
                 "ignores"
             } else {
                 "does not ignore"
             }
-        ));
+        )),
+        Ok(_) => {}
     }
 
     // Signer certificate and chain: null, or standard base64 (the DER is checked by
@@ -1003,6 +1081,14 @@ fn compare(record: &Map, derived: &Map) -> Vec<String> {
             show_any(dc.get("watched_parameters"))
         ));
     }
+    // The overall status, as the re-run rules give it.
+    if record.get("status") != derived.get("status") {
+        out.push(format!(
+            "status: sealed {}, found {} when the rules run again on the log",
+            show_any(record.get("status")),
+            show_any(derived.get("status"))
+        ));
+    }
     // Log identity: digests and size.
     let (rl, dl) = (get_obj(record, "log"), get_obj(derived, "log"));
     for k in ["sha256", "blake3", "size"] {
@@ -1114,6 +1200,7 @@ fn verify_parsed(
                 "results".to_string(),
                 Value::Array(eval.results.iter().map(|r| r.to_json()).collect()),
             );
+            derived.insert("status".to_string(), Value::str(eval.status.as_str()));
             deep = compare(record, &derived);
         }
     }
