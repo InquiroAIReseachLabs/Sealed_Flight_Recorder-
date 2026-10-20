@@ -231,7 +231,7 @@ fn parse_known(text: &str) -> Option<Mismatch> {
     if text.starts_with("rules: the embedded text does not match its sha256") {
         return Some(Mismatch::new("rules_digest", text));
     }
-    if text.starts_with("sealed with an evaluation key") {
+    if text.starts_with("refused: ") {
         return Some(Mismatch::new("custody", text));
     }
     None

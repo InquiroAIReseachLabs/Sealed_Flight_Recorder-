@@ -41,7 +41,7 @@ for name in vtol_transition failsafe_gps_loss gz_quadtailsitter_transition gz_x5
     --baseline "testdata/baselines/v1.17.0_$name.params" --key "$work/sfr.key" \
     --evaluation-only --seal-time 2026-10-18T15:00:00Z --out "$out" > /dev/null || rc=$?
   [ "$rc" -le 2 ] || { echo "$name: seal exited $rc" >&2; exit 1; }
-  "$sfr" verify "$out/$name.sfr" --pubkey "$out/sfr.pub" --ulog "$log" > /dev/null
+  "$sfr" verify "$out/$name.sfr" --pubkey "$out/sfr.pub" --allow-evaluation-key --ulog "$log" > /dev/null
   n=$((n + 1))
 done
 shred -u "$work/sfr.key" 2> /dev/null || rm -f "$work/sfr.key"

@@ -39,6 +39,10 @@ run "wasm32 target installed" rustup target add wasm32-unknown-unknown
 run "clippy -D warnings, sfr-wasm for wasm32 (the page's bindings)" \
   cargo clippy -p sfr-wasm --target wasm32-unknown-unknown --locked --quiet -- -D warnings
 run "cargo test --locked" cargo test --workspace --locked --quiet
+# fuzz/ is outside the workspace, so the commands above never compile its targets; the fuzz CI job
+# does, on nightly. A type check on the pinned toolchain catches a changed engine API at once.
+run "fuzz targets type-check (fuzz/ is not in the workspace)" \
+  cargo check --manifest-path fuzz/Cargo.toml --locked --bins --quiet
 run "golden files agree with the independent oracle" scripts/testdata/regenerate.sh compare
 run "test certificates match their script (testdata/pki)" scripts/testdata/make_test_pki.sh --check
 

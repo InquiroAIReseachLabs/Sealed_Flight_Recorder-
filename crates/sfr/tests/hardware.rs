@@ -84,7 +84,8 @@ fn entries(dir: &Path) -> usize {
 }
 
 /// A hardware record: sealed, no evaluation banner anywhere, custody named, and it verifies
-/// against `public` with the log and with `--require-hardware-key`.
+/// against `public` with the log, with its custody unattested; `--require-hardware-key` refuses
+/// it without a certificate chain.
 fn check_hardware_record(out: &Path, public: &Path, custody: &str, seal_out: &Output) {
     assert_eq!(seal_out.status.code(), Some(0), "{}", text(seal_out));
     let printed = String::from_utf8_lossy(&seal_out.stdout);
@@ -98,16 +99,33 @@ fn check_hardware_record(out: &Path, public: &Path, custody: &str, seal_out: &Ou
         bytes.contains(&format!("\"key_custody\":\"{custody}\"")),
         "custody not in the record"
     );
-    for extra in [&["--ulog", LOG][..], &["--require-hardware-key"][..]] {
-        let mut args = vec!["verify", s(&record), "--pubkey", s(public)];
-        args.extend_from_slice(extra);
-        let v = sfr(&args);
-        assert_eq!(v.status.code(), Some(0), "{}", text(&v));
-        let shown = String::from_utf8_lossy(&v.stdout);
-        assert!(shown.contains("Integrity: VERIFIED"), "{shown}");
-        assert!(shown.contains(&format!("custody   {custody}")), "{shown}");
-        assert!(!shown.contains(EVALUATION_LINE), "{shown}");
-    }
+    // It verifies against its public key, with the log. Its custody is the sealer's word: a
+    // token's signature does not carry proof of the token, so verify says unattested.
+    let v = sfr(&["verify", s(&record), "--pubkey", s(public), "--ulog", LOG]);
+    assert_eq!(v.status.code(), Some(0), "{}", text(&v));
+    let shown = String::from_utf8_lossy(&v.stdout);
+    assert!(shown.contains("Integrity: VERIFIED"), "{shown}");
+    assert!(
+        shown.contains(&format!("custody   unattested (declared {custody})\n")),
+        "{shown}"
+    );
+    assert!(!shown.contains(EVALUATION_LINE), "{shown}");
+    // --require-hardware-key means attested by a certificate chain, not declared: a bare public
+    // key cannot attest even a real token's custody, so it is refused.
+    let v = sfr(&[
+        "verify",
+        s(&record),
+        "--pubkey",
+        s(public),
+        "--require-hardware-key",
+    ]);
+    assert_eq!(v.status.code(), Some(1), "{}", text(&v));
+    let shown = String::from_utf8_lossy(&v.stdout);
+    assert!(
+        shown.contains("Integrity: REFUSED: --require-hardware-key needs custody attested by a certificate chain"),
+        "{shown}"
+    );
+    assert!(!shown.contains("VERIFIED"), "{shown}");
 }
 
 /// `sfr pubkey` writes the key's public half to `dir/sfr.pub` and returns its path.

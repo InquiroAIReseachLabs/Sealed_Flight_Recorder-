@@ -787,6 +787,7 @@ fn oversize_text_inputs_are_refused_and_name_the_limit() {
     // Key files: the public key for verify, the private key for seal; both exit 4.
     let out = sfr(&[
         "verify",
+        "--allow-evaluation-key",
         "--pubkey",
         big.to_str().unwrap(),
         big.to_str().unwrap(),
@@ -827,6 +828,7 @@ fn oversize_text_inputs_are_refused_and_name_the_limit() {
         drop(f);
         let mut args = vec![
             "verify",
+            "--allow-evaluation-key",
             record.to_str().unwrap(),
             "--pubkey",
             pubkey.to_str().unwrap(),

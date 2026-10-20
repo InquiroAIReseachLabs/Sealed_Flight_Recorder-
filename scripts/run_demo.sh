@@ -68,9 +68,9 @@ echo "events in the record: $events"
 record="$work/sealed/vtol_transition.sfr"
 
 step "c. verify the record standalone, then with the log"
-run verify "$record" --pubkey "$work/key/sfr.pub"
+run verify "$record" --pubkey "$work/key/sfr.pub" --allow-evaluation-key
 expect 0 "Integrity: VERIFIED (record)"
-run verify "$record" --pubkey "$work/key/sfr.pub" --ulog "$vtol"
+run verify "$record" --pubkey "$work/key/sfr.pub" --allow-evaluation-key --ulog "$vtol"
 expect 0 "Integrity: VERIFIED (record and log)"
 
 step "d. change one byte of a COMMAND event in a copy of the record"
@@ -89,9 +89,9 @@ offset="${at% *}" digit="${at#* }"
 case "$digit" in [1-8]) new=$((digit + 1)) ;; 9) new=1 ;; *) fail "unexpected byte $digit" ;; esac
 printf '%s' "$new" | dd of="$work/tampered.sfr" bs=1 seek="$offset" conv=notrunc 2> /dev/null
 echo "byte $offset of the record copy: command id digit $digit changed to $new"
-run verify "$work/tampered.sfr" --pubkey "$work/key/sfr.pub"
+run verify "$work/tampered.sfr" --pubkey "$work/key/sfr.pub" --allow-evaluation-key
 expect 1 "Merkle root mismatch"
-run verify "$work/tampered.sfr" --pubkey "$work/key/sfr.pub" --ulog "$vtol"
+run verify "$work/tampered.sfr" --pubkey "$work/key/sfr.pub" --allow-evaluation-key --ulog "$vtol"
 expect 1 "(COMMAND) field \`command\`: sealed "
 
 step "e. change $param in a copy of the golden quad tailsitter log"
@@ -114,7 +114,7 @@ old="$(od -A n -t x1 -j "$offset" -N 4 "$work/tailsitter.ulg" | tr -d ' \n')"
 [ "$old" != "0000e040" ] || fail "$param is already 7.0 in the log"
 printf '\000\000\340\100' | dd of="$work/tailsitter.ulg" bs=1 seek="$offset" conv=notrunc 2> /dev/null
 echo "bytes $offset to $((offset + 3)) of the log copy: $param float32 bytes $old changed to 0000e040 (7.0)"
-run verify "$work/sealed/gz_quadtailsitter_transition.sfr" --pubkey "$work/key/sfr.pub" \
+run verify "$work/sealed/gz_quadtailsitter_transition.sfr" --pubkey "$work/key/sfr.pub" --allow-evaluation-key \
   --ulog "$work/tailsitter.ulg"
 expect 1 "parameter $param: sealed f32:"
 case "$out" in *"found f32:7"*) ;; *) fail "verify did not name the found value f32:7" ;; esac

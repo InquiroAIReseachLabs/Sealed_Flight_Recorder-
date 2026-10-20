@@ -467,7 +467,10 @@ pub fn check(record: &Value, md: &str) {
     );
     let fp = hex_span(f(seal, "key_fingerprint"));
     assert_eq!(l.item("Key fingerprint"), fp);
-    assert_eq!(l.item("Key custody"), ev(f(seal, "key_custody")));
+    assert_eq!(
+        l.item("Key custody (declared by the sealer; this report cannot attest it)"),
+        ev(f(seal, "key_custody"))
+    );
     let crates: Vec<String> = a(seal, "crypto_crates")
         .iter()
         .map(|c| {
@@ -504,8 +507,14 @@ pub fn check(record: &Value, md: &str) {
     assert_eq!(
         command,
         format!(
-            "sfr verify {} --pubkey sfr.pub --ulog {}",
+            "sfr verify {} --pubkey sfr.pub{} --ulog {}",
             shell_arg(&format!("{stem}.sfr")),
+            // A record that declares an evaluation key is accepted only when asked.
+            if plain(f(seal, "key_custody")) == "file-evaluation" {
+                " --allow-evaluation-key"
+            } else {
+                ""
+            },
             shell_arg(&file)
         )
     );

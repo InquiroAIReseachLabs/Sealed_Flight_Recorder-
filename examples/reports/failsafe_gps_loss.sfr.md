@@ -83,7 +83,7 @@ The record holds no sealed topic digests.
 
 - Seal time (claimed by the sealer, not proven): 2026\-10\-18T15\:00\:00Z
 - Key fingerprint: `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51`
-- Key custody: file\-evaluation
+- Key custody (declared by the sealer; this report cannot attest it): file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
 - Merkle root: `c05aa62a80822c2c78406652a99a79c5f0e2b5509a9f7b5725a81e0bc32dc707` (sha256\-rfc6962, 39 leaves)
 - Schema version: 2
@@ -93,7 +93,7 @@ The record holds no sealed topic digests.
 With the public key whose fingerprint is `sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
-sfr verify failsafe_gps_loss.sfr --pubkey sfr.pub --ulog failsafe_gps_loss.ulg
+sfr verify failsafe_gps_loss.sfr --pubkey sfr.pub --allow-evaluation-key --ulog failsafe_gps_loss.ulg
 ```
 
 Without `--ulog`, `sfr verify` checks the record alone.

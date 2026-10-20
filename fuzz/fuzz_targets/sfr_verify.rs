@@ -35,7 +35,7 @@ static SEEDS: LazyLock<Vec<[u8; 32]>> = LazyLock::new(|| {
 });
 
 fuzz_target!(|data: &[u8]| {
-    if verify(data, None, &RustCrypto, &KEY, false).is_ok() {
+    if verify(data, None, &RustCrypto, &KEY).is_ok() {
         assert!(SEEDS.contains(&RustCrypto.sha256(data)), "a record other than a seed verified");
     }
 });

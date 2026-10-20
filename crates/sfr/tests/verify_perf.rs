@@ -93,7 +93,7 @@ fn standalone_verify_of_10000_events_is_under_10_ms() {
     let mut times: Vec<Duration> = Vec::new();
     for _ in 0..RUNS {
         let t0 = Instant::now();
-        let v = verify(&record, None, &crypto, &pk, false).unwrap();
+        let v = verify(&record, None, &crypto, &pk).unwrap();
         times.push(t0.elapsed());
         assert_eq!(v.events, 10_000);
     }
@@ -106,6 +106,7 @@ fn standalone_verify_of_10000_events_is_under_10_ms() {
         let t0 = Instant::now();
         let o = Command::new(bin)
             .arg("verify")
+            .arg("--allow-evaluation-key")
             .arg(dir.join("perf.sfr"))
             .arg("--pubkey")
             .arg(dir.join("k/sfr.pub"))
