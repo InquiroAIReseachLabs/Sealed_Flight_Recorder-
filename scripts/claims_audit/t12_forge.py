@@ -3,8 +3,8 @@
 
 Independent of sfr: canonical JSON (RFC 8785 subset), the RFC 6962 Merkle tree and the signed
 payload are written from docs/RECORD_FORMAT.md, and OpenSSL makes the Ed25519 signature. Reads
-schemas 2 and 3 (schema 2: leaves untagged, payload of root only; schema 3: tagged leaves, tree
-shape in the payload and in merkle.sections).
+schemas 2 to 4 (schema 2: leaves untagged, payload of root only; schemas 3 and 4: tagged leaves,
+tree shape in the payload and in merkle.sections).
 
   t12_forge.py resign <record.sfr> <key.pem> <out.sfr> [--set dotted.path=<json value>]...
   t12_forge.py move-leaf <record.sfr> <out.sfr>
@@ -79,7 +79,7 @@ def resign(record_bytes, key_pem, sets):
         root = mth(hashes)
         r["merkle"] = {"algorithm": "sha256-rfc6962", "leaf_count": len(leaves), "root": root.hex()}
         payload = b"SFR-RECORD-V1\x00" + struct.pack(">I", 2) + root
-    elif schema == 3:
+    elif schema in (3, 4):
         hashes = [sha256(b"\x00" + bytes([t]) + jcs(x).encode("utf-8")) for t, x in leaves]
         root = mth(hashes)
         r["merkle"] = {"algorithm": "sha256-rfc6962", "leaf_count": len(leaves), "root": root.hex(),

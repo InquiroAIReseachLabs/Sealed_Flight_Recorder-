@@ -95,8 +95,8 @@ for (const radio of document.querySelectorAll('input[name="rules"]')) {
 // Seal
 
 const SEAL_RESULT = {
-  0: ['ok', 'PASS.', 'Every rule passed or does not apply. The record is sealed and signed.'],
-  1: ['bad', 'FAIL.', 'One or more rules failed. The record is still sealed and signed: the failure is the evidence.'],
+  0: ['ok', 'PASS or WARN.', 'Every rule passed, warned or does not apply; the status line names any warning. The record is sealed and signed.'],
+  1: ['bad', 'FAIL or NO ARMED FLIGHT.', 'One or more rules failed, or the log has no armed flight to check. The record is still sealed and signed: the result is the evidence.'],
   2: ['bad', 'FAIL.', 'A required topic is missing from the log. The record is still sealed and signed, and names the missing topic.'],
 };
 

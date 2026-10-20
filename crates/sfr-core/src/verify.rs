@@ -12,7 +12,7 @@
 #[cfg(test)]
 use crate::SCHEMA_VERSION;
 use crate::crypto::{CryptoBackend, Custody, Sha256Stream};
-use crate::evaluate::evaluate;
+use crate::evaluate::{Overall, Status, evaluate};
 use crate::hex;
 use crate::ingest::{FlightLogIngestor, IngestError, Px4Ingestor};
 use crate::json::{Value, canonical, first_non_canonical_offset, parse, scan_canonical};
@@ -51,6 +51,8 @@ pub struct Verified {
     pub status: String,
     /// The ids of the rules whose sealed result is FAIL, in rule-id order.
     pub failed_rules: Vec<String>,
+    /// The ids of the rules whose sealed result is WARN, in rule-id order.
+    pub warned_rules: Vec<String>,
     /// Number of events.
     pub events: usize,
     /// Number of Merkle leaves.
@@ -105,10 +107,17 @@ pub fn integrity_line(v: &Verified) -> String {
 /// The `Flight rules:` line of `sfr verify` for a record that verified: the sealed overall
 /// status, with the ids of the rules that failed.
 pub fn flight_rules_line(v: &Verified) -> String {
-    if v.failed_rules.is_empty() {
-        format!("Flight rules: {}", v.status)
-    } else {
+    if v.status == "NO ARMED FLIGHT" {
+        format!(
+            "Flight rules: {} (the log has no ARM and no DISARM, so no flight was checked; not a PASS)",
+            v.status
+        )
+    } else if !v.failed_rules.is_empty() {
         format!("Flight rules: {} ({})", v.status, v.failed_rules.join(", "))
+    } else if !v.warned_rules.is_empty() {
+        format!("Flight rules: {} ({})", v.status, v.warned_rules.join(", "))
+    } else {
+        format!("Flight rules: {}", v.status)
     }
 }
 
@@ -368,7 +377,7 @@ pub fn claimed_key_fingerprint(bytes: &[u8]) -> Option<String> {
 }
 
 /// What a verifier says about a schema version it does not know.
-const KNOWN_SCHEMAS: &str = "this verifier knows schema 3 only (schema 1 and 2 records do not sign the shape of the tree or bind each leaf to its section; seal the log again with this version of sfr)";
+const KNOWN_SCHEMAS: &str = "this verifier knows schema 4 only (schema 1 and 2 records do not sign the shape of the tree or bind each leaf to its section, and schema 3 results were computed by rules that read less of the log; seal the log again with this version of sfr)";
 
 /// The schema version, if it is one this verifier knows (`crate::KNOWN_SCHEMA_VERSIONS`).
 fn known_schema(v: i64) -> Option<u32> {
@@ -470,7 +479,9 @@ fn standalone(
         .map(|m| member(bytes, &m.value))
         .transpose()?
     {
-        Some(Value::Int(v)) if known_schema(v).is_some() => known_schema(v).unwrap_or(3),
+        Some(Value::Int(v)) if known_schema(v).is_some() => {
+            known_schema(v).unwrap_or(crate::SCHEMA_VERSION)
+        }
         Some(other) => {
             return Err(fail(format!(
                 "unknown schema_version {}; {KNOWN_SCHEMAS}",
@@ -567,19 +578,22 @@ fn standalone(
     // Leaf order (SPEC B1.7): results by rule id, events by sequence number.
     let mut last_id: Option<(char, u32)> = None;
     let mut failed_rules = Vec::new();
+    let mut warned_rules = Vec::new();
     for r in results {
-        let (id, failed) = match r {
+        let (id, status) = match r {
             Value::Object(m) => (
                 match m.get("id") {
                     Some(Value::Str(s)) => s.as_str(),
                     _ => "",
                 },
-                m.get("status") == Some(&Value::str("FAIL")),
+                m.get("status"),
             ),
-            _ => ("", false),
+            _ => ("", None),
         };
-        if failed {
+        if status == Some(&Value::str("FAIL")) {
             failed_rules.push(id.to_string());
+        } else if status == Some(&Value::str("WARN")) {
+            warned_rules.push(id.to_string());
         }
         let Some(key) = rule_id_key(id) else {
             problems.push(format!("result id `{id}` is not a rule id"));
@@ -678,13 +692,30 @@ fn standalone(
         problems.push("rules: the embedded text does not match its sha256".to_string());
     }
 
-    // Overall status.
-    let any_fail = results.iter().any(|r| match r {
-        Value::Object(m) => m.get("status") == Some(&Value::str("FAIL")),
-        _ => false,
-    });
+    // Overall status, computed from the results as seal computes it.
+    let statuses: Vec<(String, Option<Status>)> = results
+        .iter()
+        .map(|r| match r {
+            Value::Object(m) => (
+                match m.get("id") {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => String::new(),
+                },
+                match m.get("status") {
+                    Some(Value::Str(s)) => Status::parse(s),
+                    _ => None,
+                },
+            ),
+            _ => (String::new(), None),
+        })
+        .collect();
     let status = string(record, "status")?;
-    let expected_status = if any_fail { "FAIL" } else { "PASS" };
+    let expected_status = Overall::of(
+        statuses
+            .iter()
+            .filter_map(|(id, s)| s.map(|s| (id.as_str(), s))),
+    )
+    .as_str();
     if status != expected_status {
         problems.push(format!(
             "status is {status} but the results say {expected_status}"
@@ -720,9 +751,27 @@ fn standalone(
             .push("signature or Merkle root is not lowercase hex of the right length".to_string()),
     }
 
-    // seal.allow_untested_version: a boolean.
+    // seal.allow_untested_version and seal.allow_ignore_all: booleans.
     if !matches!(seal.get("allow_untested_version"), Some(Value::Bool(_))) {
         return Err(fail("`seal.allow_untested_version` must be true or false"));
+    }
+    let ignore_all = match seal.get("allow_ignore_all") {
+        Some(Value::Bool(b)) => *b,
+        _ => return Err(fail("`seal.allow_ignore_all` must be true or false")),
+    };
+    // A rules file that ignores every parameter seals only with --allow-ignore-all, which the
+    // record states.
+    if let Ok(parsed) = parse_rules(string(rules, "text")?)
+        && parsed.ignores_everything() != ignore_all
+    {
+        problems.push(format!(
+            "seal.allow_ignore_all is {ignore_all} but the embedded rules file {} every parameter",
+            if parsed.ignores_everything() {
+                "ignores"
+            } else {
+                "does not ignore"
+            }
+        ));
     }
 
     // Signer certificate and chain: null, or standard base64 (the DER is checked by
@@ -773,6 +822,7 @@ fn standalone(
         crypto_crates: crates.join(", "),
         status: status.to_string(),
         failed_rules,
+        warned_rules,
         events: event_count,
         leaf_count,
         deep: false,
@@ -813,7 +863,17 @@ fn baseline_from_record(b: &Map) -> Result<Baseline, String> {
             .ok_or_else(|| format!("baseline parameter {k}: `{t}` is not a typed value"))?;
         params.insert(k.clone(), pv);
     }
-    Ok(Baseline { firmware, params })
+    let sha256 = match b.get("sha256") {
+        Some(Value::Str(s)) => Some(
+            hex_decode::<32>(s).ok_or_else(|| "baseline.sha256 is not a SHA-256".to_string())?,
+        ),
+        _ => None,
+    };
+    Ok(Baseline {
+        firmware,
+        params,
+        sha256,
+    })
 }
 
 /// The first key where two objects differ, with both values in canonical JSON.
@@ -956,7 +1016,7 @@ fn compare(record: &Map, derived: &Map) -> Vec<String> {
             break;
         }
     }
-    for k in ["firmware", "vehicle"] {
+    for k in ["firmware", "vehicle", "vehicle_status_instances", "skipped"] {
         if rl.get(k) != dl.get(k) {
             out.push(format!(
                 "log {k}: sealed {}, found {}",
@@ -1109,6 +1169,7 @@ mod tests {
             signer_certificate: None,
             certificate_chain: Vec::new(),
             allow_untested_version: false,
+            allow_ignore_all: false,
         };
         let sealed = seal(&ing, &eval, &rules, &baseline, &params, &TestBackend, &key).unwrap();
         (log, sealed.bytes, key)
@@ -1244,6 +1305,7 @@ mod tests {
             signer_certificate: None,
             certificate_chain: Vec::new(),
             allow_untested_version: false,
+            allow_ignore_all: false,
         };
         let sealed = seal(&ing, &eval, &rules, &baseline, &params, &TestBackend, &key).unwrap();
         let pk = key.public_key();

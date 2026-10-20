@@ -41,6 +41,9 @@ pub struct Baseline {
     pub firmware: FirmwareSpec,
     /// Expected parameter values, sorted by name.
     pub params: BTreeMap<String, ParamValue>,
+    /// SHA-256 of the baseline file the operator gave, set by the caller that read it
+    /// (`baseline.sha256` in the record).
+    pub sha256: Option<[u8; 32]>,
 }
 
 /// A baseline that cannot be used (SPEC B1.4 exit 3), with its 1-based line.
@@ -220,7 +223,11 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, BaselineError> {
             "no `# Firmware: <version> [<git hash prefix>]` line before the end of the file",
         )
     })?;
-    Ok(Baseline { firmware, params })
+    Ok(Baseline {
+        firmware,
+        params,
+        sha256: None,
+    })
 }
 
 /// A parameter name pattern: `*` matches any run of characters, everything else literally.
@@ -244,6 +251,11 @@ impl Pattern {
             text: p.to_string(),
             parts: p.split('*').map(str::to_string).collect(),
         })
+    }
+
+    /// Whether the pattern matches every name: it is `*` only (one or more).
+    pub fn matches_everything(&self) -> bool {
+        self.text.bytes().all(|b| b == b'*')
     }
 
     /// The pattern text.

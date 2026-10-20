@@ -1,4 +1,4 @@
-//! The signed structure of a record (SPEC B1.7, schema 3): every Merkle leaf is hashed with the
+//! The signed structure of a record (SPEC B1.7, schema 3 and later): every Merkle leaf is hashed with the
 //! tag of its section, and the signature covers the tree size and the number of leaves in each
 //! section. Before schema 3, a leaf moved between sections left the root and the signature valid;
 //! only the structural checks of the sections noticed.
@@ -233,7 +233,7 @@ fn a_record_names_its_sections_and_carries_no_token_certification_field() {
         !text.contains("token_cmvp_certificate"),
         "a record says nothing about a token's certification"
     );
-    assert!(text.contains("\"schema_version\":3"), "schema 3");
+    assert!(text.contains("\"schema_version\":4"), "schema 4");
     let r = object(&record);
     let Some(Value::Object(merkle)) = r.get("merkle") else {
         panic!("merkle is an object");

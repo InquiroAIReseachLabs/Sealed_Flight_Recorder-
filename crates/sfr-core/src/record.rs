@@ -48,6 +48,19 @@ pub fn log_json(id: &LogIdentity) -> Value {
         .build();
     Obj::new()
         .field("file_name", Value::str(id.file_name.clone()))
+        .field(
+            "vehicle_status_instances",
+            Value::count(id.vehicle_status_instances),
+        )
+        .field(
+            "skipped",
+            Obj::new()
+                .field("unknown_records", Value::count(id.skipped.unknown_records))
+                .field("orphan_data_records", Value::count(id.skipped.orphan_data))
+                .field("regions", Value::count(id.skipped.skipped_regions))
+                .field("region_bytes", Value::u64_str(id.skipped.skipped_bytes))
+                .build(),
+        )
         .field("size", Value::u64_str(id.size))
         .field("sha256", Value::str(hex(&id.sha256)))
         .field("blake3", Value::str(hex(&id.blake3)))
@@ -121,6 +134,10 @@ pub fn events_json(ing: &Ingested, rules: &Rules) -> Value {
 pub fn baseline_json(b: &Baseline, rules: &Rules) -> Value {
     Obj::new()
         .field("firmware", Value::str(b.firmware.to_string()))
+        .field(
+            "sha256",
+            b.sha256.map_or(Value::Null, |d| Value::str(hex(&d))),
+        )
         .field("parameters", param_map(b.params.iter()))
         .field(
             "ignore",

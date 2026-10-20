@@ -46,7 +46,7 @@ A file argument is a `File`, a `Blob` with a `name`, or `{ name, data }` with `d
 | `runTamperDemo({ onStep })` | Runs the demo (steps below), calling `onStep(step)` as each ends. Resolves to `{ passed, seconds, sample, steps, error }`. |
 | `engineMemoryBytes()` | The engine's WebAssembly memory in bytes. |
 
-**Seal result.** `{ sealed: true }` when a record was written (exit 0, 1 or 2; SPEC B1.4: 0 all rules PASS or N/A, 1 a rule FAIL, 2 a required topic missing). Fields: `exitCode`, `status`, `record` (`Uint8Array`) and `report` (Markdown) to save as `recordName` and `reportName` (`<log stem>.sfr`, `<log stem>.sfr.md`), `text` (what `sfr seal` prints), `notes` (what it prints on standard error besides a failure), `results` (per rule `{ id, name, status, expected, found, detail: [lines] }`), `merkleRoot`, `leafCount`, `keyFingerprint`, `keyCustody`, `keyLabel`, `sealTimeClaimedUtc`, `eventCount`, and `log` (`{ fileName, size, sha256, blake3, firmware }`). When nothing was written: `{ sealed: false, exitCode: 3 or 4, message, text }`.
+**Seal result.** `{ sealed: true }` when a record was written (exit 0, 1 or 2; SPEC B1.4: 0 status PASS or WARN, 1 status FAIL or NO ARMED FLIGHT, 2 a required topic missing). Fields: `exitCode`, `status`, `record` (`Uint8Array`) and `report` (Markdown) to save as `recordName` and `reportName` (`<log stem>.sfr`, `<log stem>.sfr.md`), `text` (what `sfr seal` prints), `notes` (what it prints on standard error besides a failure), `results` (per rule `{ id, name, status, expected, found, detail: [lines] }`), `merkleRoot`, `leafCount`, `keyFingerprint`, `keyCustody`, `keyLabel`, `sealTimeClaimedUtc`, `eventCount`, and `log` (`{ fileName, size, sha256, blake3, firmware }`). When nothing was written: `{ sealed: false, exitCode: 3 or 4, message, text }`.
 
 **Verify result.** `exitCode` is 0 VERIFIED, 1 verification failed, or 4 when the record, key or log could not be used or a file is over the limit (`message` says why); `verified` is `true` for 0. `checked` is `record` or `record and log`. `headline` is `Integrity: VERIFIED (record)`, `Integrity: VERIFIED (record and log)` or `Integrity: FAILED: <first mismatch>`. `text` is what `sfr verify` prints, with the record's file name for its path (for exit 4, what it prints on standard error); the page takes no report, so the `report` line is the one `sfr verify --no-report` prints. `keyCustody`, and, `null` unless the record verified, `keyFingerprint`, `cryptoCrates`, `sealTimeClaimedUtc`, `status`, `eventCount` and `failedRules` (ids of rules whose sealed result is FAIL). `mismatch` is the first mismatch or `null`; `mismatches` lists all, first first (the text lists at most 21).
 
@@ -82,7 +82,7 @@ The parts are read from the text `sfr-core` writes (`crates/sfr-wasm/src/result.
 | Step | What it does | Expected |
 |---|---|---|
 | a | makes an evaluation key | an in-browser EVALUATION KEY |
-| b | seals the sample with the default rules and its baseline | exit 0, status PASS |
+| b | seals the sample with the default rules and its baseline | exit 0, status PASS or WARN |
 | c | verifies the record alone, then with the log | VERIFIED twice |
 | d | changes one byte of a COMMAND event in a copy of the record, verifies it alone and with the log | exit 1: kind `merkle_root`, then kind `event` (`COMMAND`, field `command`, sealed and found values) |
 | e | changes `MPC_XY_VEL_MAX` to 7.0 in a copy of the log, verifies the record with it | exit 1: kind `parameter`, `MPC_XY_VEL_MAX`, found `f32:7` |

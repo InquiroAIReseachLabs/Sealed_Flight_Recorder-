@@ -983,12 +983,13 @@ fn unknown_schema_version_wrong_key_and_evaluation_custody_are_refused() {
         &dir,
     );
     let rec = std::fs::read_to_string(&record).unwrap();
-    // Only schema 3 verifies: a later number is unknown, and so are schemas 1 and 2, whose
-    // leaves are not bound to their section. The version is read before anything else, so a
+    // Only schema 4 verifies: a later number is unknown, and so are schemas 1 and 2, whose
+    // leaves are not bound to their section, and schema 3, whose results come from rules that
+    // read less of the log. The version is read before anything else, so a
     // relabelled record is refused for that, whatever else is wrong with it.
-    for other in [4, 2, 1] {
+    for other in [5, 3, 2, 1] {
         let relabelled = rec.replacen(
-            "\"schema_version\":3",
+            "\"schema_version\":4",
             &format!("\"schema_version\":{other}"),
             1,
         );
@@ -1005,7 +1006,7 @@ fn unknown_schema_version_wrong_key_and_evaluation_custody_are_refused() {
         assert_eq!(o.status.code(), Some(1), "schema {other}");
         assert!(
             text(&o).contains(&format!(
-                "unknown schema_version {other}; this verifier knows schema 3 only"
+                "unknown schema_version {other}; this verifier knows schema 4 only"
             )),
             "{}",
             text(&o)
@@ -1137,7 +1138,7 @@ fn integrity_and_flight_rules_are_reported_apart() {
     ] {
         assert!(json.contains(part), "{part} in {json}");
     }
-    // A record whose rules all pass.
+    // A record whose rules pass or warn: the warned rules are named.
     let o = sfr(&[
         "verify",
         "--allow-evaluation-key",
@@ -1146,7 +1147,7 @@ fn integrity_and_flight_rules_are_reported_apart() {
         key,
     ]);
     assert!(
-        String::from_utf8_lossy(&o.stdout).contains("\nFlight rules: PASS\n"),
+        String::from_utf8_lossy(&o.stdout).contains("\nFlight rules: WARN (R4)\n"),
         "{}",
         text(&o)
     );
@@ -1190,7 +1191,7 @@ fn verify_without_a_trusted_key_says_the_signer_is_not_checked() {
     for part in [
         "Integrity: NOT CHECKED (no trusted key given)\n",
         "Flight rules: UNKNOWN (the record's integrity was not checked)\n",
-        "key       sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be (named by the record, not proven)\n",
+        "key       sha256:1ab979d4bed49693df5e1482cfb3a5432a6dd632de3c95dc24f7c9896c7eec45 (named by the record, not proven)\n",
         "custody   unattested (declared file-evaluation)\n",
         "through a channel you trust",
     ] {
@@ -1237,12 +1238,12 @@ fn an_edited_report_fails_verification_and_names_the_line() {
     let lines: Vec<&str> = original.split('\n').collect();
     let status_line = lines
         .iter()
-        .position(|l| l.contains("**Status: PASS**"))
+        .position(|l| l.contains("**Status: WARN**"))
         .unwrap();
     let edits: Vec<(&str, String, usize)> = vec![
         (
             "status",
-            original.replacen("**Status: PASS**", "**Status: FAIL**", 1),
+            original.replacen("**Status: WARN**", "**Status: PASS**", 1),
             status_line + 1,
         ),
         (
@@ -1423,7 +1424,7 @@ fn an_untested_px4_version_is_refused_unless_allowed_and_then_recorded() {
         bytes.contains("\"allow_untested_version\":true"),
         "flag in the record"
     );
-    assert!(bytes.contains("\"schema_version\":3"), "schema 3");
+    assert!(bytes.contains("\"schema_version\":4"), "schema 4");
     let report = std::fs::read_to_string(out.join("sample.sfr.md")).unwrap();
     assert!(
         report.contains(sfr_core::report::UNTESTED_VERSION_LINE),

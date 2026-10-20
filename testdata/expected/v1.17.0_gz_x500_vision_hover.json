@@ -1014,7 +1014,8 @@
       "WV_GAIN": "f32:1",
       "WV_ROLL_MIN": "f32:1",
       "WV_YRATE_MAX": "f32:90"
-    }
+    },
+    "sha256": "6cabf8246fc1d120d93b0c35c160bde7517af6ad7cd48cecc7f8dd8909892894"
   },
   "config": {
     "firmware": "1.17.0",
@@ -2261,11 +2262,18 @@
     },
     "sha256": "56524cc22d68b3125648386600b3dfa0811a08c65d3912613279be91c96f46a1",
     "size": "15797162",
+    "skipped": {
+      "orphan_data_records": 0,
+      "region_bytes": "0",
+      "regions": 0,
+      "unknown_records": 0
+    },
     "vehicle": {
       "is_vtol": false,
       "system_type": 2,
       "vtol_type": null
-    }
+    },
+    "vehicle_status_instances": 1
   },
   "results": [
     {
@@ -2278,27 +2286,31 @@
     },
     {
       "detail": [],
-      "expected": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
-      "found": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+      "expected": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4, from the baseline's # Firmware: line",
+      "found": "log states PX4 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4 (self-reported); baseline file sha256 6cabf8246fc1d120d93b0c35c160bde7517af6ad7cd48cecc7f8dd8909892894 (operator-supplied)",
       "id": "R2",
       "name": "firmware matches baseline",
       "status": "PASS"
     },
     {
       "detail": [],
-      "expected": "every parameter in the baseline or the log equal, 6 ignored by pattern",
-      "found": "no differences",
+      "expected": "every parameter in the baseline or the log equal to the baseline at every ARM, none changed in flight, 6 ignored by pattern",
+      "found": "no differences; ignore [COM_FLIGHT_UUID, LND_FLIGHT_T_HI, LND_FLIGHT_T_LO, EKF2_MAG_DECL, CAL_BARO*_OFF, ASPD_SCALE_*, COM_MODE*_HASH] suppressed 1 difference(s); baseline file sha256 6cabf8246fc1d120d93b0c35c160bde7517af6ad7cd48cecc7f8dd8909892894 (operator-supplied)",
       "id": "R3",
       "name": "parameters match baseline",
       "status": "PASS"
     },
     {
-      "detail": [],
-      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight",
-      "found": "never true in flight",
+      "detail": [
+        "warning: failsafe_flags.auto_mission_missing true in flight from boot_us 8984000 (86 sample(s)), not required by the nav_state in effect",
+        "warning: failsafe_flags.manual_control_signal_lost true in flight from boot_us 8984000 (86 sample(s)), not required by the nav_state in effect",
+        "warning: failsafe_flags.offboard_control_signal_lost true in flight from boot_us 8984000 (86 sample(s)), not required by the nav_state in effect"
+      ],
+      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), no quadchute (fixed wing straight to multicopter) in flight, and no failsafe_flags flag that the current nav_state requires true in flight; other failsafe_flags flags true in flight are warnings",
+      "found": "never true in flight; warning: failsafe_flags auto_mission_missing, manual_control_signal_lost, offboard_control_signal_lost true in flight",
       "id": "R4",
       "name": "no failsafe in flight",
-      "status": "PASS"
+      "status": "WARN"
     },
     {
       "detail": [],
@@ -2340,5 +2352,5 @@
       "topic": "vehicle_visual_odometry"
     }
   ],
-  "status": "PASS"
+  "status": "WARN"
 }

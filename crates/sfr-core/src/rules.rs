@@ -204,6 +204,12 @@ impl Rules {
         }
     }
 
+    /// Whether an ignore pattern matches every parameter name (`*`), which turns R3 off;
+    /// `seal` refuses such a file unless told otherwise (`seal.allow_ignore_all`).
+    pub fn ignores_everything(&self) -> bool {
+        self.ignore.iter().any(|p| p.matches_everything())
+    }
+
     /// Whether R3 ignores `name`.
     pub fn ignores(&self, name: &str) -> bool {
         self.ignore.iter().any(|p| p.matches(name))

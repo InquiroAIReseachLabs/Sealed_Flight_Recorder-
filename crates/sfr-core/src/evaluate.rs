@@ -1,25 +1,29 @@
-//! Rule evaluation (SPEC B1.6). Missing input data is FAIL, never N/A; N/A means only that a
-//! rule does not apply (R6 on a vehicle that is not VTOL). No threshold here is presented as
-//! correct for any aircraft: the optional rules take every threshold from the rules file.
+//! Rule evaluation (SPEC B1.6). Missing or unreadable input data is FAIL, never N/A; N/A means
+//! only that a rule does not apply (R6 on a vehicle that is not VTOL, R7 without
+//! `[authorized_sources]`, R4 and R5 on a log with no armed flight). WARN means the rule holds
+//! but the log shows something the reader should see. No threshold here is presented as correct
+//! for any aircraft: the optional rules take every threshold from the rules file.
 
 use crate::events::{
-    ArmedInterval, Event, EventKind, VtolState, armed_intervals, armed_sample, attribute_failsafe,
-    flag_at, vtol_state,
+    ArmedInterval, Event, EventKind, VtolState, armed_sample, attribute_failsafe, flag_at,
+    flight_armed_intervals, vtol_state,
 };
 use crate::exit_code;
-use crate::ingest::{FlightLog, Ingested};
+use crate::ingest::{FailsafeFlags, FlightLog, Ingested, VehicleStatusRow};
 use crate::json::{Obj, Value};
 use crate::params::Baseline;
 use crate::rules::{Compare, R7_TOPIC, Rules};
-use crate::ulog::f32_shortest;
-use std::collections::BTreeSet;
+use crate::ulog::{ParamValue, f32_shortest};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A rule outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     /// The rule holds.
     Pass,
-    /// The rule does not hold, or its input data is missing.
+    /// The rule holds, with findings the reader should see (named in `found`).
+    Warn,
+    /// The rule does not hold, or its input data is missing or unreadable.
     Fail,
     /// The rule does not apply to this log.
     NotApplicable,
@@ -30,11 +34,76 @@ impl Status {
     pub fn as_str(self) -> &'static str {
         match self {
             Status::Pass => "PASS",
+            Status::Warn => "WARN",
             Status::Fail => "FAIL",
             Status::NotApplicable => "N/A",
         }
     }
+
+    /// The status a record spells `s`, if any.
+    pub fn parse(s: &str) -> Option<Status> {
+        Some(match s {
+            "PASS" => Status::Pass,
+            "WARN" => Status::Warn,
+            "FAIL" => Status::Fail,
+            "N/A" => Status::NotApplicable,
+            _ => return None,
+        })
+    }
 }
+
+/// The overall status of a record (SPEC B1.7 `status`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overall {
+    /// Every rule PASS or N/A, and the log has an armed flight.
+    Pass,
+    /// No rule FAIL, at least one WARN, and the log has an armed flight.
+    Warn,
+    /// At least one rule FAIL.
+    Fail,
+    /// No rule FAIL, and the log has no ARM and no DISARM (R5 N/A): there is no flight the
+    /// rules could check.
+    NoArmedFlight,
+}
+
+impl Overall {
+    /// Record spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Overall::Pass => "PASS",
+            Overall::Warn => "WARN",
+            Overall::Fail => "FAIL",
+            Overall::NoArmedFlight => "NO ARMED FLIGHT",
+        }
+    }
+
+    /// From `(id, status)` of every result: FAIL if any is FAIL; else NO ARMED FLIGHT if R5 is
+    /// N/A; else WARN if any is WARN; else PASS. `verify` computes it the same way from a
+    /// record's results.
+    pub fn of<'a>(results: impl IntoIterator<Item = (&'a str, Status)>) -> Overall {
+        let (mut fail, mut warn, mut no_flight) = (false, false, false);
+        for (id, status) in results {
+            match status {
+                Status::Fail => fail = true,
+                Status::Warn => warn = true,
+                Status::NotApplicable if id == "R5" => no_flight = true,
+                _ => {}
+            }
+        }
+        if fail {
+            Overall::Fail
+        } else if no_flight {
+            Overall::NoArmedFlight
+        } else if warn {
+            Overall::Warn
+        } else {
+            Overall::Pass
+        }
+    }
+}
+
+/// The ids of the core rules, each exactly once in every record, in this order.
+pub const CORE_RULES: [&str; 7] = ["R1", "R2", "R3", "R4", "R5", "R6", "R7"];
 
 /// One rule result (SPEC B1.7 `results`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,9 +162,10 @@ impl RuleResult {
 pub struct Evaluation {
     /// In rule-id order: R1 to R7, then the enabled X rules.
     pub results: Vec<RuleResult>,
-    /// PASS when no rule is FAIL.
-    pub status: Status,
-    /// SPEC B1.4: 2 if R1 fails, else 1 if any rule fails, else 0.
+    /// [`Overall::of`] the results.
+    pub status: Overall,
+    /// SPEC B1.4: 2 if R1 fails, else 1 if any rule fails or the log has no armed flight,
+    /// else 0.
     pub exit_code: i32,
 }
 
@@ -116,6 +186,13 @@ pub const FAILSAFE_FLAGS_FIELDS: [&str; 1] = ["timestamp"];
 
 /// The `vehicle_command` fields R7 reads (R1 checks them when R7 is enabled).
 pub const VEHICLE_COMMAND_FIELDS: [&str; 3] = ["command", "source_system", "source_component"];
+
+/// MAVLink MAV_TYPE values of VTOL vehicles (`MAV_TYPE_VTOL_*`, 19 to 25).
+pub const VTOL_MAV_TYPES: std::ops::RangeInclusive<u8> = 19..=25;
+
+/// The text that says a rule has no armed flight to check.
+pub const NO_ARMED_FLIGHT: &str =
+    "no armed flight: vehicle_status.arming_state has no ARM and no DISARM";
 
 fn r1(f: &FlightLog, rules: &Rules) -> RuleResult {
     let topics = rules.r1_topics();
@@ -171,15 +248,30 @@ fn r1(f: &FlightLog, rules: &Rules) -> RuleResult {
     }
 }
 
+/// How R2 and R3 name the baseline file: its SHA-256, which the operator supplied.
+fn baseline_source(baseline: &Baseline) -> String {
+    match &baseline.sha256 {
+        Some(d) => format!("baseline file sha256 {} (operator-supplied)", crate::hex(d)),
+        None => "baseline file sha256 unknown (operator-supplied)".to_string(),
+    }
+}
+
 fn r2(ing: &Ingested, baseline: &Baseline) -> RuleResult {
     let fw = &ing.identity.firmware;
-    let expected = baseline.firmware.to_string();
-    let found = match (&fw.version, &fw.git) {
-        (Some(v), Some(g)) => format!("{v} {g}"),
-        (Some(v), None) => v.clone(),
+    let expected = format!(
+        "{}, from the baseline's # Firmware: line",
+        baseline.firmware
+    );
+    let stated = match (&fw.version, &fw.git) {
+        (Some(v), Some(g)) => format!("PX4 {v} {g}"),
+        (Some(v), None) => format!("PX4 {v}"),
         (None, Some(g)) => format!("no ver_sw_release, ver_sw {g}"),
         (None, None) => "no ver_sw_release or ver_sw".into(),
     };
+    let found = format!(
+        "log states {stated} (self-reported); {}",
+        baseline_source(baseline)
+    );
     let mut detail = Vec::new();
     match &fw.version {
         None => detail.push("log has no ver_sw_release info message".to_string()),
@@ -213,54 +305,152 @@ fn r2(ing: &Ingested, baseline: &Baseline) -> RuleResult {
     )
 }
 
+/// One R3 difference: the flown value, and where it came from when a data-section parameter
+/// record set it.
+struct Difference {
+    baseline: Option<ParamValue>,
+    flown: Option<ParamValue>,
+    set_at: Option<u64>,
+}
+
+/// R3: the parameters in effect at every ARM (the start-of-log values, changed by every
+/// data-section parameter record before the arming row in file order) equal the baseline. With
+/// no ARM the values at the end of the log are compared. A change in flight is a WARN.
 fn r3(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> RuleResult {
-    let flown = &ing.config.params;
-    let mut names: BTreeSet<&str> = baseline.params.keys().map(String::as_str).collect();
-    if rules.compare == Compare::All {
-        names.extend(flown.keys().map(String::as_str));
+    let f = &ing.flight;
+    let mut checkpoints: Vec<u64> = flight_armed_intervals(f)
+        .iter()
+        .map(|a| a.arm_order)
+        .collect();
+    if checkpoints.is_empty() {
+        checkpoints.push(u64::MAX);
+    }
+    let mut current: BTreeMap<&str, (ParamValue, Option<u64>)> = ing
+        .config
+        .params
+        .iter()
+        .map(|(k, v)| (k.as_str(), (*v, None)))
+        .collect();
+    let mut records = f.param_records.iter().peekable();
+    let mut diffs: BTreeMap<String, Difference> = BTreeMap::new();
+    let mut ignored: BTreeSet<&str> = BTreeSet::new();
+    let mut suppressed: BTreeSet<&str> = BTreeSet::new();
+    let mut touched: Option<BTreeSet<&str>> = None;
+    for &at in &checkpoints {
+        let mut changed: BTreeSet<&str> = BTreeSet::new();
+        while let Some(p) = records.next_if(|p| p.file_order < at) {
+            current.insert(p.name.as_str(), (p.value, Some(p.time)));
+            changed.insert(p.name.as_str());
+        }
+        // The first checkpoint compares every name; later ones only the names changed since.
+        let names: BTreeSet<&str> = match &touched {
+            None => {
+                let mut n: BTreeSet<&str> = baseline.params.keys().map(String::as_str).collect();
+                if rules.compare == Compare::All {
+                    n.extend(current.keys().copied());
+                }
+                n
+            }
+            Some(_) => changed
+                .iter()
+                .copied()
+                .filter(|n| rules.compare == Compare::All || baseline.params.contains_key(*n))
+                .collect(),
+        };
+        touched = Some(BTreeSet::new());
+        for name in names {
+            let b = baseline.params.get(name).copied();
+            let l = current.get(name).copied();
+            let same = matches!((b, l), (Some(b), Some((l, _))) if b.same_as(&l));
+            if rules.ignores(name) {
+                ignored.insert(name);
+                if !same {
+                    suppressed.insert(name);
+                }
+                continue;
+            }
+            if !same && !diffs.contains_key(name) {
+                diffs.insert(
+                    name.to_string(),
+                    Difference {
+                        baseline: b,
+                        flown: l.map(|(v, _)| v),
+                        set_at: l.and_then(|(_, t)| t),
+                    },
+                );
+            }
+        }
     }
     let mut detail = Vec::new();
-    let mut ignored = 0usize;
-    for name in names {
-        if rules.ignores(name) {
-            ignored += 1;
-            continue;
-        }
-        let b = baseline.params.get(name);
-        let l = flown.get(name);
-        let same = matches!((b, l), (Some(b), Some(l)) if b.same_as(l));
-        if !same {
-            let show = |v: Option<&crate::ulog::ParamValue>| {
-                v.map_or("absent".to_string(), |v| v.to_string())
-            };
-            detail.push(format!("{name}: baseline {}, flown {}", show(b), show(l)));
+    let show = |v: Option<ParamValue>| v.map_or("absent".to_string(), |v| v.to_string());
+    for (name, d) in &diffs {
+        let note = d.set_at.map_or(String::new(), |t| {
+            format!(" (set by a parameter record at boot_us {t})")
+        });
+        detail.push(format!(
+            "{name}: baseline {}, flown {}{note}",
+            show(d.baseline),
+            show(d.flown)
+        ));
+    }
+    // Changes in flight: the PARAM_CHANGED_IN_FLIGHT events.
+    let mut in_flight = Lines::new();
+    for e in &ing.events {
+        if let EventKind::ParamChangedInFlight { name, .. } = &e.kind {
+            if rules.ignores(name) {
+                suppressed.insert(name.as_str());
+                continue;
+            }
+            in_flight.push(|| {
+                format!(
+                    "changed in flight: {name} at boot_us {} (event seq {})",
+                    e.boot_us, e.seq
+                )
+            });
         }
     }
+    let changed_in_flight = in_flight.total;
+    detail.extend(in_flight.finish());
     let scope = match rules.compare {
         Compare::All => "every parameter in the baseline or the log",
         Compare::Baseline => "every parameter in the baseline",
     };
-    let expected = format!("{scope} equal, {ignored} ignored by pattern");
-    if detail.is_empty() {
-        RuleResult::new(
-            "R3",
-            "parameters match baseline",
-            Status::Pass,
-            expected,
-            "no differences",
-            detail,
-        )
-    } else {
-        let found = format!("{} differ", detail.len());
-        RuleResult::new(
-            "R3",
-            "parameters match baseline",
+    let expected = format!(
+        "{scope} equal to the baseline at every ARM, none changed in flight, {} ignored by pattern",
+        ignored.len()
+    );
+    let patterns: Vec<&str> = rules.ignore.iter().map(|p| p.as_str()).collect();
+    let tail = format!(
+        "ignore [{}] suppressed {} difference(s){}; {}",
+        patterns.join(", "),
+        suppressed.len(),
+        if rules.ignores_everything() {
+            ", and matches every parameter name"
+        } else {
+            ""
+        },
+        baseline_source(baseline)
+    );
+    let (status, head) = match (diffs.len(), changed_in_flight) {
+        (0, 0) => (Status::Pass, "no differences".to_string()),
+        (0, k) => (
+            Status::Warn,
+            format!("no differences at ARM; {k} parameter(s) changed in flight"),
+        ),
+        (n, 0) => (Status::Fail, format!("{n} differ")),
+        (n, k) => (
             Status::Fail,
-            expected,
-            found,
-            detail,
-        )
-    }
+            format!("{n} differ; {k} parameter(s) changed in flight"),
+        ),
+    };
+    RuleResult::new(
+        "R3",
+        "parameters match baseline",
+        status,
+        expected,
+        format!("{head}; {tail}"),
+        detail,
+    )
 }
 
 fn missing_fields(f: &FlightLog, fields: &[&str]) -> Vec<String> {
@@ -291,9 +481,45 @@ fn fail_missing(
     )
 }
 
-/// Most detail lines R4, R5, R6, X2, and X3 list. Real logs need a handful; the cap keeps a
-/// crafted log from making one result enormous. R3 is not capped: SPEC B1.6 has it list every
-/// differing parameter, at most the two parameter limits together.
+/// FAIL for input the log has but that cannot be read as PX4 defines it.
+fn fail_unreadable(
+    id: &'static str,
+    name: &'static str,
+    expected: &str,
+    problems: Vec<String>,
+) -> RuleResult {
+    RuleResult::new(
+        id,
+        name,
+        Status::Fail,
+        expected,
+        format!("cannot evaluate: {}", problems.join("; ")),
+        problems,
+    )
+}
+
+/// The missing and then the mistyped `vehicle_status` fields among `fields`, as a FAIL.
+fn check_vehicle_status(
+    id: &'static str,
+    name: &'static str,
+    expected: &str,
+    f: &FlightLog,
+    fields: &[&str],
+) -> Option<RuleResult> {
+    let missing = missing_fields(f, fields);
+    if !missing.is_empty() {
+        return Some(fail_missing(id, name, expected, missing));
+    }
+    let wrong = f.mismatches("vehicle_status", fields);
+    if !wrong.is_empty() {
+        return Some(fail_unreadable(id, name, expected, wrong));
+    }
+    None
+}
+
+/// Most detail lines R3, R4, R5, R6, X2, and X3 list. Real logs need a handful; the cap keeps a
+/// crafted log from making one result enormous. R3's differences are not capped: SPEC B1.6 has
+/// it list every differing parameter, at most the two parameter limits together.
 pub const MAX_DETAIL_LINES: usize = 1000;
 
 /// Detail lines with a running total, capped at [`MAX_DETAIL_LINES`].
@@ -336,112 +562,274 @@ impl Lines {
     }
 }
 
+/// Whether a sample at `t` is in flight: from an ARM through the sample that disarms, both
+/// included (R4's window).
+fn in_flight_sample(armed: &[ArmedInterval], t: u64) -> bool {
+    let n = armed.partition_point(|a| a.arm <= t);
+    n.checked_sub(1)
+        .and_then(|i| armed.get(i))
+        .is_some_and(|a| t >= a.arm && a.disarm.is_none_or(|d| t <= d))
+}
+
+/// One failsafe_flags flag that was true in flight.
+#[derive(Default)]
+struct FlagSeen {
+    /// Samples where the current mode requires it, the first time, and that mode.
+    required: usize,
+    first_required: Option<(u64, u8)>,
+    /// Samples where the mode does not require it, and the first time.
+    other: usize,
+    first_other: Option<u64>,
+}
+
+/// Every failsafe_flags flag true in flight, on every instance: whether the `nav_state` in
+/// effect requires it (its `mode_req_*` bit), as PX4 decides whether a mode can run.
+fn flags_in_flight(f: &FlightLog, armed: &[ArmedInterval]) -> BTreeMap<String, FlagSeen> {
+    let instances = f.vehicle_status_instances();
+    let mut out: BTreeMap<String, FlagSeen> = BTreeMap::new();
+    let all: Vec<&FailsafeFlags> = std::iter::once(&f.failsafe_flags)
+        .chain(&f.failsafe_flags_others)
+        .collect();
+    for fs in all {
+        // nav_state from the vehicle_status instance of the same number, else the lowest.
+        let vs: &[VehicleStatusRow] = instances
+            .iter()
+            .find(|rows| rows.first().is_some_and(|r| r.id.instance == fs.multi_id))
+            .or(instances.first())
+            .copied()
+            .unwrap_or(&[]);
+        let mut nav: Vec<(u64, u8)> = vs
+            .iter()
+            .filter_map(|r| r.nav_state.map(|n| (r.id.ts, n)))
+            .collect();
+        nav.sort_by_key(|(t, _)| *t);
+        let mut rows = fs.rows.clone();
+        rows.sort_by_key(|r| (r.id.ts, r.id.index));
+        for row in &rows {
+            let t = row.id.ts;
+            if !in_flight_sample(armed, t) {
+                continue;
+            }
+            let k = nav.partition_point(|(ts, _)| *ts <= t);
+            let mode = k.checked_sub(1).and_then(|i| nav.get(i)).map(|(_, n)| *n);
+            let bit = mode
+                .and_then(|n| 1u32.checked_shl(u32::from(n)))
+                .unwrap_or(0);
+            for (i, def) in fs.flags.iter().enumerate() {
+                if !row.active.get(i).copied().unwrap_or(false) {
+                    continue;
+                }
+                let seen = out.entry(def.name.clone()).or_default();
+                let required = row.mode_req.get(i).is_some_and(|m| m & bit != 0);
+                match (required, mode) {
+                    (true, Some(n)) => {
+                        seen.required += 1;
+                        seen.first_required.get_or_insert((t, n));
+                    }
+                    _ => {
+                        seen.other += 1;
+                        seen.first_other.get_or_insert(t);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 fn r4(f: &FlightLog) -> RuleResult {
-    let expected = "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), and no quadchute (fixed wing straight to multicopter) in flight";
+    const NAME: &str = "no failsafe in flight";
+    let expected = "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), no quadchute (fixed wing straight to multicopter) in flight, and no failsafe_flags flag that the current nav_state requires true in flight; other failsafe_flags flags true in flight are warnings";
     // SPEC B1.6: the quadchute half reads the VTOL state only on a VTOL vehicle (is_vtol true
     // on some sample). No vehicle_status, or no is_vtol field, counts as not VTOL here; R1
     // reports what is missing.
     let is_vtol = f.vehicle_status.iter().any(|r| r.is_vtol == Some(true));
-    let mut needed = vec!["arming_state", "failsafe"];
+    let mut needed = vec!["arming_state", "nav_state", "failsafe"];
     if is_vtol {
         needed.extend(["in_transition_mode", "in_transition_to_fw", "vehicle_type"]);
     }
-    let missing = missing_fields(f, &needed);
-    if !missing.is_empty() {
-        return fail_missing("R4", "no failsafe in flight", expected, missing);
+    if let Some(r) = check_vehicle_status("R4", NAME, expected, f, &needed) {
+        return r;
     }
-    let fs = &f.failsafe_flags;
-    let mut rows = fs.rows.clone();
-    rows.sort_by_key(|r| (r.id.ts, r.id.index));
+    if f.failsafe_flags.rows.is_empty() {
+        return fail_missing("R4", NAME, expected, vec!["failsafe_flags".into()]);
+    }
+    let mut wrong = f.mismatches("failsafe_flags", &[]);
+    if std::iter::once(&f.failsafe_flags)
+        .chain(&f.failsafe_flags_others)
+        .any(|fs| fs.mode_req_unreadable)
+    {
+        wrong.push("a failsafe_flags.mode_req_* value does not fit 32 bits".into());
+    }
+    if !wrong.is_empty() {
+        return fail_unreadable("R4", NAME, expected, wrong);
+    }
+    let armed = flight_armed_intervals(f);
+    if armed.is_empty() {
+        return RuleResult::new(
+            "R4",
+            NAME,
+            Status::NotApplicable,
+            expected,
+            NO_ARMED_FLIGHT,
+            vec![],
+        );
+    }
     let mut detail = Lines::new();
     let (mut failsafes, mut quadchutes) = (0usize, 0usize);
-    let mut active = false;
-    let mut last_arm = None;
-    let mut was_armed = false;
-    let mut prev_vtol: Option<VtolState> = None;
-    for r in &f.vehicle_status {
-        let armed = r.arming_state == Some(2);
-        if armed && !was_armed {
-            last_arm = Some(r.id.ts);
-        }
-        // The row that disarms still belongs to the flight: a failsafe that disarms the
-        // vehicle (or appears together with the disarm) is a failsafe in flight.
-        let in_flight = armed || was_armed;
-        was_armed = armed;
-        let now = in_flight && r.failsafe == Some(true);
-        if now && !active {
-            failsafes += 1;
-            detail.push(|| {
-                let flags = attribute_failsafe(fs, &rows, r.id.ts, r.nav_state, last_arm);
-                format!(
-                    "failsafe in flight at boot_us {}: {}",
-                    r.id.ts,
-                    flags.join(", ")
-                )
-            });
-        }
-        active = now;
-        // SPEC B1.5: a quadchute is not a transition; R4 reports it. PX4 raises the quadchute
-        // failsafe only in some modes (failsafe.cpp), so the state change itself is the signal.
-        // The disarming row is in flight here too, as for failsafes above.
-        let vtol = vtol_state(r);
-        if is_vtol && in_flight && prev_vtol == Some(VtolState::Fw) && vtol == Some(VtolState::Mc) {
-            quadchutes += 1;
-            detail.push(|| {
-                let flag = match flag_at(fs, &rows, "vtol_fixed_wing_system_failure", r.id.ts) {
-                    Some(true) => "true",
-                    Some(false) => "false",
-                    None => "not logged",
-                };
-                format!(
-                    "quadchute in flight at boot_us {}: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure {flag}",
-                    r.id.ts
-                )
-            });
-        }
-        if vtol.is_some() {
-            prev_vtol = vtol;
+    for rows in f.vehicle_status_instances() {
+        let Some(instance) = rows.first().map(|r| r.id.instance) else {
+            continue;
+        };
+        let fs = crate::events::flags_for_instance(f, instance);
+        let mut flag_rows = fs.rows.clone();
+        flag_rows.sort_by_key(|r| (r.id.ts, r.id.index));
+        let mut active = false;
+        let mut last_arm = None;
+        let mut was_armed = false;
+        let mut prev_vtol: Option<VtolState> = None;
+        for r in rows {
+            let armed = r.arming_state == Some(2);
+            if armed && !was_armed {
+                last_arm = Some(r.id.ts);
+            }
+            // The row that disarms still belongs to the flight: a failsafe that disarms the
+            // vehicle (or appears together with the disarm) is a failsafe in flight.
+            let in_flight = armed || was_armed;
+            was_armed = armed;
+            let now = in_flight && r.failsafe == Some(true);
+            if now && !active {
+                failsafes += 1;
+                detail.push(|| {
+                    let flags = attribute_failsafe(fs, &flag_rows, r.id.ts, r.nav_state, last_arm);
+                    format!(
+                        "failsafe in flight at boot_us {}{}: {}",
+                        r.id.ts,
+                        instance_note(instance),
+                        flags.join(", ")
+                    )
+                });
+            }
+            active = now;
+            // SPEC B1.5: a quadchute is not a transition; R4 reports it. PX4 raises the
+            // quadchute failsafe only in some modes (failsafe.cpp), so the state change itself
+            // is the signal. The disarming row is in flight here too, as for failsafes above.
+            let vtol = vtol_state(r);
+            if is_vtol
+                && in_flight
+                && prev_vtol == Some(VtolState::Fw)
+                && vtol == Some(VtolState::Mc)
+            {
+                quadchutes += 1;
+                detail.push(|| {
+                    let flag = match flag_at(
+                        fs,
+                        &flag_rows,
+                        "vtol_fixed_wing_system_failure",
+                        r.id.ts,
+                    ) {
+                        Some(true) => "true",
+                        Some(false) => "false",
+                        None => "not logged",
+                    };
+                    format!(
+                        "quadchute in flight at boot_us {}{}: fixed wing straight to multicopter, failsafe_flags.vtol_fixed_wing_system_failure {flag}",
+                        r.id.ts,
+                        instance_note(instance)
+                    )
+                });
+            }
+            if vtol.is_some() {
+                prev_vtol = vtol;
+            }
         }
     }
-    if detail.total == 0 {
-        RuleResult::new(
-            "R4",
-            "no failsafe in flight",
-            Status::Pass,
-            expected,
-            "never true in flight",
-            vec![],
-        )
+    // SPEC B1.6: every failsafe_flags flag true in flight. One the mode in effect requires
+    // fails R4 whether or not PX4 raised vehicle_status.failsafe; any other is a warning.
+    let flags = flags_in_flight(f, &armed);
+    let mut required = Vec::new();
+    let mut warned = Vec::new();
+    for (name, seen) in &flags {
+        if let Some((t, n)) = seen.first_required {
+            required.push(name.as_str());
+            detail.push(|| {
+                format!(
+                    "failsafe_flags.{name} true in flight from boot_us {t} ({} sample(s)), required by nav_state {n}",
+                    seen.required
+                )
+            });
+        }
+        if let Some(t) = seen.first_other {
+            warned.push(name.as_str());
+            detail.push(|| {
+                format!(
+                    "warning: failsafe_flags.{name} true in flight from boot_us {t} ({} sample(s)), not required by the nav_state in effect",
+                    seen.other
+                )
+            });
+        }
+    }
+    let warning = if warned.is_empty() {
+        String::new()
     } else {
-        let found = match quadchutes {
-            0 => format!("true in flight {failsafes} time(s)"),
-            q => format!("true in flight {failsafes} time(s), quadchute {q} time(s)"),
-        };
-        let detail = detail.finish();
-        RuleResult::new(
-            "R4",
-            "no failsafe in flight",
-            Status::Fail,
-            expected,
-            found,
-            detail,
+        format!(
+            "; warning: failsafe_flags {} true in flight",
+            warned.join(", ")
         )
+    };
+    let failed = failsafes + quadchutes + required.len() > 0;
+    let detail = detail.finish();
+    if !failed {
+        let status = if warned.is_empty() {
+            Status::Pass
+        } else {
+            Status::Warn
+        };
+        return RuleResult::new(
+            "R4",
+            NAME,
+            status,
+            expected,
+            format!("never true in flight{warning}"),
+            detail,
+        );
+    }
+    let mut found = format!("true in flight {failsafes} time(s)");
+    if quadchutes > 0 {
+        found.push_str(&format!(", quadchute {quadchutes} time(s)"));
+    }
+    if !required.is_empty() {
+        found.push_str(&format!(
+            ", required failsafe_flags {} true in flight",
+            required.join(", ")
+        ));
+    }
+    found.push_str(&warning);
+    RuleResult::new("R4", NAME, Status::Fail, expected, found, detail)
+}
+
+/// " (instance N)" for a `vehicle_status` instance other than 0.
+fn instance_note(instance: u8) -> String {
+    if instance == 0 {
+        String::new()
+    } else {
+        format!(" (vehicle_status instance {instance})")
     }
 }
 
 fn r5(f: &FlightLog, events: &[Event]) -> RuleResult {
+    const NAME: &str = "arm and disarm consistent";
     let expected = "every ARM followed by a DISARM; log does not end armed";
-    let missing = missing_fields(f, &["arming_state"]);
-    if !missing.is_empty() {
-        return fail_missing("R5", "arm and disarm consistent", expected, missing);
+    if let Some(r) = check_vehicle_status("R5", NAME, expected, f, &["arming_state"]) {
+        return r;
     }
     let mut detail = Lines::new();
-    let mut open: Option<&Event> = None;
-    let mut arms = 0usize;
+    let mut open: BTreeMap<u8, &Event> = BTreeMap::new();
+    let (mut arms, mut disarms) = (0usize, 0usize);
     for e in events {
         match e.kind {
             EventKind::Arm { .. } => {
-                if let Some(prev) = open {
+                if let Some(prev) = open.insert(e.instance, e) {
                     detail.push(|| {
                         format!(
                             "ARM seq {} at boot_us {} has no DISARM",
@@ -449,21 +837,20 @@ fn r5(f: &FlightLog, events: &[Event]) -> RuleResult {
                         )
                     });
                 }
-                open = Some(e);
                 arms += 1;
             }
             EventKind::Disarm { .. } => {
-                if open.is_none() {
+                if open.remove(&e.instance).is_none() {
                     detail.push(|| {
                         format!("DISARM seq {} at boot_us {} has no ARM", e.seq, e.boot_us)
                     });
                 }
-                open = None;
+                disarms += 1;
             }
             _ => {}
         }
     }
-    if let Some(prev) = open {
+    for prev in open.values() {
         detail.push(|| {
             format!(
                 "ARM seq {} at boot_us {} has no DISARM: the log ends armed",
@@ -471,65 +858,98 @@ fn r5(f: &FlightLog, events: &[Event]) -> RuleResult {
             )
         });
     }
+    if arms == 0 && disarms == 0 {
+        // SPEC B1.6: no flight is not a consistent flight; the record's status says so.
+        return RuleResult::new(
+            "R5",
+            NAME,
+            Status::NotApplicable,
+            expected,
+            NO_ARMED_FLIGHT,
+            vec![],
+        );
+    }
+    let instances = f.vehicle_status_instances().len();
+    let across = if instances > 1 {
+        format!(" across {instances} vehicle_status instances")
+    } else {
+        String::new()
+    };
     if detail.total == 0 {
         RuleResult::new(
             "R5",
-            "arm and disarm consistent",
+            NAME,
             Status::Pass,
             expected,
-            format!("{arms} ARM, {arms} DISARM"),
+            format!("{arms} ARM, {disarms} DISARM{across}"),
             vec![],
         )
     } else {
         let found = format!("{} unmatched", detail.total);
         let detail = detail.finish();
-        RuleResult::new(
-            "R5",
-            "arm and disarm consistent",
-            Status::Fail,
-            expected,
-            found,
-            detail,
-        )
+        RuleResult::new("R5", NAME, Status::Fail, expected, found, detail)
     }
 }
 
 /// R6. On a VTOL vehicle its first detail line states the VTOL type.
 fn r6(f: &FlightLog, events: &[Event], vtol: Option<&crate::ingest::VtolType>) -> RuleResult {
+    const NAME: &str = "VTOL transitions completed";
     let expected = "every VTOL transition START has an END; none aborted";
-    let missing = missing_fields(f, &["is_vtol"]);
-    if !missing.is_empty() {
-        return fail_missing("R6", "VTOL transitions completed", expected, missing);
+    if let Some(r) = check_vehicle_status("R6", NAME, expected, f, &["is_vtol"]) {
+        return r;
+    }
+    let wrong = f.mismatches("vehicle_status", &["system_type"]);
+    if !wrong.is_empty() {
+        return fail_unreadable("R6", NAME, expected, wrong);
     }
     if f.vehicle_status.iter().all(|r| r.is_vtol == Some(false)) {
+        // A VTOL MAV_TYPE with is_vtol false on every sample: the two disagree, so whether the
+        // vehicle is VTOL cannot be decided from the log.
+        if let Some(t) = f
+            .vehicle_status
+            .iter()
+            .filter_map(|r| r.system_type)
+            .find(|t| VTOL_MAV_TYPES.contains(t))
+        {
+            return fail_unreadable(
+                "R6",
+                NAME,
+                expected,
+                vec![format!(
+                    "vehicle_status.system_type is {t}, a VTOL MAV_TYPE, but is_vtol is false on every sample"
+                )],
+            );
+        }
         return RuleResult::new(
             "R6",
-            "VTOL transitions completed",
+            NAME,
             Status::NotApplicable,
             expected,
             "vehicle_status.is_vtol false on every sample",
             vec![],
         );
     }
-    let missing = missing_fields(
+    if let Some(r) = check_vehicle_status(
+        "R6",
+        NAME,
+        expected,
         f,
         &["in_transition_mode", "in_transition_to_fw", "vehicle_type"],
-    );
-    if !missing.is_empty() {
-        return fail_missing("R6", "VTOL transitions completed", expected, missing);
+    ) {
+        return r;
     }
     let mut detail = Lines::new();
-    let mut open: Option<&Event> = None;
+    let mut open: BTreeMap<u8, &Event> = BTreeMap::new();
     let (mut starts, mut ends) = (0usize, 0usize);
     for e in events {
         match &e.kind {
             EventKind::VtolTransitionStart { .. } => {
                 starts += 1;
-                open = Some(e);
+                open.insert(e.instance, e);
             }
             EventKind::VtolTransitionEnd { .. } => {
                 ends += 1;
-                open = None;
+                open.remove(&e.instance);
             }
             EventKind::VtolTransitionAbort { direction } => {
                 detail.push(|| {
@@ -540,22 +960,22 @@ fn r6(f: &FlightLog, events: &[Event], vtol: Option<&crate::ingest::VtolType>) -
                         e.boot_us
                     )
                 });
-                open = None;
+                open.remove(&e.instance);
             }
             _ => {}
         }
     }
-    if let Some(e) = open
-        && let EventKind::VtolTransitionStart { direction } = &e.kind
-    {
-        detail.push(|| {
-            format!(
-                "VTOL_TRANSITION_START {} seq {} at boot_us {} has no END: the log ends in transition",
-                direction.as_str(),
-                e.seq,
-                e.boot_us
-            )
-        });
+    for e in open.values() {
+        if let EventKind::VtolTransitionStart { direction } = &e.kind {
+            detail.push(|| {
+                format!(
+                    "VTOL_TRANSITION_START {} seq {} at boot_us {} has no END: the log ends in transition",
+                    direction.as_str(),
+                    e.seq,
+                    e.boot_us
+                )
+            });
+        }
     }
     let found = format!("{starts} START, {ends} END, {} problem(s)", detail.total);
     let status = if detail.total == 0 {
@@ -568,14 +988,7 @@ fn r6(f: &FlightLog, events: &[Event], vtol: Option<&crate::ingest::VtolType>) -
         let value = t.value.map_or(String::new(), |v| format!(" (VT_TYPE {v})"));
         lines.insert(0, format!("VTOL type {}{value}", t.name));
     }
-    RuleResult::new(
-        "R6",
-        "VTOL transitions completed",
-        status,
-        expected,
-        found,
-        lines,
-    )
+    RuleResult::new("R6", NAME, status, expected, found, lines)
 }
 
 fn in_armed(armed: &[ArmedInterval], t: u64) -> bool {
@@ -589,16 +1002,25 @@ fn armed_index(armed: &[ArmedInterval], t: u64) -> Option<usize> {
     armed.get(i).filter(|a| a.contains_sample(t)).map(|_| i)
 }
 
+/// What an X rule needs before it can look at its own data: a readable `arming_state`, at
+/// least one armed interval, and its own fields in the types PX4 defines.
 fn need_armed(
     id: &'static str,
     name: &'static str,
     expected: &str,
     f: &FlightLog,
     armed: &[ArmedInterval],
+    fields: &[(&str, &[&str])],
 ) -> Option<RuleResult> {
-    let missing = missing_fields(f, &["arming_state"]);
-    if !missing.is_empty() {
-        return Some(fail_missing(id, name, expected, missing));
+    if let Some(r) = check_vehicle_status(id, name, expected, f, &["arming_state"]) {
+        return Some(r);
+    }
+    let wrong: Vec<String> = fields
+        .iter()
+        .flat_map(|(topic, names)| f.mismatches(topic, names))
+        .collect();
+    if !wrong.is_empty() {
+        return Some(fail_unreadable(id, name, expected, wrong));
     }
     if armed.is_empty() {
         return Some(RuleResult::new(
@@ -655,8 +1077,11 @@ fn r7(f: &FlightLog, events: &[Event], rules: &Rules) -> RuleResult {
     if !missing.is_empty() {
         return fail_missing("R7", NAME, &expected, missing);
     }
-    // The ingest keeps only the samples whose three fields are 8-, 16- or 32-bit unsigned
-    // integers (the widths PX4 uses).
+    let wrong = f.mismatches(R7_TOPIC, &VEHICLE_COMMAND_FIELDS);
+    if !wrong.is_empty() {
+        return fail_unreadable("R7", NAME, &expected, wrong);
+    }
+    // The ingest keeps only the samples whose three fields have the types PX4 defines.
     let read = f.commands.len() as u64;
     if read != rows {
         return RuleResult::new(
@@ -665,14 +1090,14 @@ fn r7(f: &FlightLog, events: &[Event], rules: &Rules) -> RuleResult {
             Status::Fail,
             expected,
             format!(
-                "cannot evaluate: {} of {rows} {R7_TOPIC} record(s) have a command, source_system or source_component that is not an 8-, 16- or 32-bit unsigned integer",
+                "cannot evaluate: {} of {rows} {R7_TOPIC} record(s) have a command, source_system or source_component that cannot be read",
                 rows - read
             ),
             vec![],
         );
     }
     let mut detail = Lines::new();
-    let mut checked = 0usize;
+    let (mut checked, mut excluded) = (0usize, 0usize);
     for e in events {
         let EventKind::Command {
             command,
@@ -685,6 +1110,7 @@ fn r7(f: &FlightLog, events: &[Event], rules: &Rules) -> RuleResult {
         };
         let category = rules.category(*command);
         if auth.category.is_some_and(|c| c != category) {
+            excluded += 1;
             continue;
         }
         checked += 1;
@@ -702,16 +1128,24 @@ fn r7(f: &FlightLog, events: &[Event], rules: &Rules) -> RuleResult {
             });
         }
     }
+    let scope_note = format!(
+        "scope {}, {excluded} excluded by scope; source ids are self-reported by the sender",
+        auth.category
+            .map_or("every category".to_string(), |c| format!(
+                "{} only",
+                c.as_str()
+            ))
+    );
     let bad = detail.total;
     let (status, found) = if bad == 0 {
         (
             Status::Pass,
-            format!("{checked} command(s) checked, all from authorized sources"),
+            format!("{checked} command(s) checked, all from authorized sources; {scope_note}"),
         )
     } else {
         (
             Status::Fail,
-            format!("{bad} of {checked} command(s) from unauthorized sources"),
+            format!("{bad} of {checked} command(s) from unauthorized sources; {scope_note}"),
         )
     };
     RuleResult::new("R7", NAME, status, expected, found, detail.finish())
@@ -723,7 +1157,14 @@ fn x1(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::MinBattery) -> R
         "battery_status.remaining >= {} while armed (threshold set by your flight-test lead)",
         t.min_remaining.text
     );
-    if let Some(r) = need_armed(id, name, &expected, f, armed) {
+    if let Some(r) = need_armed(
+        id,
+        name,
+        &expected,
+        f,
+        armed,
+        &[("battery_status", &["remaining", "connected"])],
+    ) {
         return r;
     }
     let mut min: Option<(f32, u64, u8)> = None;
@@ -769,14 +1210,25 @@ fn x1(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::MinBattery) -> R
     }
 }
 
-fn x2(f: &FlightLog, events: &[Event], t: &crate::rules::GpsFixAtArm) -> RuleResult {
+fn x2(
+    f: &FlightLog,
+    events: &[Event],
+    armed: &[ArmedInterval],
+    t: &crate::rules::GpsFixAtArm,
+) -> RuleResult {
     let (id, name) = ("X2", "GPS fix at arm");
     let expected = format!(
         "at each ARM, vehicle_gps_position fix_type >= {} and satellites_used >= {} (thresholds set by your flight-test lead)",
         t.min_fix_type, t.min_satellites
     );
-    let armed = armed_intervals(&f.vehicle_status);
-    if let Some(r) = need_armed(id, name, &expected, f, &armed) {
+    if let Some(r) = need_armed(
+        id,
+        name,
+        &expected,
+        f,
+        armed,
+        &[("vehicle_gps_position", &["fix_type", "satellites_used"])],
+    ) {
         return r;
     }
     let mut rows = f.vehicle_gps.clone();
@@ -820,7 +1272,17 @@ fn x2(f: &FlightLog, events: &[Event], t: &crate::rules::GpsFixAtArm) -> RuleRes
 fn x3(f: &FlightLog, armed: &[ArmedInterval]) -> RuleResult {
     let (id, name) = ("X3", "estimator fault flags");
     let expected = "estimator_status.filter_fault_flags 0 on the primary estimator while armed";
-    if let Some(r) = need_armed(id, name, expected, f, armed) {
+    if let Some(r) = need_armed(
+        id,
+        name,
+        expected,
+        f,
+        armed,
+        &[
+            ("estimator_status", &["filter_fault_flags"]),
+            ("estimator_selector_status", &["primary_instance"]),
+        ],
+    ) {
         return r;
     }
     let mut selector = f.estimator_selector.clone();
@@ -882,7 +1344,26 @@ fn x4(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::Vibration) -> Ru
         "accel_vibration_metric <= {} and accel_clipping increase <= {} on the selected accelerometer while armed (thresholds set by your flight-test lead)",
         t.max_accel_vibration_metric.text, t.max_accel_clipping
     );
-    if let Some(r) = need_armed(id, name, &expected, f, armed) {
+    if let Some(r) = need_armed(
+        id,
+        name,
+        &expected,
+        f,
+        armed,
+        &[
+            (
+                "vehicle_imu_status",
+                &[
+                    "accel_device_id",
+                    "accel_clipping[0]",
+                    "accel_clipping[1]",
+                    "accel_clipping[2]",
+                    "accel_vibration_metric",
+                ],
+            ),
+            ("sensor_selection", &["accel_device_id"]),
+        ],
+    ) {
         return r;
     }
     let mut sel = f.sensor_selection.clone();
@@ -898,7 +1379,7 @@ fn x4(f: &FlightLog, armed: &[ArmedInterval], t: &crate::rules::Vibration) -> Ru
     // Last clipping total per IMU instance: (armed interval, total). A delta is counted only
     // between consecutive samples of the selected accelerometer within one armed interval, so
     // clipping while disarmed or while another accelerometer was selected is not counted.
-    let mut prev: std::collections::BTreeMap<u8, (usize, u64)> = std::collections::BTreeMap::new();
+    let mut prev: BTreeMap<u8, (usize, u64)> = BTreeMap::new();
     let mut samples = 0usize;
     for r in &f.imu {
         let Some(interval) = armed_index(armed, r.id.ts) else {
@@ -992,7 +1473,7 @@ fn x5(f: &FlightLog, t: &crate::rules::Dropouts) -> RuleResult {
 /// Evaluates the core rules and the enabled optional rules.
 pub fn evaluate(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Evaluation {
     let f = &ing.flight;
-    let armed = armed_intervals(&f.vehicle_status);
+    let armed = flight_armed_intervals(f);
     let mut results = vec![
         r1(f, rules),
         r2(ing, baseline),
@@ -1007,7 +1488,7 @@ pub fn evaluate(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Evaluatio
         results.push(x1(f, &armed, t));
     }
     if let Some(t) = &x.gps_fix_at_arm {
-        results.push(x2(f, &ing.events, t));
+        results.push(x2(f, &ing.events, &armed, t));
     }
     if x.estimator_faults {
         results.push(x3(f, &armed));
@@ -1018,18 +1499,16 @@ pub fn evaluate(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Evaluatio
     if let Some(t) = &x.dropouts {
         results.push(x5(f, t));
     }
-    let any_fail = results.iter().any(|r| r.status == Status::Fail);
+    let status = Overall::of(results.iter().map(|r| (r.id, r.status)));
     let r1_fail = results.first().is_some_and(|r| r.status == Status::Fail);
-    let exit_code = if r1_fail {
-        exit_code::MISSING_TOPIC
-    } else if any_fail {
-        exit_code::RULE_FAIL
-    } else {
-        exit_code::OK
+    let exit_code = match status {
+        _ if r1_fail => exit_code::MISSING_TOPIC,
+        Overall::Fail | Overall::NoArmedFlight => exit_code::RULE_FAIL,
+        Overall::Pass | Overall::Warn => exit_code::OK,
     };
     Evaluation {
         results,
-        status: if any_fail { Status::Fail } else { Status::Pass },
+        status,
         exit_code,
     }
 }
@@ -1038,7 +1517,27 @@ pub fn evaluate(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Evaluatio
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::ingest::{RowId, VehicleStatusRow};
+    use crate::ingest::{FailsafeFlags, FailsafeRow, RowId, VehicleStatusRow};
+
+    /// The flight with one failsafe_flags sample (no flag set) when it has none: R4 needs
+    /// failsafe_flags data.
+    fn with_flags(mut f: FlightLog) -> FlightLog {
+        if f.failsafe_flags.rows.is_empty() {
+            f.failsafe_flags = FailsafeFlags {
+                rows: vec![FailsafeRow {
+                    id: RowId {
+                        ts: 0,
+                        instance: 0,
+                        index: 0,
+                    },
+                    active: vec![],
+                    mode_req: vec![],
+                }],
+                ..FailsafeFlags::default()
+            };
+        }
+        f
+    }
 
     fn vtol_row(i: u64, arming: u8, trans: bool, to_fw: bool, vtype: u8) -> VehicleStatusRow {
         VehicleStatusRow {
@@ -1047,6 +1546,7 @@ mod tests {
                 instance: 0,
                 index: i,
             },
+            file_order: 0,
             arming_state: Some(arming),
             nav_state: Some(0),
             failsafe: Some(false),
@@ -1078,7 +1578,7 @@ mod tests {
             vehicle_status_fields: fields.clone(),
             ..FlightLog::default()
         };
-        let r = r4(&flight);
+        let r = r4(&with_flags(flight.clone()));
         assert_eq!(r.status, Status::Fail);
         assert_eq!(r.found, "true in flight 0 time(s), quadchute 1 time(s)");
         assert_eq!(
@@ -1100,7 +1600,7 @@ mod tests {
             vehicle_status_fields: fields,
             ..FlightLog::default()
         };
-        assert_eq!(r4(&flight).status, Status::Pass);
+        assert_eq!(r4(&with_flags(flight.clone())).status, Status::Pass);
     }
 
     #[test]
@@ -1119,7 +1619,7 @@ mod tests {
             vehicle_status_fields: fields,
             ..FlightLog::default()
         };
-        let r = r4(&flight);
+        let r = r4(&with_flags(flight.clone()));
         assert_eq!(r.status, Status::Fail);
         assert!(
             r.detail[0].starts_with("failsafe in flight at boot_us 10"),
@@ -1138,7 +1638,7 @@ mod tests {
                 .collect()
         };
         let row = |ts: u64, vtol: bool| {
-            let mut r = vtol_row(ts, 1, false, false, 1);
+            let mut r = vtol_row(ts, 2, false, false, 1);
             r.is_vtol = Some(vtol);
             r.vehicle_type = None;
             r
@@ -1149,14 +1649,14 @@ mod tests {
             vehicle_status_fields: fields("vehicle_type"),
             ..FlightLog::default()
         };
-        assert_eq!(r4(&flight).status, Status::Pass);
+        assert_eq!(r4(&with_flags(flight.clone())).status, Status::Pass);
         // VTOL and no vehicle_type: missing input, FAIL.
         let flight = FlightLog {
             vehicle_status: vec![row(0, true), row(1, true)],
             vehicle_status_fields: fields("vehicle_type"),
             ..FlightLog::default()
         };
-        let r = r4(&flight);
+        let r = r4(&with_flags(flight.clone()));
         assert_eq!(r.status, Status::Fail);
         assert_eq!(r.detail, ["missing vehicle_status.vehicle_type"]);
         // Not VTOL: a fixed wing to multicopter change in flight is not read as a quadchute.
@@ -1173,7 +1673,7 @@ mod tests {
             vehicle_status_fields: fields(""),
             ..FlightLog::default()
         };
-        assert_eq!(r4(&flight).status, Status::Pass);
+        assert_eq!(r4(&with_flags(flight.clone())).status, Status::Pass);
         // No is_vtol field counts as not VTOL.
         let mut rows = vec![row(0, false), row(1, false)];
         for r in &mut rows {
@@ -1187,7 +1687,7 @@ mod tests {
                 .collect(),
             ..FlightLog::default()
         };
-        assert_eq!(r4(&flight).status, Status::Pass);
+        assert_eq!(r4(&with_flags(flight.clone())).status, Status::Pass);
     }
 
     #[test]
@@ -1208,7 +1708,7 @@ mod tests {
             vehicle_status_fields: fields,
             ..FlightLog::default()
         };
-        let r = r4(&flight);
+        let r = r4(&with_flags(flight.clone()));
         assert_eq!(r.status, Status::Fail);
         assert_eq!(r.found, "true in flight 0 time(s), quadchute 1 time(s)");
     }
@@ -1230,10 +1730,12 @@ mod tests {
         let armed = [
             ArmedInterval {
                 arm: 0,
+                arm_order: 0,
                 disarm: Some(100),
             },
             ArmedInterval {
                 arm: 200,
+                arm_order: 0,
                 disarm: Some(300),
             },
         ];
@@ -1297,6 +1799,7 @@ mod tests {
                     instance: 0,
                     index: i,
                 },
+                file_order: 0,
                 arming_state: Some(2),
                 nav_state: Some(4),
                 failsafe: Some(i % 2 == 0),
@@ -1318,7 +1821,7 @@ mod tests {
             vehicle_status_fields: fields,
             ..FlightLog::default()
         };
-        let r = r4(&flight);
+        let r = r4(&with_flags(flight.clone()));
         assert_eq!(r.status, Status::Fail);
         assert_eq!(r.found, "true in flight 1500 time(s)");
         assert_eq!(r.detail.len(), MAX_DETAIL_LINES + 1);
@@ -1371,7 +1874,10 @@ mod tests {
             ),
         );
         assert_eq!(all.status, Status::Fail);
-        assert_eq!(all.found, "1 of 3 command(s) from unauthorized sources");
+        assert_eq!(
+            all.found,
+            "1 of 3 command(s) from unauthorized sources; scope every category, 0 excluded by scope; source ids are self-reported by the sender"
+        );
         assert_eq!(
             all.detail,
             ["event seq 1: command 211 (PAYLOAD) from system 2 component 7 at boot_us 20"]
@@ -1387,7 +1893,7 @@ mod tests {
         assert_eq!(general.status, Status::Pass);
         assert_eq!(
             general.found,
-            "1 command(s) checked, all from authorized sources"
+            "1 command(s) checked, all from authorized sources; scope GENERAL only, 2 excluded by scope; source ids are self-reported by the sender"
         );
         let payload = r7(
             &ing.flight,
@@ -1397,7 +1903,10 @@ mod tests {
             ),
         );
         assert_eq!(payload.status, Status::Fail);
-        assert_eq!(payload.found, "1 of 2 command(s) from unauthorized sources");
+        assert_eq!(
+            payload.found,
+            "1 of 2 command(s) from unauthorized sources; scope PAYLOAD only, 1 excluded by scope; source ids are self-reported by the sender"
+        );
     }
 
     #[test]
@@ -1506,7 +2015,7 @@ mod tests {
         check(
             &float,
             None,
-            "cannot evaluate: 1 of 1 vehicle_command record(s) have a command, source_system or source_component that is not an 8-, 16- or 32-bit unsigned integer",
+            "cannot evaluate: vehicle_command.source_component is float in the log; PX4 defines uint8_t or uint16_t",
         );
     }
 
@@ -1572,5 +2081,21 @@ mod tests {
             r7.found,
             "cannot evaluate: missing vehicle_command.source_component"
         );
+    }
+
+    #[test]
+    fn the_overall_status_follows_the_results() {
+        use Status::*;
+        let of = |r: &[(&'static str, Status)]| Overall::of(r.iter().copied()).as_str();
+        assert_eq!(of(&[("R4", Pass), ("R5", Pass)]), "PASS");
+        assert_eq!(of(&[("R4", Warn), ("R5", Pass)]), "WARN");
+        assert_eq!(
+            of(&[("R4", Warn), ("R5", NotApplicable)]),
+            "NO ARMED FLIGHT"
+        );
+        assert_eq!(of(&[("R4", Fail), ("R5", NotApplicable)]), "FAIL");
+        assert_eq!(of(&[("R6", NotApplicable), ("R7", NotApplicable)]), "PASS");
+        assert_eq!(Status::parse("WARN"), Some(Warn));
+        assert_eq!(Status::parse("FAILED"), None);
     }
 }

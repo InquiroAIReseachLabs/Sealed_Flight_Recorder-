@@ -131,6 +131,24 @@ impl Scalar {
         })
     }
 
+    /// The C type name a ULog format uses for it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Scalar::I8 => "int8_t",
+            Scalar::U8 => "uint8_t",
+            Scalar::I16 => "int16_t",
+            Scalar::U16 => "uint16_t",
+            Scalar::I32 => "int32_t",
+            Scalar::U32 => "uint32_t",
+            Scalar::I64 => "int64_t",
+            Scalar::U64 => "uint64_t",
+            Scalar::F32 => "float",
+            Scalar::F64 => "double",
+            Scalar::Bool => "bool",
+            Scalar::Char => "char",
+        }
+    }
+
     /// Size in bytes.
     pub fn size(self) -> usize {
         match self {
@@ -430,6 +448,13 @@ pub struct Summary {
     pub records: u64,
     /// Data records whose message id had no subscription (skipped).
     pub orphan_data: u64,
+    /// Records of a message type the reader does not know (skipped by size).
+    pub unknown_records: u64,
+    /// Regions skipped to reach an appended-data offset (a record crossing the offset is
+    /// dropped), and the bytes they held.
+    pub skipped_regions: u64,
+    /// Bytes in [`Summary::skipped_regions`].
+    pub skipped_bytes: u64,
     /// Whether the flag bits announced appended data.
     pub data_appended: bool,
 }
@@ -597,7 +622,8 @@ fn parse_format(body: &[u8], offset: u64) -> Result<(String, Vec<FieldDef>), Ulo
     if name.len() > MAX_NAME_LEN {
         return Err(too_long("a format name"));
     }
-    let mut defs = Vec::new();
+    let mut defs: Vec<FieldDef> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
     for item in fields.split(';').filter(|s| !s.is_empty()) {
         let (ty, fname) = item.split_once(' ').ok_or_else(|| {
             malformed(
@@ -617,6 +643,13 @@ fn parse_format(body: &[u8], offset: u64) -> Result<(String, Vec<FieldDef>), Ulo
         let (ty, array) = parse_type(ty, offset)?;
         if matches!(&ty, FieldType::Nested(t) if t.len() > MAX_NAME_LEN) {
             return Err(too_long("a field type name"));
+        }
+        // Two fields of one name would make a reader pick one of them; the log is refused.
+        if !seen.insert(fname) {
+            return Err(malformed(
+                offset,
+                format!("format `{name}` declares the field `{fname}` twice"),
+            ));
         }
         defs.push(FieldDef {
             ty,
@@ -791,7 +824,16 @@ struct Sub {
 
 /// Skips to an appended-data offset. A file that ends first is truncated: without this check
 /// the reader would retry the same skip forever.
-fn skip_to_offset<R: Read>(src: &mut Src<R>, start: u64, off: u64) -> Result<(), UlogError> {
+fn skip_to_offset<R: Read>(
+    src: &mut Src<R>,
+    summary: &mut Summary,
+    start: u64,
+    off: u64,
+) -> Result<(), UlogError> {
+    if off > src.pos {
+        summary.skipped_regions = summary.skipped_regions.saturating_add(1);
+        summary.skipped_bytes = summary.skipped_bytes.saturating_add(off - src.pos);
+    }
     src.skip_to(off)?;
     if src.pos < off {
         return Err(UlogError::Truncated {
@@ -865,7 +907,7 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
         if let Some(&off) = pending.first()
             && start.saturating_add(3) > off
         {
-            skip_to_offset(&mut src, start, off)?;
+            skip_to_offset(&mut src, &mut summary, start, off)?;
             continue;
         }
         let mut mh = [0u8; 3];
@@ -885,7 +927,7 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
             && start.saturating_add(3).saturating_add(size as u64) > off
         {
             // A record crossing an appended-data offset is dropped (pyulog behaviour).
-            skip_to_offset(&mut src, start, off)?;
+            skip_to_offset(&mut src, &mut summary, start, off)?;
             continue;
         }
         body.resize(size, 0);
@@ -1101,7 +1143,7 @@ pub fn read<R: Read, V: Visitor>(input: R, visitor: &mut V) -> Result<Summary, U
                 let duration = c.u16("dropout duration")?;
                 visitor.dropout(duration, last_ts);
             }
-            _ => {}
+            _ => summary.unknown_records = summary.unknown_records.saturating_add(1),
         }
     }
     // An appended-data offset the file never reached means the file was cut short.
@@ -1747,5 +1789,37 @@ pub(crate) mod tests {
         assert!(ParamValue::F32(f32::NAN).same_as(&ParamValue::F32(f32::from_bits(0x7fc0_0001))));
         assert!(!ParamValue::F32(f32::NAN).same_as(&ParamValue::F32(0.0)));
         assert!(!ParamValue::F32(1.0).same_as(&ParamValue::I32(1)));
+    }
+
+    #[test]
+    fn a_format_that_names_a_field_twice_is_refused() {
+        let log = Builder::new(0)
+            .flags(&[])
+            .format("vehicle_status:uint64_t timestamp;bool failsafe;bool failsafe;");
+        let err = read(&log.bytes[..], &mut Collect::default()).expect_err("refused");
+        assert!(
+            err.to_string()
+                .contains("format `vehicle_status` declares the field `failsafe` twice"),
+            "{err}"
+        );
+        // The same name in two formats, or nested under different parents, is fine.
+        let ok = Builder::new(0)
+            .flags(&[])
+            .format("a:uint64_t timestamp;bool x;")
+            .format("b:uint64_t timestamp;bool x;");
+        read(&ok.bytes[..], &mut Collect::default()).expect("accepted");
+    }
+
+    #[test]
+    fn unknown_records_and_orphan_data_are_counted() {
+        let log = Builder::new(0)
+            .flags(&[])
+            .format("t:uint64_t timestamp;")
+            .sub(0, 1, "t")
+            .rec(b'X', b"hidden")
+            .data(7, &1u64.to_le_bytes())
+            .data(1, &2u64.to_le_bytes());
+        let s = read(&log.bytes[..], &mut Collect::default()).expect("readable");
+        assert_eq!((s.unknown_records, s.orphan_data), (1, 1));
     }
 }

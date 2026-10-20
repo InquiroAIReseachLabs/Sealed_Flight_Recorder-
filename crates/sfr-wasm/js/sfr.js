@@ -297,7 +297,7 @@ export async function runTamperDemo({ onStep } = {}) {
     step('b', `seal the sample flight (${s.path})`, [{
       command: `sfr seal ${s.path} --rules examples/rules.default.toml --baseline ${s.baselinePath} --key key/sfr.key --evaluation-only --out sealed`,
       result: sealed,
-    }], sealed.exitCode === 0 && sealed.status === 'PASS', 'exit 0, status PASS', sealed.sealed ? `events in the record: ${sealed.eventCount}` : null);
+    }], sealed.exitCode === 0 && (sealed.status === 'PASS' || sealed.status === 'WARN'), 'exit 0, status PASS or WARN', sealed.sealed ? `events in the record: ${sealed.eventCount}` : null);
 
     const c1 = await verify({ record: record(sealed), publicKey: pub });
     const c2 = await verifyWithLog({ record: record(sealed), publicKey: pub, log: s.log });

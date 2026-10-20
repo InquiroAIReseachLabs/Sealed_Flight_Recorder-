@@ -456,7 +456,12 @@ fn pubkey_cmd(
 
 /// The transition tuning section (SPEC B1.8): the VTOL type and each watched parameter with
 /// its baseline and flown values. Empty for a vehicle that is not VTOL.
-fn transition_tuning(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> String {
+fn transition_tuning(
+    ing: &Ingested,
+    rules: &Rules,
+    baseline: &Baseline,
+    eval: &Evaluation,
+) -> String {
     let Some(vtol) = &ing.identity.vehicle.vtol_type else {
         return String::new();
     };
@@ -474,14 +479,13 @@ fn transition_tuning(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Stri
     for name in &rules.watched {
         let b = baseline.params.get(name);
         let l = ing.config.params.get(name);
-        // As R3 and the report (sfr_core::report::watched_mark): R3 compares a parameter only
-        // when the baseline has it, or with compare = "all" when the log has it.
-        let mark = match (b, l) {
-            (None, None) => "not compared",
-            (None, _) if rules.compare == sfr_core::rules::Compare::Baseline => "not compared",
-            (Some(b), Some(l)) if b.same_as(l) => "MATCH",
-            _ => "DIFF",
-        };
+        // As the report: from R3's own findings.
+        let r3_lines = eval
+            .results
+            .iter()
+            .find(|r| r.id == "R3")
+            .map_or(&[][..], |r| &r.detail[..]);
+        let mark = sfr_core::report::watched_mark(name, b.is_some(), r3_lines);
         out.push_str(&format!(
             "  {name:<18}{:<16}{:<16}{mark}\n",
             show(b),
@@ -542,20 +546,30 @@ fn table(
             r.name,
             r.found
         ));
-        if r.status == Status::Fail {
+        if matches!(r.status, Status::Fail | Status::Warn) {
             for d in &r.detail {
                 out.push_str(&format!("{:<14}- {d}\n", ""));
             }
         }
     }
-    let tuning = transition_tuning(ing, rules, baseline);
+    let tuning = transition_tuning(ing, rules, baseline, eval);
     if !tuning.is_empty() {
         out.push('\n');
         out.push_str(&tuning);
     }
     out.push('\n');
     out.push_str(&format!("{:<10}{}\n", "events", ing.events.len()));
+    if let Some(line) = sfr_core::report::skipped_line(&id.skipped) {
+        out.push_str(&format!("{:<10}{line}\n", "skipped"));
+    }
     out.push_str(&format!("{:<10}{}\n", "status", eval.status.as_str()));
+    if eval.status == sfr_core::evaluate::Overall::NoArmedFlight {
+        out.push_str(&format!(
+            "{:<10}{}\n",
+            "",
+            sfr_core::report::NO_ARMED_FLIGHT_LINE
+        ));
+    }
     out
 }
 
@@ -577,6 +591,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             "--json",
             "--evaluation-only",
             "--allow-untested-version",
+            "--allow-ignore-all",
         ],
     )?;
     let log = a.one_positional("log file")?.to_string();
@@ -688,12 +703,22 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         fail(code, format!("rules file {rules_path}: {e}"))
     })?;
     let baseline_text = read_text(baseline_path, "baseline", exit_code::MALFORMED_INPUT)?;
-    let baseline: Baseline = parse_baseline(&baseline_text).map_err(|e| {
+    if rules.ignores_everything() && !a.flag("--allow-ignore-all") {
+        return Err(fail(
+            exit_code::USAGE,
+            format!(
+                "rules file {rules_path}: an ignore pattern matches every parameter, so R3 would compare none; \
+                 nothing written. To seal it anyway, add --allow-ignore-all: the record and its report will say so"
+            ),
+        ));
+    }
+    let mut baseline: Baseline = parse_baseline(&baseline_text).map_err(|e| {
         fail(
             exit_code::MALFORMED_INPUT,
             format!("baseline {baseline_path}: {e}"),
         )
     })?;
+    baseline.sha256 = Some(crypto.sha256(baseline_text.as_bytes()));
     let mut file = File::open(&log)
         .map_err(|e| fail(exit_code::USAGE, format!("cannot open log {log}: {e}")))?;
     let ing = Px4Ingestor
@@ -758,6 +783,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         signer_certificate,
         certificate_chain,
         allow_untested_version: allow_untested,
+        allow_ignore_all: rules.ignores_everything(),
     };
     let sealed = seal(
         &ing,
@@ -1204,6 +1230,15 @@ fn verify_cmd(
                             "failed_rules",
                             Value::Array(
                                 v.failed_rules
+                                    .iter()
+                                    .map(|r| Value::str(r.clone()))
+                                    .collect(),
+                            ),
+                        )
+                        .field(
+                            "warned_rules",
+                            Value::Array(
+                                v.warned_rules
                                     .iter()
                                     .map(|r| Value::str(r.clone()))
                                     .collect(),

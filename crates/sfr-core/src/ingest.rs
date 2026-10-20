@@ -154,6 +154,11 @@ pub struct LogIdentity {
     pub firmware: Firmware,
     /// Vehicle type.
     pub vehicle: Vehicle,
+    /// `vehicle_status` instances with data records; the rules read every one.
+    pub vehicle_status_instances: u64,
+    /// What the reader skipped: unknown record types, data records without a subscription,
+    /// regions before an appended-data offset.
+    pub skipped: ulog::Summary,
 }
 
 /// SPEC B1.5 configuration: the parameter set at log start.
@@ -176,11 +181,14 @@ pub struct RowId {
     pub index: u64,
 }
 
-/// One `vehicle_status` sample. A field the log does not have is `None`.
+/// One `vehicle_status` sample. A field the log does not have, or has with a type other than
+/// the one PX4 defines, is `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub struct VehicleStatusRow {
     pub id: RowId,
+    /// Position among the data and parameter records of the file, in file order.
+    pub file_order: u64,
     pub arming_state: Option<u8>,
     pub nav_state: Option<u8>,
     pub failsafe: Option<bool>,
@@ -202,6 +210,30 @@ pub struct FlagDef {
     requirement: Option<FlatField>,
 }
 
+/// A rule input field logged with a type other than the one the PX4 message definitions of
+/// v1.14 to v1.17 give it. The rules that read the field cannot evaluate it (SPEC B1.6).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TypeMismatch {
+    /// Topic.
+    pub topic: String,
+    /// Flattened field name.
+    pub field: String,
+    /// The type the log declares.
+    pub found: &'static str,
+    /// The type PX4 defines.
+    pub expected: String,
+}
+
+impl std::fmt::Display for TypeMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}.{} is {} in the log; PX4 defines {}",
+            self.topic, self.field, self.found, self.expected
+        )
+    }
+}
+
 /// One `failsafe_flags` sample, aligned with [`FailsafeFlags::flags`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FailsafeRow {
@@ -216,6 +248,11 @@ pub struct FailsafeRow {
 /// The `failsafe_flags` topic of one instance.
 #[derive(Debug, Clone, Default)]
 pub struct FailsafeFlags {
+    /// uORB instance.
+    pub multi_id: u8,
+    /// True when a `mode_req_*` value did not fit 32 bits, so the mode requirements cannot be
+    /// read.
+    pub mode_req_unreadable: bool,
     /// Flag definitions from the logged format.
     pub flags: Vec<FlagDef>,
     /// Samples in file order.
@@ -307,6 +344,8 @@ pub struct ParamRecord {
     pub time: u64,
     /// Index among all 'P' records in the file, definitions included.
     pub index: u64,
+    /// Position among the data and parameter records of the file, in file order.
+    pub file_order: u64,
 }
 
 /// An 'L' or 'C' record at warning level or above.
@@ -340,17 +379,23 @@ pub struct FlightLog {
     pub start_timestamp: u64,
     /// Data record count per topic, all instances (R1).
     pub topic_rows: BTreeMap<String, u64>,
-    /// Flattened field names of the `vehicle_status` instance in use.
+    /// Flattened field names every `vehicle_status` subscription with data records has (the
+    /// first subscription's when none has data).
     pub vehicle_status_fields: Vec<String>,
-    /// Flattened field names of the `failsafe_flags` instance in use.
+    /// The same for `failsafe_flags`.
     pub failsafe_flags_fields: Vec<String>,
     /// Flattened field names that every `vehicle_command` subscription with data records has
     /// (R1 checks the ones R7 reads); empty when no subscription has data.
     pub vehicle_command_fields: Vec<String>,
-    /// `vehicle_status`, lowest instance.
+    /// `vehicle_status`, every instance with data records: grouped by instance in instance
+    /// order, each in file order ([`FlightLog::vehicle_status_instances`]).
     pub vehicle_status: Vec<VehicleStatusRow>,
-    /// `failsafe_flags`, lowest instance.
+    /// `failsafe_flags`, the lowest instance with data records (else the lowest subscribed).
     pub failsafe_flags: FailsafeFlags,
+    /// `failsafe_flags`, every other instance with data records, in instance order.
+    pub failsafe_flags_others: Vec<FailsafeFlags>,
+    /// Rule input fields logged with a type other than PX4's, sorted.
+    pub type_mismatches: Vec<TypeMismatch>,
     /// `vehicle_command`, all instances, file order.
     pub commands: Vec<CommandRow>,
     /// `vehicle_command_ack`, all instances, file order.
@@ -377,6 +422,27 @@ pub struct FlightLog {
     pub dropouts: Vec<DropoutRecord>,
     /// ULog reader counts.
     pub summary: ulog::Summary,
+}
+
+impl FlightLog {
+    /// The rows of each `vehicle_status` instance, in instance order.
+    pub fn vehicle_status_instances(&self) -> Vec<&[VehicleStatusRow]> {
+        self.vehicle_status
+            .chunk_by(|a, b| a.id.instance == b.id.instance)
+            .collect()
+    }
+
+    /// The type mismatches of `topic`, as text, for the fields `fields` (all fields when
+    /// empty).
+    pub fn mismatches(&self, topic: &str, fields: &[&str]) -> Vec<String> {
+        self.type_mismatches
+            .iter()
+            .filter(|m| {
+                m.topic == topic && (fields.is_empty() || fields.contains(&m.field.as_str()))
+            })
+            .map(|m| m.to_string())
+            .collect()
+    }
 }
 
 /// The result of ingesting one log.
@@ -515,6 +581,125 @@ fn get_f32(f: &Option<FlatField>, p: &[u8]) -> Option<f32> {
     f.as_ref().and_then(|f| f.read_f32(p))
 }
 
+/// The types PX4 v1.14 to v1.17 give the fields a rule reads (`msg/*.msg` at the release tags;
+/// `msg/versioned/` from v1.16). `vehicle_command.source_component` is `uint8_t` in v1.14 and
+/// `uint16_t` from v1.15 ([`source_component_types`]); `failsafe_flags` is checked by
+/// [`failsafe_flags_type`].
+const PINNED: &[(&str, &str, Scalar)] = &[
+    ("vehicle_status", "arming_state", Scalar::U8),
+    ("vehicle_status", "nav_state", Scalar::U8),
+    ("vehicle_status", "failsafe", Scalar::Bool),
+    ("vehicle_status", "is_vtol", Scalar::Bool),
+    ("vehicle_status", "in_transition_mode", Scalar::Bool),
+    ("vehicle_status", "in_transition_to_fw", Scalar::Bool),
+    ("vehicle_status", "vehicle_type", Scalar::U8),
+    ("vehicle_status", "system_type", Scalar::U8),
+    ("vehicle_status", "latest_arming_reason", Scalar::U8),
+    ("vehicle_status", "latest_disarming_reason", Scalar::U8),
+    ("vehicle_command", "command", Scalar::U32),
+    ("vehicle_command", "source_system", Scalar::U8),
+    ("battery_status", "remaining", Scalar::F32),
+    ("battery_status", "connected", Scalar::Bool),
+    ("vehicle_gps_position", "fix_type", Scalar::U8),
+    ("vehicle_gps_position", "satellites_used", Scalar::U8),
+    ("estimator_status", "filter_fault_flags", Scalar::U32),
+    ("estimator_selector_status", "primary_instance", Scalar::U8),
+    ("vehicle_imu_status", "accel_device_id", Scalar::U32),
+    ("vehicle_imu_status", "accel_clipping[0]", Scalar::U32),
+    ("vehicle_imu_status", "accel_clipping[1]", Scalar::U32),
+    ("vehicle_imu_status", "accel_clipping[2]", Scalar::U32),
+    ("vehicle_imu_status", "accel_vibration_metric", Scalar::F32),
+    ("sensor_selection", "accel_device_id", Scalar::U32),
+];
+
+/// The `failsafe_flags` booleans of PX4 v1.14 to v1.17 (`FailsafeFlags.msg`).
+const PX4_FAILSAFE_FLAGS: &[&str] = &[
+    "angular_velocity_invalid",
+    "attitude_invalid",
+    "local_altitude_invalid",
+    "local_position_invalid",
+    "local_position_invalid_relaxed",
+    "local_velocity_invalid",
+    "global_position_invalid",
+    "global_position_invalid_relaxed",
+    "auto_mission_missing",
+    "offboard_control_signal_lost",
+    "home_position_invalid",
+    "manual_control_signal_lost",
+    "gcs_connection_lost",
+    "battery_low_remaining_time",
+    "battery_unhealthy",
+    "primary_geofence_breached",
+    "geofence_breached",
+    "mission_failure",
+    "vtol_fixed_wing_system_failure",
+    "wind_limit_exceeded",
+    "flight_time_limit_exceeded",
+    "local_position_accuracy_low",
+    "position_accuracy_low",
+    "navigator_failure",
+    "fd_critical_failure",
+    "fd_esc_arming_failure",
+    "fd_imbalanced_prop",
+    "fd_motor_failure",
+];
+
+/// The type PX4 gives a `failsafe_flags` field R4 reads, or `None` for a field R4 does not
+/// read by name (any other `bool` is still read as a flag).
+fn failsafe_flags_type(name: &str) -> Option<Scalar> {
+    if name.starts_with("mode_req_") {
+        Some(Scalar::U32)
+    } else if name == "battery_warning" {
+        Some(Scalar::U8)
+    } else if PX4_FAILSAFE_FLAGS.contains(&name) {
+        Some(Scalar::Bool)
+    } else {
+        None
+    }
+}
+
+/// The types `vehicle_command.source_component` may have for this firmware: `uint8_t` in
+/// v1.14, `uint16_t` from v1.15, either when the version is outside v1.14 to v1.17 or unknown.
+pub fn source_component_types(fw: &Firmware) -> &'static [Scalar] {
+    match fw.series() {
+        Some((1, 14)) => &[Scalar::U8],
+        Some((1, 15..=17)) => &[Scalar::U16],
+        _ => &[Scalar::U8, Scalar::U16],
+    }
+}
+
+/// The PX4 types of `topic.name`, for any supported version, or `None` when no rule reads it.
+fn pinned_types(topic: &str, name: &str) -> Option<&'static [Scalar]> {
+    if topic == "vehicle_command" && name == "source_component" {
+        return Some(&[Scalar::U8, Scalar::U16]);
+    }
+    if topic == "failsafe_flags" {
+        return failsafe_flags_type(name).map(|s| match s {
+            Scalar::U32 => &[Scalar::U32][..],
+            Scalar::U8 => &[Scalar::U8][..],
+            _ => &[Scalar::Bool][..],
+        });
+    }
+    PINNED
+        .iter()
+        .find(|(t, f, _)| *t == topic && *f == name)
+        .map(|(_, _, s)| std::slice::from_ref(s))
+}
+
+/// A rule input field, only when the log gives it a type PX4 defines for it.
+fn pinned(layout: &Layout, topic: &str, name: &str) -> Option<FlatField> {
+    let f = layout.field(name)?;
+    match pinned_types(topic, name) {
+        Some(types) if !types.contains(&f.scalar) => None,
+        _ => Some(f.clone()),
+    }
+}
+
+/// A `mode_req_*` bitmask as 32 bits (PX4's `uint32`), or `None` when it does not fit.
+pub fn mode_req_bits(value: u64) -> Option<u32> {
+    u32::try_from(value).ok()
+}
+
 #[derive(Debug, Clone)]
 struct VsDecoder {
     arming_state: Option<FlatField>,
@@ -572,8 +757,7 @@ fn failsafe_schema(layout: &Layout) -> Vec<FlagDef> {
         let requirement = MODE_REQUIREMENTS
             .iter()
             .find(|(flag, _)| *flag == f.name)
-            .and_then(|(_, req)| layout.field(req))
-            .cloned();
+            .and_then(|(_, req)| pinned(layout, "failsafe_flags", req));
         flags.push(FlagDef {
             name: f.name.clone(),
             field: f.clone(),
@@ -630,6 +814,9 @@ enum Decoder {
 struct Sub {
     topic: String,
     multi_id: u8,
+    layout: Rc<Layout>,
+    /// Whether a data record of this subscription was read.
+    had_data: bool,
     decoder: Decoder,
     /// Index into `Sealing::open` when the rules seal this topic.
     sealed: Option<usize>,
@@ -655,11 +842,11 @@ struct Sealing<'c> {
     open: Vec<SealAcc>,
 }
 
-/// One `failsafe_flags` instance while reading: its first subscription's layout and schema.
+/// One `failsafe_flags` instance while reading: its first subscription's schema.
 struct FsInstance {
-    layout: Rc<Layout>,
     flags: Rc<Vec<FlagDef>>,
     rows: Vec<FailsafeRow>,
+    mode_req_unreadable: bool,
 }
 
 #[derive(Default)]
@@ -674,17 +861,16 @@ struct Collector<'c> {
     dropout_index: u64,
     subs: BTreeMap<u16, Sub>,
     row_index: BTreeMap<(String, u8), u64>,
-    // Per instance: the shared layout of its first subscription (its field names are copied
-    // out only for the instance the rules read) and its rows.
-    vs: BTreeMap<u8, (Rc<Layout>, Vec<VehicleStatusRow>)>,
+    // Per instance: its rows.
+    vs: BTreeMap<u8, Vec<VehicleStatusRow>>,
     fs: BTreeMap<u8, FsInstance>,
     // The flag schema of the last failsafe_flags layout seen, so subscriptions sharing a
     // layout share one schema.
     fs_schema: Option<(Rc<Layout>, Rc<Vec<FlagDef>>)>,
-    // Per vehicle_command subscription (msg_id): its layout, and whether it had a data record.
-    vc_subs: BTreeMap<u16, (Rc<Layout>, bool)>,
     flight: FlightLog,
     limit: Option<String>,
+    // Position of the next data or parameter record, in file order.
+    order: u64,
 }
 
 impl Visitor for Collector<'_> {
@@ -719,6 +905,8 @@ impl Visitor for Collector<'_> {
     }
 
     fn parameter(&mut self, name: &str, value: ParamValue, section: Section, last_timestamp: u64) {
+        let file_order = self.order;
+        self.order = self.order.saturating_add(1);
         let index = self.param_index;
         self.param_index = self.param_index.saturating_add(1);
         match section {
@@ -741,6 +929,7 @@ impl Visitor for Collector<'_> {
                 value,
                 time: last_timestamp,
                 index,
+                file_order,
             }),
         }
     }
@@ -749,20 +938,18 @@ impl Visitor for Collector<'_> {
         let l: &Layout = layout;
         let decoder = match topic {
             "vehicle_status" => {
-                self.vs
-                    .entry(multi_id)
-                    .or_insert_with(|| (Rc::clone(layout), Vec::new()));
+                let vs = |name: &str| pinned(l, "vehicle_status", name);
                 Decoder::VehicleStatus(Box::new(VsDecoder {
-                    arming_state: field(l, "arming_state"),
-                    nav_state: field(l, "nav_state"),
-                    failsafe: field(l, "failsafe"),
-                    is_vtol: field(l, "is_vtol"),
-                    in_transition_mode: field(l, "in_transition_mode"),
-                    in_transition_to_fw: field(l, "in_transition_to_fw"),
-                    vehicle_type: field(l, "vehicle_type"),
-                    system_type: field(l, "system_type"),
-                    latest_arming_reason: field(l, "latest_arming_reason"),
-                    latest_disarming_reason: field(l, "latest_disarming_reason"),
+                    arming_state: vs("arming_state"),
+                    nav_state: vs("nav_state"),
+                    failsafe: vs("failsafe"),
+                    is_vtol: vs("is_vtol"),
+                    in_transition_mode: vs("in_transition_mode"),
+                    in_transition_to_fw: vs("in_transition_to_fw"),
+                    vehicle_type: vs("vehicle_type"),
+                    system_type: vs("system_type"),
+                    latest_arming_reason: vs("latest_arming_reason"),
+                    latest_disarming_reason: vs("latest_disarming_reason"),
                 }))
             }
             "failsafe_flags" => {
@@ -785,21 +972,18 @@ impl Visitor for Collector<'_> {
                     Decoder::Count
                 } else {
                     self.fs.entry(multi_id).or_insert_with(|| FsInstance {
-                        layout: Rc::clone(layout),
                         flags: Rc::clone(&flags),
                         rows: Vec::new(),
+                        mode_req_unreadable: false,
                     });
                     Decoder::Failsafe(flags)
                 }
             }
-            "vehicle_command" => {
-                self.vc_subs.insert(msg_id, (Rc::clone(layout), false));
-                Decoder::Command {
-                    command: small_uint(l, "command"),
-                    src_sys: small_uint(l, "source_system"),
-                    src_comp: small_uint(l, "source_component"),
-                }
-            }
+            "vehicle_command" => Decoder::Command {
+                command: pinned(l, "vehicle_command", "command"),
+                src_sys: pinned(l, "vehicle_command", "source_system"),
+                src_comp: pinned(l, "vehicle_command", "source_component"),
+            },
             "vehicle_command_ack" => Decoder::Ack {
                 command: small_uint(l, "command"),
                 result: small_uint(l, "result"),
@@ -808,31 +992,31 @@ impl Visitor for Collector<'_> {
             },
             "vehicle_gps_position" | "sensor_gps" => Decoder::Gps {
                 sensor: topic == "sensor_gps",
-                fix: field(l, "fix_type"),
-                sats: field(l, "satellites_used"),
+                fix: pinned(l, "vehicle_gps_position", "fix_type"),
+                sats: pinned(l, "vehicle_gps_position", "satellites_used"),
                 utc: field(l, "time_utc_usec"),
             },
             "battery_status" => Decoder::Battery {
-                remaining: field(l, "remaining"),
-                connected: field(l, "connected"),
+                remaining: pinned(l, topic, "remaining"),
+                connected: pinned(l, topic, "connected"),
             },
             "estimator_status" => Decoder::Estimator {
-                faults: field(l, "filter_fault_flags"),
+                faults: pinned(l, topic, "filter_fault_flags"),
             },
             "estimator_selector_status" => Decoder::Selector {
-                primary: field(l, "primary_instance"),
+                primary: pinned(l, topic, "primary_instance"),
             },
             "vehicle_imu_status" => Decoder::Imu {
-                dev: field(l, "accel_device_id"),
+                dev: pinned(l, topic, "accel_device_id"),
                 clip: [
-                    field(l, "accel_clipping[0]"),
-                    field(l, "accel_clipping[1]"),
-                    field(l, "accel_clipping[2]"),
+                    pinned(l, topic, "accel_clipping[0]"),
+                    pinned(l, topic, "accel_clipping[1]"),
+                    pinned(l, topic, "accel_clipping[2]"),
                 ],
-                vib: field(l, "accel_vibration_metric"),
+                vib: pinned(l, topic, "accel_vibration_metric"),
             },
             "sensor_selection" => Decoder::SensorSelection {
-                dev: field(l, "accel_device_id"),
+                dev: pinned(l, topic, "accel_device_id"),
             },
             _ => Decoder::Count,
         };
@@ -864,6 +1048,8 @@ impl Visitor for Collector<'_> {
             Sub {
                 topic: topic.to_string(),
                 multi_id,
+                layout: Rc::clone(layout),
+                had_data: false,
                 decoder,
                 sealed,
             },
@@ -871,9 +1057,13 @@ impl Visitor for Collector<'_> {
     }
 
     fn data(&mut self, msg_id: u16, timestamp: u64, p: &[u8]) {
-        let Some(sub) = self.subs.get(&msg_id) else {
+        let file_order = self.order;
+        self.order = self.order.saturating_add(1);
+        let Some(sub) = self.subs.get_mut(&msg_id) else {
             return;
         };
+        sub.had_data = true;
+        let sub = &*sub;
         if let Some(acc) = sub.sealed.and_then(|i| self.sealing.open.get_mut(i)) {
             acc.count = acc.count.saturating_add(1);
             acc.first.get_or_insert(timestamp);
@@ -897,6 +1087,7 @@ impl Visitor for Collector<'_> {
             Decoder::VehicleStatus(d) => {
                 let row = VehicleStatusRow {
                     id,
+                    file_order,
                     arming_state: get_u8(&d.arming_state, p),
                     nav_state: get_u8(&d.nav_state, p),
                     failsafe: get_bool(&d.failsafe, p),
@@ -908,25 +1099,28 @@ impl Visitor for Collector<'_> {
                     latest_arming_reason: get_u8(&d.latest_arming_reason, p),
                     latest_disarming_reason: get_u8(&d.latest_disarming_reason, p),
                 };
-                if let Some((_, rows)) = self.vs.get_mut(&sub.multi_id) {
-                    rows.push(row);
-                }
+                self.vs.entry(sub.multi_id).or_default().push(row);
             }
             Decoder::Failsafe(flags) => {
                 let active = flags
                     .iter()
                     .map(|f| f.field.read_u64(p).is_some_and(|v| v != 0))
                     .collect();
+                let mut unreadable = false;
                 let mode_req = flags
                     .iter()
-                    .map(|f| {
-                        f.requirement
-                            .as_ref()
-                            .and_then(|r| r.read_u64(p))
-                            .map_or(0, |v| v as u32)
-                    })
+                    .map(
+                        |f| match f.requirement.as_ref().and_then(|r| r.read_u64(p)) {
+                            None => 0,
+                            Some(v) => mode_req_bits(v).unwrap_or_else(|| {
+                                unreadable = true;
+                                0
+                            }),
+                        },
+                    )
                     .collect();
                 if let Some(inst) = self.fs.get_mut(&sub.multi_id) {
+                    inst.mode_req_unreadable |= unreadable;
                     inst.rows.push(FailsafeRow {
                         id,
                         active,
@@ -939,9 +1133,6 @@ impl Visitor for Collector<'_> {
                 src_sys,
                 src_comp,
             } => {
-                if let Some((_, rows)) = self.vc_subs.get_mut(&msg_id) {
-                    *rows = true;
-                }
                 if let (Some(c), Some(s), Some(k)) = (
                     get_u64(command, p),
                     get_u64(src_sys, p),
@@ -949,7 +1140,7 @@ impl Visitor for Collector<'_> {
                 ) {
                     self.flight.commands.push(CommandRow {
                         id,
-                        command: c as u32,
+                        command: u32::try_from(c).unwrap_or(u32::MAX),
                         source_system: s,
                         source_component: k,
                     });
@@ -1083,50 +1274,108 @@ impl Collector<'_> {
         let mut flight = std::mem::take(&mut self.flight);
         flight.start_timestamp = self.header.map_or(0, |h| h.timestamp);
         flight.summary = summary;
-        // The lowest instance that has rows, else the lowest subscribed one (whose fields R1
-        // still reports): R1 counts rows of any instance, so the core rules must read one.
-        let mut vs = std::mem::take(&mut self.vs);
-        let vs_pick = vs
-            .iter()
-            .find(|(_, (_, r))| !r.is_empty())
-            .or(vs.iter().next())
-            .map(|(k, _)| *k);
-        let names = |l: &Layout| l.fields.iter().map(|f| f.name.clone()).collect();
-        if let Some((layout, rows)) = vs_pick.and_then(|k| vs.remove(&k)) {
-            flight.vehicle_status_fields = names(&layout);
-            flight.vehicle_status = rows;
-        }
-        let mut fs = std::mem::take(&mut self.fs);
-        let fs_pick = fs
-            .iter()
-            .find(|(_, inst)| !inst.rows.is_empty())
-            .or(fs.iter().next())
-            .map(|(k, _)| *k);
-        if let Some(inst) = fs_pick.and_then(|k| fs.remove(&k)) {
-            flight.failsafe_flags_fields = names(&inst.layout);
-            flight.failsafe_flags = FailsafeFlags {
-                flags: inst.flags.as_ref().clone(),
-                rows: inst.rows,
-            };
-        }
-        // vehicle_command: a field counts as present only if every subscription with data
-        // records has it (a later format record may redefine the topic for later
-        // subscriptions); a subscription without data records says nothing.
-        let mut with_rows = self.vc_subs.values().filter(|(_, rows)| *rows);
-        if let Some((first, _)) = with_rows.next() {
-            let rest: Vec<&Rc<Layout>> = with_rows.map(|(l, _)| l).collect();
-            let present: Vec<String> = names(first);
-            flight.vehicle_command_fields = present
-                .into_iter()
-                .filter(|n| rest.iter().all(|l| l.fields.iter().any(|f| &f.name == n)))
-                .collect();
-        }
         let release = self.ver_sw_release;
         let firmware = Firmware {
             release,
             version: release.and_then(version_string),
             git: self.ver_sw.clone(),
         };
+        // Every vehicle_status instance with rows, in instance order (SPEC B1.6).
+        flight.vehicle_status = std::mem::take(&mut self.vs)
+            .into_values()
+            .flatten()
+            .collect();
+        // A field counts as present only if every subscription of the topic with data records
+        // has it (a later format record may redefine the topic for later subscriptions); a
+        // subscription without data records says nothing, unless none has data.
+        let common = |topic: &str| -> Vec<String> {
+            let of_topic: Vec<&Sub> = self.subs.values().filter(|s| s.topic == topic).collect();
+            let with_data: Vec<&Layout> = of_topic
+                .iter()
+                .filter(|s| s.had_data)
+                .map(|s| &*s.layout)
+                .collect();
+            let layouts: Vec<&Layout> = if with_data.is_empty() {
+                of_topic.first().map(|s| &*s.layout).into_iter().collect()
+            } else {
+                with_data
+            };
+            let Some((first, rest)) = layouts.split_first() else {
+                return Vec::new();
+            };
+            first
+                .fields
+                .iter()
+                .map(|f| f.name.clone())
+                .filter(|n| rest.iter().all(|l| l.field(n).is_some()))
+                .collect()
+        };
+        flight.vehicle_status_fields = common("vehicle_status");
+        flight.failsafe_flags_fields = common("failsafe_flags");
+        if self
+            .subs
+            .values()
+            .any(|s| s.topic == "vehicle_command" && s.had_data)
+        {
+            flight.vehicle_command_fields = common("vehicle_command");
+        }
+        // The lowest failsafe_flags instance that has rows, else the lowest subscribed one; the
+        // others with rows are kept for R4.
+        let mut fs = std::mem::take(&mut self.fs);
+        let fs_pick = fs
+            .iter()
+            .find(|(_, inst)| !inst.rows.is_empty())
+            .or(fs.iter().next())
+            .map(|(k, _)| *k);
+        let to_flags = |multi_id: u8, inst: FsInstance| FailsafeFlags {
+            multi_id,
+            mode_req_unreadable: inst.mode_req_unreadable,
+            flags: inst.flags.as_ref().clone(),
+            rows: inst.rows,
+        };
+        if let Some(k) = fs_pick
+            && let Some(inst) = fs.remove(&k)
+        {
+            flight.failsafe_flags = to_flags(k, inst);
+        }
+        flight.failsafe_flags_others = fs
+            .into_iter()
+            .filter(|(_, i)| !i.rows.is_empty())
+            .map(|(k, i)| to_flags(k, i))
+            .collect();
+        // Rule inputs with a type other than PX4's, in the subscriptions that have data records.
+        let mut mismatches = std::collections::BTreeSet::new();
+        let source_component = source_component_types(&firmware);
+        for sub in self.subs.values().filter(|s| s.had_data) {
+            // sensor_gps is read only for the UTC offset, which no rule reads.
+            let topic = sub.topic.as_str();
+            if topic == "sensor_gps" {
+                continue;
+            }
+            for f in &sub.layout.fields {
+                let allowed = if topic == "vehicle_command" && f.name == "source_component" {
+                    source_component
+                } else {
+                    match pinned_types(topic, &f.name) {
+                        Some(t) => t,
+                        None => continue,
+                    }
+                };
+                if !allowed.contains(&f.scalar) {
+                    mismatches.insert(TypeMismatch {
+                        topic: topic.to_string(),
+                        field: f.name.clone(),
+                        found: f.scalar.name(),
+                        expected: allowed
+                            .iter()
+                            .map(|s| s.name())
+                            .collect::<Vec<_>>()
+                            .join(" or "),
+                    });
+                }
+            }
+        }
+        flight.type_mismatches = mismatches.into_iter().collect();
         let first = flight.vehicle_status.first();
         let vtol = flight
             .vehicle_status
@@ -1144,6 +1393,8 @@ impl Collector<'_> {
             blake3,
             firmware: firmware.clone(),
             vehicle,
+            vehicle_status_instances: flight.vehicle_status_instances().len() as u64,
+            skipped: flight.summary.clone(),
         };
         let config = Config {
             firmware: firmware.version.clone(),
@@ -1568,5 +1819,88 @@ mod tests {
         assert_eq!(vtol_type(None, 1), Some((None, "unknown".into())));
         // is_vtol true on a later sample is enough; never true means no vtol_type.
         assert_eq!(vtol_type(Some(0), 0), None);
+    }
+
+    #[test]
+    fn mode_req_values_convert_to_32_bits_only_when_they_fit() {
+        assert_eq!(mode_req_bits(1 << 4), Some(1 << 4));
+        assert_eq!(mode_req_bits(u64::from(u32::MAX)), Some(u32::MAX));
+        // A truncating cast would read 1 << 36 as 0, so a required flag would look optional.
+        assert_eq!(mode_req_bits(1 << 36), None);
+        assert_eq!(mode_req_bits((1 << 36) | (1 << 4)), None);
+    }
+
+    #[test]
+    fn rule_inputs_with_another_type_than_px4_are_named() {
+        use crate::ulog::tests::Builder;
+        let log = Builder::new(0)
+            .flags(&[])
+            .format("vehicle_status:uint64_t timestamp;int8_t arming_state;uint8_t failsafe;bool is_vtol;")
+            .format("failsafe_flags:uint64_t timestamp;uint64_t mode_req_attitude;uint8_t attitude_invalid;")
+            .sub(0, 0, "vehicle_status")
+            .sub(0, 1, "failsafe_flags")
+            .data(0, &[&5u64.to_le_bytes()[..], &[2, 1, 0]].concat())
+            .data(1, &[&5u64.to_le_bytes()[..], &0u64.to_le_bytes(), &[1]].concat());
+        let ing = Px4Ingestor
+            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
+            .unwrap();
+        let named: Vec<String> = ing
+            .flight
+            .type_mismatches
+            .iter()
+            .map(|m| m.to_string())
+            .collect();
+        assert_eq!(
+            named,
+            [
+                "failsafe_flags.attitude_invalid is uint8_t in the log; PX4 defines bool",
+                "failsafe_flags.mode_req_attitude is uint64_t in the log; PX4 defines uint32_t",
+                "vehicle_status.arming_state is int8_t in the log; PX4 defines uint8_t",
+                "vehicle_status.failsafe is uint8_t in the log; PX4 defines bool",
+            ]
+        );
+        // A mistyped field reads as absent, never as a guessed value.
+        let row = ing.flight.vehicle_status[0];
+        assert_eq!((row.arming_state, row.failsafe), (None, None));
+        assert_eq!(row.is_vtol, Some(false));
+    }
+
+    #[test]
+    fn source_component_follows_the_px4_version() {
+        let fw = |release: u32| Firmware {
+            release: Some(release),
+            ..Firmware::default()
+        };
+        assert_eq!(source_component_types(&fw(0x010E_04FF)), [Scalar::U8]);
+        assert_eq!(source_component_types(&fw(0x0111_00FF)), [Scalar::U16]);
+        assert_eq!(
+            source_component_types(&Firmware::default()),
+            [Scalar::U8, Scalar::U16]
+        );
+    }
+
+    #[test]
+    fn every_vehicle_status_instance_is_kept() {
+        use crate::ulog::tests::Builder;
+        let row = |ts: u64, arming: u8| [&ts.to_le_bytes()[..], &[arming]].concat();
+        let log = Builder::new(0)
+            .flags(&[])
+            .format("vehicle_status:uint64_t timestamp;uint8_t arming_state;")
+            .sub(0, 0, "vehicle_status")
+            .sub(1, 1, "vehicle_status")
+            .data(1, &row(5, 2))
+            .data(0, &row(6, 1))
+            .data(1, &row(9, 1));
+        let ing = Px4Ingestor
+            .ingest("x.ulg", &mut &log.bytes[..], &TestBackend)
+            .unwrap();
+        let instances: Vec<Vec<u64>> = ing
+            .flight
+            .vehicle_status_instances()
+            .iter()
+            .map(|rows| rows.iter().map(|r| r.id.ts).collect())
+            .collect();
+        assert_eq!(instances, [vec![6], vec![5, 9]]);
+        assert_eq!(ing.identity.vehicle_status_instances, 2);
     }
 }

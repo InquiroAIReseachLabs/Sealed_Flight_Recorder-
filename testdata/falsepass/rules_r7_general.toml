@@ -1,0 +1,11 @@
+format = "sfr-rules/1"
+
+[required_topics]
+topics = ["vehicle_status", "failsafe_flags"]
+
+[payload_commands]
+ids = [211]
+
+[authorized_sources]
+category = "GENERAL"
+sources = [{ system = 1, component = 1 }]

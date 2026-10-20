@@ -29,11 +29,50 @@ pub const REPORT_EXTENSION: &str = "sfr.md";
 pub const UNTESTED_VERSION_LINE: &str = "**Untested PX4 version.** Sealed with `--allow-untested-version`: \
 sfr is tested on PX4 v1.14 to v1.17 logs only, and this log's version is outside them or could not be read.";
 
+/// The report line of a record sealed with `--allow-ignore-all` (`seal.allow_ignore_all`).
+pub const IGNORE_ALL_LINE: &str = "**R3 ignores every parameter.** Sealed with `--allow-ignore-all`: \
+an ignore pattern in the rules file matches every parameter name, so R3 compared none.";
+
 /// Hex digits of a sealed topic digest shown in the report.
 pub const DIGEST_PREFIX_LEN: usize = 16;
 
-/// The note under "Parameters changed in flight": the section reports, it does not judge.
-pub const PARAM_CHANGES_NOTE: &str = "These are reported, not a rule failure: R3 compares the parameters at log start with the baseline.";
+/// The note under "Parameters changed in flight".
+pub const PARAM_CHANGES_NOTE: &str = "R3 compares the parameters in effect at each ARM with the baseline; a change in flight of a parameter it does not ignore makes R3 WARN.";
+
+/// The line under the status of a record whose log has no armed flight.
+pub const NO_ARMED_FLIGHT_LINE: &str = "No armed flight: the log has no ARM and no DISARM, so the rules had no flight to check. This is not a PASS.";
+
+/// "sealed with N skipped messages: ..." when the reader skipped anything, else `None`
+/// (`log.skipped` in the record).
+pub fn skipped_line(s: &crate::ulog::Summary) -> Option<String> {
+    let n = s
+        .unknown_records
+        .saturating_add(s.orphan_data)
+        .saturating_add(s.skipped_regions);
+    (n > 0).then(|| {
+        format!(
+            "sealed with {n} skipped messages: {} of an unknown type, {} data records without a subscription, {} region(s) ({} bytes) before an appended-data offset",
+            s.unknown_records, s.orphan_data, s.skipped_regions, s.skipped_bytes
+        )
+    })
+}
+
+/// [`skipped_line`] from a record's `log.skipped`.
+fn skipped_line_of(log: &Obj) -> Result<Option<String>, ReportError> {
+    let sk = sub(log, "skipped", "log")?;
+    let n = |k: &str| -> Result<u64, ReportError> {
+        s(sk, k, "log.skipped")?
+            .parse()
+            .map_err(|_| ReportError(format!("log.skipped.{k}")))
+    };
+    Ok(skipped_line(&crate::ulog::Summary {
+        unknown_records: n("unknown_records")?,
+        orphan_data: n("orphan_data_records")?,
+        skipped_regions: n("regions")?,
+        skipped_bytes: n("region_bytes")?,
+        ..crate::ulog::Summary::default()
+    }))
+}
 
 /// The legend under the event timeline when an event carries `initial` (docs/RECORD_FORMAT.md).
 pub const INITIAL_LEGEND: &str = "`initial` (ARM, FAILSAFE_SET): true when the event comes from the log's first `vehicle_status` sample, because the log starts armed or in failsafe; false when it is a change between two samples.";
@@ -300,10 +339,21 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         escape(&s(tool, "version", "tool")?),
         escape(&record_file_name(&file_name)),
     ));
+    if s(r, "status", "record")? == "NO ARMED FLIGHT" {
+        out.push_str(NO_ARMED_FLIGHT_LINE);
+        out.push_str("\n\n");
+    }
     // Schema 2: a log sealed although its PX4 version is one sfr is not tested on.
     if seal.get("allow_untested_version") == Some(&Value::Bool(true)) {
         out.push_str(UNTESTED_VERSION_LINE);
         out.push_str("\n\n");
+    }
+    if seal.get("allow_ignore_all") == Some(&Value::Bool(true)) {
+        out.push_str(IGNORE_ALL_LINE);
+        out.push_str("\n\n");
+    }
+    if let Some(line) = skipped_line_of(log)? {
+        out.push_str(&format!("**Skipped.** {}.\n\n", escape(&line)));
     }
 
     // Rules.
@@ -329,13 +379,13 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         if id == "R3" {
             r3_lines = detail.clone();
         }
-        if status == "FAIL" {
-            failed.push((id, s(res, "expected", &path)?, detail));
+        if status == "FAIL" || status == "WARN" {
+            failed.push((id, status, s(res, "expected", &path)?, detail));
         }
     }
     out.push('\n');
-    for (id, expected, detail) in &failed {
-        out.push_str(&format!("### {} FAIL\n\n", escape(id)));
+    for (id, status, expected, detail) in &failed {
+        out.push_str(&format!("### {} {}\n\n", escape(id), escape(status)));
         item(&mut out, "Expected", &escape(expected));
         for d in detail {
             out.push_str(&format!("- {}\n", escape(d)));
@@ -343,16 +393,19 @@ pub fn render(record: &Value) -> Result<String, ReportError> {
         out.push('\n');
     }
 
-    // Parameter differences (R3's detail lines).
+    // Parameter differences (R3's detail lines that name a difference).
     out.push_str("## Parameter differences\n\n");
+    let r3_lines: Vec<String> = r3_lines
+        .into_iter()
+        .filter(|l| split_r3_line(l).is_some())
+        .collect();
     if r3_lines.is_empty() {
         out.push_str("R3 found no difference between the baseline and the flown parameters.\n\n");
     } else {
         header(&mut out, &["Parameter", "Baseline", "Flown"]);
         for line in &r3_lines {
-            match split_r3_line(line) {
-                Some((n, b, f)) => row(&mut out, &[escape(n), escape(b), escape(f)]),
-                None => row(&mut out, &[escape(line), String::new(), String::new()]),
+            if let Some((n, b, f)) = split_r3_line(line) {
+                row(&mut out, &[escape(n), escape(b), escape(f)]);
             }
         }
         out.push('\n');

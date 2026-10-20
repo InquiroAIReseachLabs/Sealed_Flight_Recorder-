@@ -2,22 +2,30 @@ EVALUATION KEY: not for operational use
 
 # Sealed flight record: vtol\_transition\.ulg
 
-- Merkle root: `745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430` (sha256\-rfc6962, 34 leaves)
-- Key fingerprint: `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be`
+- Merkle root: `cb0183bc5b2bb55bd02c2d2a2f592cb10f60c36520d2ab22f8701c3e66ff9375` (sha256\-rfc6962, 34 leaves)
+- Key fingerprint: `sha256:1ab979d4bed49693df5e1482cfb3a5432a6dd632de3c95dc24f7c9896c7eec45`
 
-**Status: PASS**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0. This report is generated from the record vtol\_transition\.sfr alone.
+**Status: WARN**. Sealed (time claimed by the sealer) 2026\-10\-18T15\:00\:00Z by sfr 0\.1\.0. This report is generated from the record vtol\_transition\.sfr alone.
 
 ## Rules
 
 | Rule | Status | Name | Found |
 |---|---|---|---|
 | R1 | PASS | required topics present | all present |
-| R2 | PASS | firmware matches baseline | 1\.17\.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4 |
-| R3 | PASS | parameters match baseline | no differences |
-| R4 | PASS | no failsafe in flight | never true in flight |
+| R2 | PASS | firmware matches baseline | log states PX4 1\.17\.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4 \(self\-reported\)\; baseline file sha256 d4da23c173b4031487e802b4971921f834d255f1eb47c4906228cb93edf18885 \(operator\-supplied\) |
+| R3 | PASS | parameters match baseline | no differences\; ignore \[COM\_FLIGHT\_UUID\, LND\_FLIGHT\_T\_HI\, LND\_FLIGHT\_T\_LO\, EKF2\_MAG\_DECL\, CAL\_BARO\*\_OFF\, ASPD\_SCALE\_\*\, COM\_MODE\*\_HASH\] suppressed 1 difference\(s\)\; baseline file sha256 d4da23c173b4031487e802b4971921f834d255f1eb47c4906228cb93edf18885 \(operator\-supplied\) |
+| R4 | WARN | no failsafe in flight | never true in flight\; warning\: failsafe\_flags auto\_mission\_missing\, gcs\_connection\_lost\, manual\_control\_signal\_lost\, offboard\_control\_signal\_lost true in flight |
 | R5 | PASS | arm and disarm consistent | 1 ARM\, 1 DISARM |
 | R6 | PASS | VTOL transitions completed | 2 START\, 2 END\, 0 problem\(s\) |
 | R7 | N\/A | authorized command sources | no \[authorized\_sources\] in the rules file |
+
+### R4 WARN
+
+- Expected: vehicle\_status\.failsafe false in flight \(from ARM through the sample that disarms\)\, no quadchute \(fixed wing straight to multicopter\) in flight\, and no failsafe\_flags flag that the current nav\_state requires true in flight\; other failsafe\_flags flags true in flight are warnings
+- warning\: failsafe\_flags\.auto\_mission\_missing true in flight from boot\_us 4892000 \(155 sample\(s\)\)\, not required by the nav\_state in effect
+- warning\: failsafe\_flags\.gcs\_connection\_lost true in flight from boot\_us 4892000 \(155 sample\(s\)\)\, not required by the nav\_state in effect
+- warning\: failsafe\_flags\.manual\_control\_signal\_lost true in flight from boot\_us 4892000 \(155 sample\(s\)\)\, not required by the nav\_state in effect
+- warning\: failsafe\_flags\.offboard\_control\_signal\_lost true in flight from boot\_us 4892000 \(155 sample\(s\)\)\, not required by the nav\_state in effect
 
 ## Parameter differences
 
@@ -25,7 +33,7 @@ R3 found no difference between the baseline and the flown parameters.
 
 ## Parameters changed in flight
 
-These are reported, not a rule failure: R3 compares the parameters at log start with the baseline.
+R3 compares the parameters in effect at each ARM with the baseline; a change in flight of a parameter it does not ignore makes R3 WARN.
 
 | Seq | Boot time (s) | Parameter | Old | New |
 |---|---|---|---|---|
@@ -94,15 +102,15 @@ The record holds no sealed topic digests.
 ## Seal
 
 - Seal time (claimed by the sealer, not proven): 2026\-10\-18T15\:00\:00Z
-- Key fingerprint: `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be`
+- Key fingerprint: `sha256:1ab979d4bed49693df5e1482cfb3a5432a6dd632de3c95dc24f7c9896c7eec45`
 - Key custody (declared by the sealer; this report cannot attest it): file\-evaluation
 - Crypto crates (crate versions): blake3 1\.8\.7, ed25519\-dalek 3\.0\.0, sha2 0\.11\.1
-- Merkle root: `745c18ad35e1270ba418fb6d16624a946f431be5d65cc7b0ad1f3aebd6df5430` (sha256\-rfc6962, 34 leaves)
-- Schema version: 3
+- Merkle root: `cb0183bc5b2bb55bd02c2d2a2f592cb10f60c36520d2ab22f8701c3e66ff9375` (sha256\-rfc6962, 34 leaves)
+- Schema version: 4
 
 ## Verify
 
-With the public key whose fingerprint is `sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be` saved as `sfr.pub`, in the directory that holds the record and the log:
+With the public key whose fingerprint is `sha256:1ab979d4bed49693df5e1482cfb3a5432a6dd632de3c95dc24f7c9896c7eec45` saved as `sfr.pub`, in the directory that holds the record and the log:
 
 ```
 sfr verify vtol_transition.sfr --pubkey sfr.pub --allow-evaluation-key --ulog vtol_transition.ulg

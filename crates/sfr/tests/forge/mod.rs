@@ -73,7 +73,13 @@ pub fn resign_over_shape(record: &[u8], key: &FileKey, payload_shape: TreeShape)
         panic!("a record is an object");
     };
     let (root, shape) = merkle_root(&RustCrypto, &r).unwrap();
-    let signature = key.sign(&signed_payload(3, &payload_shape, &root)).unwrap();
+    let signature = key
+        .sign(&signed_payload(
+            sfr_core::SCHEMA_VERSION,
+            &payload_shape,
+            &root,
+        ))
+        .unwrap();
     r.insert(
         "merkle".into(),
         Obj::new()

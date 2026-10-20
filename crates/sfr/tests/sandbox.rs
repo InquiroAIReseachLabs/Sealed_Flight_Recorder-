@@ -235,7 +235,7 @@ fn without_a_baseline_the_sandbox_seals_what_the_cli_seals_from_the_no_baseline_
     // R2 and R3 fail and say why; nothing is assumed.
     assert!(
         s.text
-            .contains("R2    FAIL    firmware matches baseline     1.17.0"),
+            .contains("R2    FAIL    firmware matches baseline     log states PX4 1.17.0"),
         "{}",
         s.text
     );

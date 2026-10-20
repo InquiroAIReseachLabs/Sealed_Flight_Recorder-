@@ -1,6 +1,6 @@
 # Onboard parameters for Vehicle 1
 #
-# Initial parameters of vtol_quadchute.ulg (definitions-section 'P' records)
+# Parameters of vtol_quadchute.ulg in effect at the first ARM
 # Firmware: 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4
 #
 # Vehicle-Id Component-Id Name Value Type
@@ -66,7 +66,7 @@
 1	1	CAL_AIR_TUBED_MM	1.5	9
 1	1	CAL_AIR_TUBELEN	0.20000000298023224	9
 1	1	CAL_BARO0_ID	6620172	6
-1	1	CAL_BARO0_OFF	0.0	9
+1	1	CAL_BARO0_OFF	2.44140625	9
 1	1	CAL_BARO0_PRIO	50	6
 1	1	CAL_BARO1_ID	0	6
 1	1	CAL_BARO2_ID	0	6
@@ -371,7 +371,7 @@
 1	1	COM_POS_LOW_EPH	50.0	9
 1	1	COM_POWER_COUNT	1	6
 1	1	COM_PREARM_MODE	0	6
-1	1	COM_QC_ACT	0	6
+1	1	COM_QC_ACT	1	6
 1	1	COM_RAM_MAX	-1.0	9
 1	1	COM_RCL_EXCEPT	0	6
 1	1	COM_RC_ARM_HYST	1000	6

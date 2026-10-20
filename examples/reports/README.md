@@ -4,7 +4,7 @@ Four sealed records and the reports `sfr seal` wrote beside them (SPEC B1.8). Ea
 
 | Record and report | Rules | What the report shows |
 |---|---|---|
-| `vtol_transition.sfr`, `.sfr.md` | `examples/rules.default.toml` | standard VTOL, every rule PASS or N/A; transition tuning; a parameter changed in flight |
+| `vtol_transition.sfr`, `.sfr.md` | `examples/rules.default.toml` | standard VTOL, R4 WARN (SITL flags with no RC link or ground station), every other rule PASS or N/A; transition tuning; a parameter changed in flight |
 | `failsafe_gps_loss.sfr`, `.sfr.md` | `examples/rules.default.toml` | multicopter, R4 FAIL: failsafe raised in flight after the GPS stopped |
 | `gz_quadtailsitter_transition.sfr`, `.sfr.md` | `examples/rules.default.toml` | quad tailsitter (VT_TYPE 0), both transitions; transition tuning |
 | `gz_x500_vision_hover.sfr`, `.sfr.md` | `gz_x500_vision_hover.rules.toml` | multicopter with external vision odometry; the sealed topic `vehicle_visual_odometry`; R7 FAIL; a parameter changed in flight |
@@ -32,11 +32,11 @@ done
 
 ```text doc-output
 Integrity: VERIFIED (record and log)
-Flight rules: PASS
+Flight rules: WARN (R4)
 Integrity: VERIFIED (record and log)
 Flight rules: FAIL (R4)
 Integrity: VERIFIED (record and log)
-Flight rules: PASS
+Flight rules: WARN (R4)
 Integrity: VERIFIED (record and log)
 Flight rules: FAIL (R7)
 ```
