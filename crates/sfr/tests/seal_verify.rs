@@ -983,39 +983,34 @@ fn unknown_schema_version_wrong_key_and_evaluation_custody_are_refused() {
         &dir,
     );
     let rec = std::fs::read_to_string(&record).unwrap();
-    let v3 = rec.replacen("\"schema_version\":2", "\"schema_version\":3", 1);
-    let bad = dir.join("v3.sfr");
-    std::fs::write(&bad, v3).unwrap();
-    let o = sfr(&[
-        "verify",
-        "--allow-evaluation-key",
-        bad.to_str().unwrap(),
-        "--pubkey",
-        &public,
-    ]);
-    assert_eq!(o.status.code(), Some(1));
-    assert!(
-        text(&o).contains("unknown schema_version 3; this verifier knows schema 1 and 2"),
-        "{}",
-        text(&o)
-    );
-    // A schema 2 record relabelled schema 1 keeps a field schema 1 does not have: refused, and
-    // its signature (over the schema version) no longer verifies either.
-    let v1 = rec.replacen("\"schema_version\":2", "\"schema_version\":1", 1);
-    std::fs::write(&bad, v1).unwrap();
-    let o = sfr(&[
-        "verify",
-        "--allow-evaluation-key",
-        bad.to_str().unwrap(),
-        "--pubkey",
-        &public,
-    ]);
-    assert_eq!(o.status.code(), Some(1));
-    assert!(
-        text(&o).contains("`seal.allow_untested_version` is not a schema 1 field"),
-        "{}",
-        text(&o)
-    );
+    // Only schema 3 verifies: a later number is unknown, and so are schemas 1 and 2, whose
+    // leaves are not bound to their section. The version is read before anything else, so a
+    // relabelled record is refused for that, whatever else is wrong with it.
+    for other in [4, 2, 1] {
+        let relabelled = rec.replacen(
+            "\"schema_version\":3",
+            &format!("\"schema_version\":{other}"),
+            1,
+        );
+        let bad = dir.join(format!("v{other}.sfr"));
+        std::fs::write(&bad, relabelled).unwrap();
+        let o = sfr(&[
+            "verify",
+            "--allow-evaluation-key",
+            bad.to_str().unwrap(),
+            "--pubkey",
+            &public,
+            "--no-report",
+        ]);
+        assert_eq!(o.status.code(), Some(1), "schema {other}");
+        assert!(
+            text(&o).contains(&format!(
+                "unknown schema_version {other}; this verifier knows schema 3 only"
+            )),
+            "{}",
+            text(&o)
+        );
+    }
 
     let o = sfr(&[
         "verify",
@@ -1195,7 +1190,7 @@ fn verify_without_a_trusted_key_says_the_signer_is_not_checked() {
     for part in [
         "Integrity: NOT CHECKED (no trusted key given)\n",
         "Flight rules: UNKNOWN (the record's integrity was not checked)\n",
-        "key       sha256:336b85ba4e9d3ef9be68f80c9bd84dd2ec2398eb498a8813308b0cbc41ffea51 (named by the record, not proven)\n",
+        "key       sha256:42c677026b5cd80f2a74bdcd5957a90bdb81b4873a3194dca4f100f877b637be (named by the record, not proven)\n",
         "custody   unattested (declared file-evaluation)\n",
         "through a channel you trust",
     ] {
@@ -1371,7 +1366,7 @@ fn an_edited_report_fails_verification_and_names_the_line() {
 }
 
 /// SPEC B1.5: `seal` refuses a log whose PX4 version is outside v1.14 to v1.17, or cannot be
-/// read, unless given `--allow-untested-version`; then the signed record (schema 2,
+/// read, unless given `--allow-untested-version`; then the signed record (schema 3,
 /// `seal.allow_untested_version`) and its report say so. A tested version records false, flag
 /// or no flag. Schema 1 records still verify.
 #[test]
@@ -1428,7 +1423,7 @@ fn an_untested_px4_version_is_refused_unless_allowed_and_then_recorded() {
         bytes.contains("\"allow_untested_version\":true"),
         "flag in the record"
     );
-    assert!(bytes.contains("\"schema_version\":2"), "schema 2");
+    assert!(bytes.contains("\"schema_version\":3"), "schema 3");
     let report = std::fs::read_to_string(out.join("sample.sfr.md")).unwrap();
     assert!(
         report.contains(sfr_core::report::UNTESTED_VERSION_LINE),
@@ -1484,7 +1479,7 @@ fn an_untested_px4_version_is_refused_unless_allowed_and_then_recorded() {
             .unwrap()
             .contains("Untested PX4 version")
     );
-    // A schema 1 record (sealed before schema 2) still verifies.
+    // The fuzz seeds are sealed records of the current schema.
     let v = sfr(&[
         "verify",
         "--allow-evaluation-key",

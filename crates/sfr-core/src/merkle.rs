@@ -14,6 +14,13 @@ pub fn leaf_hash(crypto: &dyn CryptoBackend, leaf: &[u8]) -> [u8; 32] {
     crypto.sha256_concat(&[&[MERKLE_LEAF_PREFIX], leaf])
 }
 
+/// SHA-256(0x00 || tag || leaf): a leaf of a schema 3 record, bound to its section by the tag
+/// byte (see [`crate::seal::Section`]), so a leaf cannot be moved to another section and still
+/// give the same root.
+pub fn tagged_leaf_hash(crypto: &dyn CryptoBackend, tag: u8, leaf: &[u8]) -> [u8; 32] {
+    crypto.sha256_concat(&[&[MERKLE_LEAF_PREFIX, tag], leaf])
+}
+
 fn node_hash(crypto: &dyn CryptoBackend, left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut buf = [0u8; 65];
     buf[0] = MERKLE_NODE_PREFIX;
@@ -22,9 +29,11 @@ fn node_hash(crypto: &dyn CryptoBackend, left: &[u8; 32], right: &[u8; 32]) -> [
     crypto.sha256(&buf)
 }
 
-/// Leaf hashes of many leaves, reusing one buffer for the prefixed input.
-pub fn leaf_hashes<'a>(
+/// Tagged leaf hashes ([`tagged_leaf_hash`]) of many leaves of one section, reusing one buffer
+/// for the prefixed input.
+pub fn tagged_leaf_hashes<'a>(
     crypto: &dyn CryptoBackend,
+    tag: u8,
     leaves: impl Iterator<Item = &'a [u8]>,
 ) -> Vec<[u8; 32]> {
     let mut buf = Vec::new();
@@ -32,6 +41,7 @@ pub fn leaf_hashes<'a>(
         .map(|leaf| {
             buf.clear();
             buf.push(MERKLE_LEAF_PREFIX);
+            buf.push(tag);
             buf.extend_from_slice(leaf);
             crypto.sha256(&buf)
         })
