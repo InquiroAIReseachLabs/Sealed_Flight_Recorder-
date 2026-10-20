@@ -823,6 +823,14 @@ fn instance_note(instance: u8) -> String {
     }
 }
 
+/// `" (log ended mid-record at byte N; K trailing bytes not parsed)"` for a log that ends in
+/// the middle of a record, else empty: the end-of-log findings of R5 and R6 say the end is a cut.
+fn ends_mid_record(f: &FlightLog) -> String {
+    f.summary
+        .truncated
+        .map_or(String::new(), |t| format!(" ({})", t.line()))
+}
+
 fn r5(f: &FlightLog, events: &[Event]) -> RuleResult {
     const NAME: &str = "arm and disarm consistent";
     let expected = "every ARM followed by a DISARM; log does not end armed";
@@ -856,10 +864,13 @@ fn r5(f: &FlightLog, events: &[Event]) -> RuleResult {
             _ => {}
         }
     }
+    // A log cut in the middle of a record ends where its complete records end: armed there is
+    // armed at the end, and the missing tail is no DISARM.
+    let cut = ends_mid_record(f);
     for prev in open.values() {
         detail.push(|| {
             format!(
-                "ARM seq {} at boot_us {} has no DISARM: the log ends armed",
+                "ARM seq {} at boot_us {} has no DISARM: the log ends armed{cut}",
                 prev.seq, prev.boot_us
             )
         });
@@ -971,11 +982,12 @@ fn r6(f: &FlightLog, events: &[Event], vtol: Option<&crate::ingest::VtolType>) -
             _ => {}
         }
     }
+    let cut = ends_mid_record(f);
     for e in open.values() {
         if let EventKind::VtolTransitionStart { direction } = &e.kind {
             detail.push(|| {
                 format!(
-                    "VTOL_TRANSITION_START {} seq {} at boot_us {} has no END: the log ends in transition",
+                    "VTOL_TRANSITION_START {} seq {} at boot_us {} has no END: the log ends in transition{cut}",
                     direction.as_str(),
                     e.seq,
                     e.boot_us

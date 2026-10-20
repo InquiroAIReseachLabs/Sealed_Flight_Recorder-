@@ -10,7 +10,28 @@ use crate::params::Baseline;
 use crate::rules::Rules;
 use std::collections::BTreeMap;
 
-/// `log`: file name, size, sha256, blake3, firmware, vehicle type.
+/// The record schema for a log (SPEC B1.7): 5 when the log ends in the middle of a record or
+/// its ULog file format version is above 1, else 4.
+pub fn schema_for(id: &LogIdentity) -> u32 {
+    if id.truncated.is_some() || id.untested_ulog_version() {
+        crate::SCHEMA_VERSION_5
+    } else {
+        crate::SCHEMA_VERSION
+    }
+}
+
+/// `log.truncated`: null, or where the log ends in the middle of a record.
+pub fn truncated_json(t: Option<&crate::ulog::Truncation>) -> Value {
+    t.map_or(Value::Null, |t| {
+        Obj::new()
+            .field("offset", Value::u64_str(t.offset))
+            .field("trailing_bytes", Value::u64_str(t.trailing_bytes))
+            .build()
+    })
+}
+
+/// `log`: file name, size, sha256, blake3, firmware, vehicle type; in schema 5 also
+/// `truncated` and `ulog_version`.
 pub fn log_json(id: &LogIdentity) -> Value {
     let fw = &id.firmware;
     let firmware = Obj::new()
@@ -46,7 +67,7 @@ pub fn log_json(id: &LogIdentity) -> Value {
             }),
         )
         .build();
-    Obj::new()
+    let obj = Obj::new()
         .field("file_name", Value::str(id.file_name.clone()))
         .field(
             "vehicle_status_instances",
@@ -65,8 +86,14 @@ pub fn log_json(id: &LogIdentity) -> Value {
         .field("sha256", Value::str(hex(&id.sha256)))
         .field("blake3", Value::str(hex(&id.blake3)))
         .field("firmware", firmware)
-        .field("vehicle", vehicle)
-        .build()
+        .field("vehicle", vehicle);
+    if schema_for(id) == crate::SCHEMA_VERSION_5 {
+        obj.field("truncated", truncated_json(id.truncated.as_ref()))
+            .field("ulog_version", Value::Int(i64::from(id.ulog_version)))
+            .build()
+    } else {
+        obj.build()
+    }
 }
 
 fn param_map<'a>(params: impl Iterator<Item = (&'a String, &'a crate::ulog::ParamValue)>) -> Value {

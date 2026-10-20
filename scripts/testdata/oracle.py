@@ -22,6 +22,7 @@ Diagnostics (with --debug) go to stderr.
 
 import argparse
 import bisect
+import contextlib
 import hashlib
 import json
 import os
@@ -521,7 +522,10 @@ def run(path, rules, required, ptime, param_index, debug):
         required = list(rules['required_topics'])
     extra = list(rules['sealed']) + (['vehicle_command'] if rules['r7_enabled'] else [])
     required = list(required) + [t for t in extra if t not in required]
-    u = TracingULog(path)
+    # pyulog prints a warning for a ULog file format version above 1 to stdout, where this
+    # oracle writes its JSON; send it to stderr.
+    with contextlib.redirect_stdout(sys.stderr):
+        u = TracingULog(path)
     info = u.msg_info_dict
     warn(debug, "file_corruption", u.file_corruption, "data records", u._sfr_data_count)
     # pyulog ignores a format record in the data section and reads later subscriptions with the

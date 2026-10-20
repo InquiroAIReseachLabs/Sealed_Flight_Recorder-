@@ -156,6 +156,19 @@ pub struct LogIdentity {
     /// What the reader skipped: unknown record types, data records without a subscription,
     /// regions before an appended-data offset.
     pub skipped: ulog::Summary,
+    /// The ULog file format version byte from the file header.
+    pub ulog_version: u8,
+    /// Set when the log ends inside a record (ULog spec: the unfinished message is discarded).
+    /// `size`, `sha256` and `blake3` still cover every byte of the file.
+    pub truncated: Option<ulog::Truncation>,
+}
+
+impl LogIdentity {
+    /// True when `seal` needs `--allow-untested-version` for the ULog file format version: the
+    /// specification gives the current version as 1, and `sfr` is tested on versions 0 and 1 only.
+    pub fn untested_ulog_version(&self) -> bool {
+        self.ulog_version > 1
+    }
 }
 
 /// SPEC B1.5 configuration: the parameter set at log start.
@@ -1296,6 +1309,8 @@ impl Collector<'_> {
             vehicle,
             vehicle_status_instances: flight.vehicle_status_instances().len() as u64,
             skipped: flight.summary.clone(),
+            ulog_version: self.header.map_or(0, |h| h.version),
+            truncated: flight.summary.truncated,
         };
         let config = Config {
             firmware: firmware.version.clone(),
@@ -1931,26 +1946,75 @@ mod tests {
     }
 
     #[test]
-    fn ulog_spec_differences_sfr_keeps() {
-        // Where sfr does not do what the specification asks, on purpose (docs/VALIDATION.md):
-        // a file format version above 1 is refused, not parsed with a warning ...
-        let mut b = spec_definitions(&[]).data(0, &spec_flight_rows()[0]).bytes;
-        b[7] = 2;
-        let err = spec_ingest(&b).expect_err("refused");
-        assert!(
-            err.to_string()
-                .contains("unsupported ULog file format version 2"),
-            "{err}"
-        );
-        // ... and a log that ends in the middle of a record, with no appended data, is refused,
-        // not read with the unfinished record discarded.
-        let mut b = spec_definitions(&[]).data(0, &spec_flight_rows()[0]).bytes;
-        b.extend_from_slice(&[100, 0, b'D', 0, 0]);
-        let err = spec_ingest(&b).expect_err("refused");
+    fn ulog_spec_a_log_that_ends_in_the_middle_of_a_message_is_read_up_to_it() {
+        // "A parser must be able to correctly handle logs that end abruptly, in the middle of a
+        // message. The unfinished message should just be discarded." The flight cut inside the
+        // payload of its sixth data record, and inside the header of its sixth record: both read
+        // as the first five rows, and the identity covers every byte of the file.
+        let rows = spec_flight_rows();
+        let mut five = spec_definitions(&[]);
+        for row in &rows[..5] {
+            five = five.data(0, row);
+        }
+        let five = spec_ingest(&five.bytes).unwrap();
+        let mut b = spec_definitions(&[]);
+        for row in &rows {
+            b = b.data(0, row);
+        }
+        let whole = b.bytes;
+        let start = {
+            let mut prefix = spec_definitions(&[]);
+            for row in &rows[..5] {
+                prefix = prefix.data(0, row);
+            }
+            prefix.bytes.len()
+        };
+        for (cut, trailing) in [(start + 5, 5u64), (start + 2, 2)] {
+            let ing = spec_ingest(&whole[..cut]).unwrap();
+            assert_eq!(ing.events, five.events);
+            assert_eq!(ing.flight.vehicle_status, five.flight.vehicle_status);
+            assert_eq!(
+                ing.identity.truncated,
+                Some(crate::ulog::Truncation {
+                    offset: start as u64,
+                    trailing_bytes: trailing
+                })
+            );
+            assert_eq!(ing.identity.size, cut as u64);
+            assert_eq!(ing.identity.sha256, TestBackend.sha256(&whole[..cut]));
+            assert_eq!(ing.identity.blake3, *blake3::hash(&whole[..cut]).as_bytes());
+        }
+        assert_eq!(five.identity.truncated, None);
+        // A log that ends before any data record is still refused: there is no flight to read.
+        let defs = spec_definitions(&[]).bytes;
+        let err = spec_ingest(&defs[..defs.len() - 1]).expect_err("no data record");
         assert!(
             matches!(err, IngestError::Malformed(UlogError::Truncated { .. })),
             "{err}"
         );
+    }
+
+    #[test]
+    fn ulog_spec_a_future_file_format_version_is_read_and_reported() {
+        // "Parse future/unknown file format versions as well (but it can print a warning)." The
+        // reader does; `seal` refuses such a log unless given --allow-untested-version.
+        let mut b = spec_definitions(&[]);
+        for row in spec_flight_rows() {
+            b = b.data(0, &row);
+        }
+        let v1 = spec_ingest(&b.bytes).unwrap();
+        let mut v2 = b.bytes.clone();
+        v2[7] = 2;
+        let v2 = spec_ingest(&v2).unwrap();
+        assert_eq!((v1.identity.ulog_version, v2.identity.ulog_version), (1, 2));
+        assert!(!v1.identity.untested_ulog_version());
+        assert!(v2.identity.untested_ulog_version());
+        assert_eq!(v2.events, v1.events);
+    }
+
+    #[test]
+    fn ulog_spec_differences_sfr_keeps() {
+        // Where sfr does not do what the specification asks, on purpose (docs/VALIDATION.md):
         // DATA_APPENDED with every offset 0 breaks "at least one of the appended_offsets is
         // non-zero"; sfr reads such a log as one with nothing appended.
         let mut b = spec_definitions(&[0]);

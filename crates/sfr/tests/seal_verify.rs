@@ -88,8 +88,9 @@ fn seal_with(log: &str, rules: &str, baseline: &str, key: &str, out: &Path) -> (
         "--seal-time",
         SEAL_TIME,
     ];
-    // The pyulog sample's PX4 version cannot be read; sfr seals it only when told to.
-    if log == "testdata/pyulog/sample.ulg" {
+    // The pyulog sample's PX4 version cannot be read, and the version 2 log's ULog file format
+    // version is untested; sfr seals them only when told to.
+    if log == "testdata/pyulog/sample.ulg" || log == "testdata/synthetic/ulog_version_2.ulg" {
         args.push("--allow-untested-version");
     }
     let o = sfr(&args);
@@ -168,6 +169,31 @@ const GOLDEN: &[(&str, &str, i32)] = &[
     (
         "synthetic_custom_detection",
         "testdata/synthetic/custom_detection.ulg",
+        0,
+    ),
+    (
+        "synthetic_cut_control",
+        "testdata/synthetic/cut_control.ulg",
+        0,
+    ),
+    (
+        "synthetic_cut_mid_message",
+        "testdata/synthetic/cut_mid_message.ulg",
+        0,
+    ),
+    (
+        "synthetic_cut_mid_header",
+        "testdata/synthetic/cut_mid_header.ulg",
+        0,
+    ),
+    (
+        "synthetic_cut_after_arm",
+        "testdata/synthetic/cut_after_arm.ulg",
+        1,
+    ),
+    (
+        "synthetic_ulog_version_2",
+        "testdata/synthetic/ulog_version_2.ulg",
         0,
     ),
 ];
@@ -1013,11 +1039,11 @@ fn unknown_schema_version_wrong_key_and_evaluation_custody_are_refused() {
         &dir,
     );
     let rec = std::fs::read_to_string(&record).unwrap();
-    // Only schema 4 verifies: a later number is unknown, and so are schemas 1 and 2, whose
+    // Schemas 4 and 5 verify: a later number is unknown, and so are schemas 1 and 2, whose
     // leaves are not bound to their section, and schema 3, whose results come from rules that
     // read less of the log. The version is read before anything else, so a
     // relabelled record is refused for that, whatever else is wrong with it.
-    for other in [5, 3, 2, 1] {
+    for other in [6, 3, 2, 1] {
         let relabelled = rec.replacen(
             "\"schema_version\":4",
             &format!("\"schema_version\":{other}"),
@@ -1036,12 +1062,33 @@ fn unknown_schema_version_wrong_key_and_evaluation_custody_are_refused() {
         assert_eq!(o.status.code(), Some(1), "schema {other}");
         assert!(
             text(&o).contains(&format!(
-                "unknown schema_version {other}; this verifier knows schema 4 only"
+                "unknown schema_version {other}; this verifier knows schemas 4 and 5 only"
             )),
             "{}",
             text(&o)
         );
     }
+    // A schema 4 record relabelled 5 lacks what schema 5 adds, and its signature names schema 4.
+    let bad = dir.join("v5.sfr");
+    std::fs::write(
+        &bad,
+        rec.replacen("\"schema_version\":4", "\"schema_version\":5", 1),
+    )
+    .unwrap();
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        bad.to_str().unwrap(),
+        "--pubkey",
+        &public,
+        "--no-report",
+    ]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o));
+    assert!(
+        text(&o).contains("Integrity: FAILED") && text(&o).contains("allow_untested_ulog_version"),
+        "{}",
+        text(&o)
+    );
 
     let o = sfr(&[
         "verify",
@@ -1522,4 +1569,313 @@ fn an_untested_px4_version_is_refused_unless_allowed_and_then_recorded() {
     assert_eq!(v.status.code(), Some(0), "{}", text(&v));
     assert!(text(&v).contains("Integrity: VERIFIED"), "{}", text(&v));
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// ULog spec, "Requirements for Parsers": "A parser must be able to correctly handle logs that
+/// end abruptly, in the middle of a message. The unfinished message should just be discarded."
+/// `seal` reads the complete records, discards the unfinished one, and the signed record (schema
+/// 5, `log.truncated`) and its report say where. The digests cover every byte of the file, so the
+/// cut file verifies and the complete one does not. A log that ends while armed fails R5.
+#[test]
+fn a_log_cut_mid_record_seals_says_where_and_its_digests_cover_every_byte() {
+    let dir = scratch();
+    let (key, public) = keygen(&dir.join("k"));
+    let control = root().join("testdata/synthetic/cut_control.ulg");
+    let whole = std::fs::read(&control).unwrap();
+    for (name, offset, trailing, code, r5) in [
+        ("cut_mid_message", 849u64, 10u64, 0, "PASS"),
+        ("cut_mid_header", 849, 2, 0, "PASS"),
+        ("cut_after_arm", 650, 10, 1, "FAIL"),
+    ] {
+        let log = format!("testdata/synthetic/{name}.ulg");
+        let bytes = std::fs::read(root().join(&log)).unwrap();
+        // The fixture is the control flight cut short, inside a record.
+        assert_eq!(bytes.len() as u64, offset + trailing, "{name}");
+        assert!(whole.starts_with(&bytes), "{name}");
+        let out = dir.join(name);
+        let o = sfr(&[
+            "seal",
+            &log,
+            "--rules",
+            RULES,
+            "--baseline",
+            &format!("testdata/baselines/synthetic_{name}.params"),
+            "--key",
+            &key,
+            "--evaluation-only",
+            "--out",
+            out.to_str().unwrap(),
+            "--seal-time",
+            SEAL_TIME,
+        ]);
+        assert_eq!(o.status.code(), Some(code), "{name}: {}", text(&o));
+        let line =
+            format!("log ended mid-record at byte {offset}; {trailing} trailing bytes not parsed");
+        assert!(text(&o).contains(&line), "{name}: {}", text(&o));
+        let record = out.join(format!("{name}.sfr"));
+        let r = std::fs::read_to_string(&record).unwrap();
+        assert!(r.contains("\"schema_version\":5"), "{name}: schema 5");
+        assert!(
+            r.contains(&format!(
+                "\"truncated\":{{\"offset\":\"{offset}\",\"trailing_bytes\":\"{trailing}\"}}"
+            )),
+            "{name}: log.truncated in the record"
+        );
+        assert!(
+            r.contains(&format!("\"size\":\"{}\"", bytes.len())),
+            "{name}"
+        );
+        assert!(
+            r.contains("\"allow_untested_ulog_version\":false"),
+            "{name}"
+        );
+        let report = std::fs::read_to_string(out.join(format!("{name}.sfr.md"))).unwrap();
+        assert!(report.contains("**Log ended mid-record.**"), "{report}");
+        assert!(report.contains(&line), "{report}");
+        // R5 reads the missing tail as an incomplete input: ending while armed is a FAIL, and the
+        // finding names the cut.
+        assert_eq!(rule_status(&r, "R5"), r5, "{name}: R5");
+        if r5 == "FAIL" {
+            assert!(
+                r.contains(&format!("the log ends armed ({line})")),
+                "{name}: R5 names the cut"
+            );
+        }
+        // The cut file verifies; the complete flight, and the cut file with one more byte, do not.
+        let verify_with = |ulog: &Path| {
+            sfr(&[
+                "verify",
+                "--allow-evaluation-key",
+                record.to_str().unwrap(),
+                "--pubkey",
+                &public,
+                "--ulog",
+                ulog.to_str().unwrap(),
+            ])
+        };
+        // verify checks integrity, not the verdict: exit 0 for a sound record that fails a rule.
+        let v = verify_with(&root().join(&log));
+        assert_eq!(v.status.code(), Some(0), "{name}: {}", text(&v));
+        assert!(
+            text(&v).contains(&format!(
+                "Rule checks: {}",
+                if r5 == "FAIL" { "FAIL (R5)" } else { "PASS" }
+            )),
+            "{name}: {}",
+            text(&v)
+        );
+        assert!(
+            text(&v).contains("Integrity: VERIFIED (record and log)"),
+            "{name}: {}",
+            text(&v)
+        );
+        let v = verify_with(&control);
+        assert_eq!(v.status.code(), Some(1), "{name}: {}", text(&v));
+        assert!(!text(&v).contains("Integrity: VERIFIED"), "{name}");
+        let longer = dir.join(format!("{name}_plus_one.ulg"));
+        std::fs::write(
+            &longer,
+            [&bytes[..], &whole[bytes.len()..=bytes.len()]].concat(),
+        )
+        .unwrap();
+        let v = verify_with(&longer);
+        assert_eq!(v.status.code(), Some(1), "{name}: {}", text(&v));
+        assert!(!text(&v).contains("Integrity: VERIFIED"), "{name}");
+        let shorter = dir.join(format!("{name}_minus_one.ulg"));
+        std::fs::write(&shorter, &bytes[..bytes.len() - 1]).unwrap();
+        let v = verify_with(&shorter);
+        assert_eq!(v.status.code(), Some(1), "{name}: {}", text(&v));
+        assert!(!text(&v).contains("Integrity: VERIFIED"), "{name}");
+        // log.truncated is signed: removing it breaks the record.
+        let tampered = dir.join(format!("{name}_untruncated.sfr"));
+        std::fs::write(
+            &tampered,
+            r.replace(
+                &format!(
+                    "\"truncated\":{{\"offset\":\"{offset}\",\"trailing_bytes\":\"{trailing}\"}}"
+                ),
+                "\"truncated\":null",
+            ),
+        )
+        .unwrap();
+        let v = sfr(&[
+            "verify",
+            "--allow-evaluation-key",
+            tampered.to_str().unwrap(),
+            "--pubkey",
+            &public,
+        ]);
+        assert_eq!(v.status.code(), Some(1), "{name}: {}", text(&v));
+    }
+    // The control, complete, is a schema 4 record with none of the schema 5 members.
+    let out = dir.join("control");
+    let (record, code) = seal(
+        "testdata/synthetic/cut_control.ulg",
+        "testdata/baselines/synthetic_cut_control.params",
+        &key,
+        &out,
+    );
+    assert_eq!(code, 0);
+    let r = std::fs::read_to_string(record).unwrap();
+    assert!(r.contains("\"schema_version\":4"));
+    for k in ["truncated", "ulog_version", "allow_untested_ulog_version"] {
+        assert!(
+            !r.contains(&format!("\"{k}\"")),
+            "{k} not in a schema 4 record"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A ULog file format version above 1 is refused, as an untested PX4 version is, unless `seal` is
+/// given `--allow-untested-version`; then the signed record (schema 5,
+/// `seal.allow_untested_ulog_version`, `log.ulog_version`) and its report say "Untested ULog file
+/// version". The flag on a version 1 log changes nothing.
+#[test]
+fn a_ulog_file_version_above_1_is_refused_unless_allowed_and_then_recorded() {
+    let dir = scratch();
+    let (key, public) = keygen(&dir.join("k"));
+    let out = dir.join("out");
+    let base = [
+        "seal",
+        "testdata/synthetic/ulog_version_2.ulg",
+        "--rules",
+        RULES,
+        "--baseline",
+        "testdata/baselines/synthetic_ulog_version_2.params",
+        "--seal-time",
+        SEAL_TIME,
+    ];
+    let keyed = [
+        "--key",
+        key.as_str(),
+        "--evaluation-only",
+        "--out",
+        out.to_str().unwrap(),
+    ];
+    for extra in [&["--dry-run"][..], &keyed[..]] {
+        let o = sfr(&[&base[..], extra].concat());
+        assert_eq!(o.status.code(), Some(4), "{}", text(&o));
+        assert!(
+            text(&o).contains("ULog file format version 2")
+                && text(&o).contains("nothing written")
+                && text(&o).contains("--allow-untested-version"),
+            "{}",
+            text(&o)
+        );
+        assert!(!out.exists(), "nothing written");
+    }
+    let o = sfr(&[&base[..], &keyed[..], &["--allow-untested-version"]].concat());
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    assert!(
+        text(&o).contains("sfr: warning: ") && text(&o).contains("ULog file format version 2"),
+        "{}",
+        text(&o)
+    );
+    let record = out.join("ulog_version_2.sfr");
+    let r = std::fs::read_to_string(&record).unwrap();
+    assert!(r.contains("\"schema_version\":5"));
+    assert!(r.contains("\"allow_untested_ulog_version\":true"));
+    assert!(r.contains("\"ulog_version\":2"));
+    assert!(r.contains("\"truncated\":null"));
+    // A version 2 log is a tested PX4 version: that flag stays false.
+    assert!(r.contains("\"allow_untested_version\":false"));
+    let report = std::fs::read_to_string(out.join("ulog_version_2.sfr.md")).unwrap();
+    assert!(
+        report.contains("**Untested ULog file version.**")
+            && report.contains(&sfr_core::report::untested_ulog_version_line("2")),
+        "{report}"
+    );
+    assert!(!report.contains("Untested PX4 version"), "{report}");
+    let v = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        record.to_str().unwrap(),
+        "--pubkey",
+        &public,
+        "--ulog",
+        "testdata/synthetic/ulog_version_2.ulg",
+    ]);
+    assert_eq!(v.status.code(), Some(0), "{}", text(&v));
+    assert!(
+        text(&v).contains("Integrity: VERIFIED (record and log)"),
+        "{}",
+        text(&v)
+    );
+    // The flag is signed: turning it off breaks the record.
+    let off = dir.join("off.sfr");
+    std::fs::write(
+        &off,
+        r.replace(
+            "\"allow_untested_ulog_version\":true",
+            "\"allow_untested_ulog_version\":false",
+        ),
+    )
+    .unwrap();
+    let v = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        off.to_str().unwrap(),
+        "--pubkey",
+        &public,
+    ]);
+    assert_eq!(v.status.code(), Some(1), "{}", text(&v));
+    // The same flight as version 1 with the flag: a schema 4 record, identical to one sealed
+    // without it, and no untested line in the report.
+    let control = |flag: bool, sub: &str| {
+        let dest = dir.join(sub);
+        let mut args = vec![
+            "seal",
+            "testdata/synthetic/cut_control.ulg",
+            "--rules",
+            RULES,
+            "--baseline",
+            "testdata/baselines/synthetic_cut_control.params",
+            "--key",
+            key.as_str(),
+            "--evaluation-only",
+            "--seal-time",
+            SEAL_TIME,
+            "--out",
+            dest.to_str().unwrap(),
+        ];
+        if flag {
+            args.push("--allow-untested-version");
+        }
+        let o = sfr(&args);
+        assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+        (
+            std::fs::read(dest.join("cut_control.sfr")).unwrap(),
+            std::fs::read_to_string(dest.join("cut_control.sfr.md")).unwrap(),
+        )
+    };
+    let (with, with_report) = control(true, "v1_flag");
+    let (without, _) = control(false, "v1_plain");
+    assert_eq!(with, without, "the flag changes nothing on a version 1 log");
+    assert!(String::from_utf8_lossy(&with).contains("\"schema_version\":4"));
+    assert!(!with_report.contains("Untested ULog file version"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The status of rule `id` in a record's `results`.
+fn rule_status(record: &str, id: &str) -> String {
+    use sfr_core::json::Value;
+    let Value::Object(top) = sfr_core::json::parse(record.as_bytes()).unwrap() else {
+        panic!("a record is an object")
+    };
+    let Some(Value::Array(results)) = top.get("results") else {
+        panic!("results")
+    };
+    results
+        .iter()
+        .find_map(|r| match r {
+            Value::Object(r) if r.get("id") == Some(&Value::Str(id.into())) => {
+                match r.get("status") {
+                    Some(Value::Str(s)) => Some(s.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no result {id}"))
 }

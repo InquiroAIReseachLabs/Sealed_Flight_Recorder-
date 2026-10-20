@@ -47,10 +47,12 @@ fn dry_run(log: &str, rules: &str, baseline: &str, json: bool) -> Output {
     sfr(&args)
 }
 
-/// Test logs whose PX4 version sfr cannot read: `seal` needs `--allow-untested-version`.
-const UNTESTED_VERSION_LOGS: [&str; 2] = [
+/// Test logs whose PX4 version sfr cannot read, or whose ULog file format version is above 1:
+/// `seal` needs `--allow-untested-version`.
+const UNTESTED_VERSION_LOGS: [&str; 3] = [
     "testdata/pyulog/sample.ulg",
     "fuzz/seeds/ulog_ingest/subscription_amplification.ulg",
+    "testdata/synthetic/ulog_version_2.ulg",
 ];
 
 /// A fresh scratch directory under the system temp dir, removed by the caller.
@@ -131,6 +133,31 @@ const GOLDEN: &[(&str, &str, i32)] = &[
     (
         "synthetic_custom_detection",
         "testdata/synthetic/custom_detection.ulg",
+        0,
+    ),
+    (
+        "synthetic_cut_control",
+        "testdata/synthetic/cut_control.ulg",
+        0,
+    ),
+    (
+        "synthetic_cut_mid_message",
+        "testdata/synthetic/cut_mid_message.ulg",
+        0,
+    ),
+    (
+        "synthetic_cut_mid_header",
+        "testdata/synthetic/cut_mid_header.ulg",
+        0,
+    ),
+    (
+        "synthetic_cut_after_arm",
+        "testdata/synthetic/cut_after_arm.ulg",
+        1,
+    ),
+    (
+        "synthetic_ulog_version_2",
+        "testdata/synthetic/ulog_version_2.ulg",
         0,
     ),
 ];
@@ -299,18 +326,17 @@ fn missing_topic_exits_2_and_names_it() {
 }
 
 #[test]
-fn truncated_log_exits_3_and_names_the_offset() {
+fn a_cut_log_is_read_up_to_the_cut_unless_it_has_no_data_record() {
     let dir = scratch();
     let bytes = std::fs::read(root().join("testdata/sitl/v1.17.0/mc_flight_1.ulg")).unwrap();
-    // Header area, mid header, mid definitions, mid data, last byte removed.
-    for cut in [
-        0usize,
-        10,
-        17,
-        3_000,
-        200_001,
-        bytes.len() / 2 + 7,
-        bytes.len() - 1,
+    let starts: Vec<usize> = record_starts(&bytes).into_iter().map(|(o, _)| o).collect();
+    // Inside the 16-byte file header: there is no log yet. Inside the definitions: there is no
+    // flight. Both are refused, exit 3, naming the offset.
+    for (cut, says) in [
+        (0usize, "incomplete file header"),
+        (10, "incomplete file header"),
+        (17, "ends before any data record"),
+        (3_000, "ends before any data record"),
     ] {
         let path = dir.join(format!("cut_{cut}.ulg"));
         std::fs::write(&path, &bytes[..cut]).unwrap();
@@ -327,11 +353,53 @@ fn truncated_log_exits_3_and_names_the_offset() {
             "names the file: {err}"
         );
         assert!(
-            err.contains("truncated") && err.contains("offset"),
-            "names the offset: {err}"
+            err.contains("truncated") && err.contains("offset") && err.contains(says),
+            "cut at {cut}: {err}"
         );
         assert!(!err.contains("panicked"), "{err}");
     }
+    // In the data section, inside a record: ULog spec, "A parser must be able to correctly
+    // handle logs that end abruptly, in the middle of a message. The unfinished message should
+    // just be discarded." The rules run on the complete records; the output names the cut.
+    for cut in [200_001usize, bytes.len() / 2 + 7, bytes.len() - 1] {
+        let last = starts.iter().copied().filter(|&o| o <= cut).max().unwrap();
+        assert!(!starts.contains(&cut), "cut {cut} is inside a record");
+        let path = dir.join(format!("cut_{cut}.ulg"));
+        std::fs::write(&path, &bytes[..cut]).unwrap();
+        let out = dry_run(
+            path.to_str().unwrap(),
+            RULES,
+            "testdata/baselines/v1.17.0_mc_flight_1.params",
+            false,
+        );
+        let line = format!(
+            "log ended mid-record at byte {last}; {} trailing bytes not parsed",
+            cut - last
+        );
+        let (err, text) = (stderr(&out), stdout(&out));
+        assert_ne!(out.status.code(), Some(3), "cut at {cut}: {err}");
+        assert!(out.status.code().unwrap() <= 2, "cut at {cut}: {err}");
+        assert!(
+            err.contains(&format!("sfr: note: log {}: {line}", path.display())),
+            "{err}"
+        );
+        assert!(text.contains(&format!("cut       {line}\n")), "{text}");
+        assert!(
+            text.contains(&format!("({cut} bytes)")),
+            "size is every byte: {text}"
+        );
+        assert!(!err.contains("panicked"), "{err}");
+    }
+    // The last byte removed: the flight disarmed long before, so R5 still passes.
+    let out = dry_run(
+        dir.join(format!("cut_{}.ulg", bytes.len() - 1))
+            .to_str()
+            .unwrap(),
+        RULES,
+        "testdata/baselines/v1.17.0_mc_flight_1.params",
+        false,
+    );
+    assert!(stdout(&out).contains("R5    PASS"), "{}", stdout(&out));
     // Not a ULog at all.
     let path = dir.join("not_a_log.ulg");
     std::fs::write(&path, b"This is not a ULog file, just text.").unwrap();
@@ -1195,4 +1263,45 @@ fn payload_log_has_payload_events_and_r7_names_the_second_source() {
         t.contains("R7    PASS    authorized command sources    6 command(s) checked, all from authorized sources"),
         "{t}"
     );
+}
+
+/// A VTOL log cut in the middle of the record right after a transition START ends armed and in
+/// transition: the cut-off tail holds no DISARM and no END, so R5 and R6 both fail, and each
+/// finding names the cut.
+#[test]
+fn a_log_cut_in_transition_fails_r5_and_r6_naming_the_cut() {
+    let dir = scratch();
+    let bytes =
+        std::fs::read(root().join("testdata/synthetic/r4_quadchute_on_disarm.ulg")).unwrap();
+    let starts = record_starts(&bytes);
+    // vehicle_status is message id 0: its third data record (boot_us 3000000) is the START.
+    let vs: Vec<usize> = starts
+        .iter()
+        .filter(|&&(o, t)| t == b'D' && bytes[o + 3] == 0 && bytes[o + 4] == 0)
+        .map(|&(o, _)| o)
+        .collect();
+    let next = starts.iter().map(|&(o, _)| o).find(|&o| o > vs[2]).unwrap();
+    let cut = next + 5;
+    let path = dir.join("cut_in_transition.ulg");
+    std::fs::write(&path, &bytes[..cut]).unwrap();
+    let out = dry_run(
+        path.to_str().unwrap(),
+        RULES,
+        "testdata/baselines/synthetic_r4_quadchute_on_disarm.params",
+        false,
+    );
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}{}", stderr(&out));
+    let tail = format!("(log ended mid-record at byte {next}; 5 trailing bytes not parsed)");
+    assert!(text.contains("R5    FAIL"), "{text}");
+    assert!(
+        text.contains(&format!("the log ends armed {tail}")),
+        "{text}"
+    );
+    assert!(text.contains("R6    FAIL"), "{text}");
+    assert!(
+        text.contains(&format!("the log ends in transition {tail}")),
+        "{text}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

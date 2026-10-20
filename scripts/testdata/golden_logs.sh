@@ -20,8 +20,11 @@ golden_rules_for() {
   if [ -f "testdata/rules/$1.toml" ]; then echo "testdata/rules/$1.toml"; else echo examples/rules.default.toml; fi
 }
 
-# Extra seal options a golden log needs: the pyulog sample's PX4 version cannot be read, so sfr
-# seals it only with --allow-untested-version (SPEC B1.5). Prints nothing for the others.
+# Extra seal options a golden log needs: the pyulog sample's PX4 version cannot be read, and
+# synthetic_ulog_version_2 has ULog file format version 2, so sfr seals each only with
+# --allow-untested-version (SPEC B1.4, B1.5). Prints nothing for the others.
 golden_flags_for() {
-  if [ "$1" = pyulog_sample ]; then echo --allow-untested-version; fi
+  case "$1" in
+    pyulog_sample|synthetic_ulog_version_2) echo --allow-untested-version ;;
+  esac
 }

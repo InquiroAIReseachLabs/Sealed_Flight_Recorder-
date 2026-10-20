@@ -1,0 +1,160 @@
+{
+  "baseline": {
+    "firmware": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+    "ignore": [
+      "COM_FLIGHT_UUID",
+      "LND_FLIGHT_T_HI",
+      "LND_FLIGHT_T_LO",
+      "EKF2_MAG_DECL",
+      "CAL_BARO*_OFF",
+      "ASPD_SCALE_*",
+      "COM_MODE*_HASH"
+    ],
+    "parameters": {
+      "COM_DISARM_LAND": "i32:2",
+      "SYS_AUTOSTART": "i32:10040"
+    },
+    "sha256": "2a638e64a21637867733fe54afa7103aeb30313491fe2c9fa9bd7bfdc13d7281"
+  },
+  "config": {
+    "firmware": "1.17.0",
+    "parameters": {
+      "COM_DISARM_LAND": "i32:2",
+      "SYS_AUTOSTART": "i32:10040"
+    },
+    "watched_parameters": [
+      "VT_ARSP_TRANS",
+      "VT_B_TRANS_DUR",
+      "VT_FW_DIFTHR_EN",
+      "VT_FW_DIFTHR_S_P",
+      "VT_FW_DIFTHR_S_R",
+      "VT_FW_DIFTHR_S_Y",
+      "VT_F_TRANS_DUR",
+      "VT_PITCH_MIN",
+      "VT_TRANS_MIN_TM",
+      "VT_TRANS_TIMEOUT"
+    ]
+  },
+  "event_count": 2,
+  "events": [
+    {
+      "boot_us": "1000000",
+      "index": 0,
+      "instance": 0,
+      "kind": "NAV_STATE_CHANGE",
+      "new": 4,
+      "new_name": "AUTO_LOITER",
+      "old": null,
+      "old_name": null,
+      "seq": 0,
+      "topic": "vehicle_status",
+      "utc_us": null
+    },
+    {
+      "boot_us": "2000000",
+      "index": 1,
+      "initial": false,
+      "instance": 0,
+      "kind": "ARM",
+      "reason": 3,
+      "reason_name": "command_internal",
+      "seq": 1,
+      "topic": "vehicle_status",
+      "utc_us": null
+    }
+  ],
+  "log": {
+    "blake3": "5f6e9f3cfb6aa66acdc720729bda5aca314bc9c10539edde406936365cc23c8d",
+    "file_name": "cut_after_arm.ulg",
+    "firmware": {
+      "git": "d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+      "ver_sw_release": "0x011100ff",
+      "version": "1.17.0"
+    },
+    "sha256": "9dad4165260915489a282dd1a8d9496ce787d8cc23b8801850529ad4280bbf3b",
+    "size": "660",
+    "skipped": {
+      "orphan_data_records": 0,
+      "region_bytes": "0",
+      "regions": 0,
+      "unknown_records": 0
+    },
+    "truncated": {
+      "offset": "650",
+      "trailing_bytes": "10"
+    },
+    "ulog_version": 1,
+    "vehicle": {
+      "is_vtol": false,
+      "system_type": 2,
+      "vtol_type": null
+    },
+    "vehicle_status_instances": 1
+  },
+  "results": [
+    {
+      "detail": [],
+      "expected": "data records for vehicle_status, failsafe_flags, and the fields the core rules read",
+      "found": "all present",
+      "id": "R1",
+      "name": "required topics present",
+      "status": "PASS"
+    },
+    {
+      "detail": [],
+      "expected": "1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4, from the baseline's # Firmware: line",
+      "found": "log states PX4 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4 (self-reported); baseline file sha256 2a638e64a21637867733fe54afa7103aeb30313491fe2c9fa9bd7bfdc13d7281 (operator-supplied)",
+      "id": "R2",
+      "name": "firmware matches baseline",
+      "status": "PASS"
+    },
+    {
+      "detail": [],
+      "expected": "every parameter in the baseline or the log equal to the baseline at every ARM, none changed in flight, 0 ignored by pattern",
+      "found": "no differences; ignore [COM_FLIGHT_UUID, LND_FLIGHT_T_HI, LND_FLIGHT_T_LO, EKF2_MAG_DECL, CAL_BARO*_OFF, ASPD_SCALE_*, COM_MODE*_HASH] suppressed 0 difference(s); baseline file sha256 2a638e64a21637867733fe54afa7103aeb30313491fe2c9fa9bd7bfdc13d7281 (operator-supplied)",
+      "id": "R3",
+      "name": "parameters match baseline",
+      "status": "PASS"
+    },
+    {
+      "detail": [],
+      "expected": "vehicle_status.failsafe false in flight (from ARM through the sample that disarms), no quadchute (fixed wing straight to multicopter) in flight, and no failsafe_flags flag that the current nav_state requires true in flight; other failsafe_flags flags true in flight are warnings",
+      "found": "never true in flight",
+      "id": "R4",
+      "name": "no failsafe in flight",
+      "status": "PASS"
+    },
+    {
+      "detail": [
+        "ARM seq 1 at boot_us 2000000 has no DISARM: the log ends armed (log ended mid-record at byte 650; 10 trailing bytes not parsed)"
+      ],
+      "expected": "every ARM followed by a DISARM; log does not end armed",
+      "found": "1 unmatched",
+      "id": "R5",
+      "name": "arm and disarm consistent",
+      "status": "FAIL"
+    },
+    {
+      "detail": [],
+      "expected": "every VTOL transition START has an END; none aborted",
+      "found": "vehicle_status.is_vtol false on every sample",
+      "id": "R6",
+      "name": "VTOL transitions completed",
+      "status": "N/A"
+    },
+    {
+      "detail": [],
+      "expected": "every COMMAND event from a source in [authorized_sources]",
+      "found": "no [authorized_sources] in the rules file",
+      "id": "R7",
+      "name": "authorized command sources",
+      "status": "N/A"
+    }
+  ],
+  "rules": {
+    "sha256": "d999f656c0a35ca19dd4804c9bc9f0bed30b5009f06a494ffc345f79ff9cc240",
+    "text": "# sfr rules file: core rules R1 to R6; R7 is N/A without [authorized_sources].\n# Format reference: docs/SPEC.md B1.6. Unknown keys are rejected.\nformat = \"sfr-rules/1\"\n\n[required_topics]\n# R1 also checks the vehicle_status and failsafe_flags fields that R4 to R6 read.\ntopics = [\"vehicle_status\", \"failsafe_flags\"]\n\n[parameters]\n# \"all\": a parameter present only in the baseline or only in the log is a difference.\n# \"baseline\": compare only the parameters the baseline lists.\ncompare = \"all\"\n\n# R3 skips parameters matching these patterns. \"*\" matches any run of characters.\n# Default list from two flights with no change between them (testdata/sitl/v1.17.0/mc_flight_1\n# and mc_flight_2) plus the PX4 parameter definitions (docs/RULES.md, R3).\nignore = [\n  \"COM_FLIGHT_UUID\",   # per-flight identifier\n  \"LND_FLIGHT_T_HI\",   # flight-time accumulator\n  \"LND_FLIGHT_T_LO\",   # flight-time accumulator\n  \"EKF2_MAG_DECL\",     # learned from position each flight\n  \"CAL_BARO*_OFF\",     # rewritten by GNSS baro auto-calibration (v1.17)\n  \"ASPD_SCALE_*\",      # airspeed scale learned in flight\n  \"COM_MODE*_HASH\",    # external mode registration hashes (v1.15 and later)\n]\n\n# Watched parameters (SPEC B1.6): R3 compares them like every other parameter; the\n# results table and the report show them in their own \"Transition tuning\" section, and the\n# record lists them in config.watched_parameters. VTOL transition tuning; every name is defined\n# in PX4 v1.14 and v1.17 (docs/RULES.md, R3).\n[watched_parameters]\nnames = [\n  \"VT_F_TRANS_DUR\",    # front transition duration\n  \"VT_B_TRANS_DUR\",    # maximum back transition duration\n  \"VT_TRANS_MIN_TM\",   # front transition minimum time\n  \"VT_TRANS_TIMEOUT\",  # front transition timeout\n  \"VT_ARSP_TRANS\",     # transition airspeed\n  \"VT_PITCH_MIN\",      # minimum pitch angle during hover\n  \"VT_FW_DIFTHR_EN\",   # differential thrust in forward flight (bitmask)\n  \"VT_FW_DIFTHR_S_R\",  # roll differential thrust factor\n  \"VT_FW_DIFTHR_S_P\",  # pitch differential thrust factor\n  \"VT_FW_DIFTHR_S_Y\",  # yaw differential thrust factor\n]\n\n# COMMAND events with these ids are category PAYLOAD; every other command is GENERAL.\n# Ids and names from PX4's VehicleCommand.msg, the same in v1.14 and v1.17 (docs/RULES.md,\n# R7). Flight termination (185) and parachute (208) are safety commands and stay GENERAL.\n[payload_commands]\nids = [\n  184,    # VEHICLE_CMD_DO_REPEAT_SERVO\n  187,    # VEHICLE_CMD_DO_SET_ACTUATOR\n  203,    # VEHICLE_CMD_DO_DIGICAM_CONTROL\n  206,    # VEHICLE_CMD_DO_SET_CAM_TRIGG_DIST\n  211,    # VEHICLE_CMD_DO_GRIPPER\n  214,    # VEHICLE_CMD_DO_SET_CAM_TRIGG_INTERVAL\n  260,    # VEHICLE_CMD_OBLIQUE_SURVEY\n  2000,   # VEHICLE_CMD_IMAGE_START_CAPTURE\n  2003,   # VEHICLE_CMD_DO_TRIGGER_CONTROL\n  30001,  # VEHICLE_CMD_PAYLOAD_PREPARE_DEPLOY\n  30002,  # VEHICLE_CMD_PAYLOAD_CONTROL_DEPLOY\n  42600,  # VEHICLE_CMD_DO_WINCH\n]\n"
+  },
+  "sealed_topics": [],
+  "status": "FAIL"
+}

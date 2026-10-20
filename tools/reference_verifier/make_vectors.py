@@ -117,12 +117,36 @@ def vectors():
     edit("rules_unparsable.sfr", {"sfr": "reject", "reference": "accept",
                                   "why": "the reference verifier reads the rules file as TOML and its ignore list only, not every key"},
          lambda r: set_rules(r, "format = \"sfr-rules/1\"\n[nonsense]\n"))
+    # Schema 5: a log that ends in the middle of a record, or of ULog file format version 2.
+    edit("schema5_truncated.sfr", "accept", lambda r: schema5(r, cut=10))
+    edit("schema5_ulog_version_2.sfr", "accept", lambda r: schema5(r, version=2))
+    edit("schema5_neither.sfr", "reject", lambda r: schema5(r))
+    edit("schema5_flag_disagrees.sfr", "reject",
+         lambda r: (schema5(r, cut=10), r["seal"].__setitem__("allow_untested_ulog_version", True)))
+    edit("schema5_cut_past_size.sfr", "reject",
+         lambda r: (schema5(r, cut=10), r["log"]["truncated"].__setitem__("trailing_bytes", "11")))
+    edit("schema5_cut_zero_bytes.sfr", "reject",
+         lambda r: (schema5(r, cut=10), r["log"]["truncated"].update(
+             offset=r["log"]["size"], trailing_bytes="0")))
+    edit("schema5_member_missing.sfr", "reject", lambda r: (schema5(r, cut=10), r["log"].pop("ulog_version")))
+    edit("schema4_with_truncated.sfr", "reject",
+         lambda r: (schema5(r, cut=10), r.__setitem__("schema_version", 4)))
     raw("signature_flipped.sfr", "reject", lambda b: flip_signature(b))
     raw("merkle_root_changed.sfr", "reject", lambda b: b.replace(b'"command":211,', b'"command":311,', 1))
     return out
 
 
 IGNORE_ALL = 'format = "sfr-rules/1"\n\n[required_topics]\ntopics = []\n\n[parameters]\nignore = ["*"]\n'
+
+
+def schema5(r, cut=0, version=1):
+    """The record as schema 5: the log ends `cut` bytes into an unfinished record (none if 0), and
+    its ULog file format version is `version`, flagged when above 1."""
+    r["schema_version"] = 5
+    size = int(r["log"]["size"])
+    r["log"]["truncated"] = None if cut == 0 else {"offset": str(size - cut), "trailing_bytes": str(cut)}
+    r["log"]["ulog_version"] = version
+    r["seal"]["allow_untested_ulog_version"] = version > 1
 
 
 def set_rules(r, text):
