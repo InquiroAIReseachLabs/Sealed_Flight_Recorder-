@@ -207,7 +207,7 @@ Onboard or in-flight sealing; C/C++ library or ROS2 node; MAVLink `.tlog` and Ar
 - No internal Inquiro codenames.
 - No compliance claims (no "DoDD 3000.09 compliant" or similar).
 - No number that a script in the repo does not produce.
-- Describe as an "evaluation release" with its version number ("evaluation release 0.1.0"), never as "v1.0": the report, `seal --dry-run` and the docs use that one name.
+- Name the version plainly (`sfr 0.1.0`), never "v1.0": the report, `seal --dry-run` and the docs use that one form.
 - No FIPS, validated, or compliant claim anywhere: `sfr` uses no CMVP-validated module, and docs, output, and records describe its cryptography only by its crates and crate versions. IL4, IL5, and NIST SP 800-171 apply to whole systems and environments, never to a binary. Never write "FIPS compliant", "FIPS certified", "FIPS validated", or any compliant, certified, accredited, authorized, or validated status for `sfr`; `scripts/check_language.sh` fails CI on such wording.
 - No em-dashes.
 

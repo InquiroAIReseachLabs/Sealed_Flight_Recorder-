@@ -1,4 +1,4 @@
-# Release pipeline for the evaluation release (docs/RELEASE.md).
+# Release pipeline (docs/RELEASE.md).
 #
 # Runs on a pushed v* tag and by hand. A tag run builds, checks and attests the release files
 # and creates a DRAFT, pre-release GitHub release; it never publishes. A manual run is a dry
@@ -56,7 +56,7 @@ jobs:
             echo "dry_run=true" >> "$GITHUB_OUTPUT"
             echo "dry run: nothing will be attested, tagged or released" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-      - name: The release public key is committed and the README and docs/RELEASE.md show it (tag run)
+      - name: The release public key is committed and docs/RELEASE.md shows it (tag run)
         run: |
           set -euo pipefail
           scripts/regen_readme_numbers.sh --check
@@ -337,7 +337,7 @@ jobs:
           sed -e "s/@VERSION@/$VERSION/g" -e "s/@FINGERPRINT@/$fp/g" -e "s#@REPOSITORY@#$GITHUB_REPOSITORY#g" \
             -e "s/@TAG@/$GITHUB_REF_NAME/g" -e "s/@COMMIT@/$GITHUB_SHA/g" .github/release-notes.md > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" --draft --prerelease --verify-tag \
-            --title "Evaluation release $VERSION" --notes-file "$RUNNER_TEMP/notes.md" files/*
+            --title "sfr $VERSION" --notes-file "$RUNNER_TEMP/notes.md" files/*
           state="$(gh release view "$GITHUB_REF_NAME" --json isDraft,isPrerelease,assets \
             --jq '"draft=\(.isDraft) prerelease=\(.isPrerelease) assets=\(.assets | length)"')"
           echo "$state" | tee -a "$GITHUB_STEP_SUMMARY"

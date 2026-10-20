@@ -504,7 +504,7 @@ fn table(
     let mut out = String::new();
     if dry_run {
         out.push_str(&format!(
-            "sfr seal --dry-run: sfr {} (evaluation release); nothing is signed or written\n\n",
+            "sfr seal --dry-run: sfr {}; nothing is signed or written\n\n",
             env!("CARGO_PKG_VERSION")
         ));
     }

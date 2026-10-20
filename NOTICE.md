@@ -1,10 +1,10 @@
 # Notice: third-party material
 
-This repository includes or quotes the third-party material below. Everything else in it is covered by the Rights section of `README.md`.
+This repository includes or quotes the third-party material below. Everything else is covered by the Rights section of `README.md`.
 
 ## PX4
 
-`docs/RULES.md`, `examples/rules.default.toml` and `examples/rules.extended.toml` quote short excerpts of the PX4 source (PX4-Autopilot): message field names and types, command ids and names from `VehicleCommand.msg`, enum values, comments and lines of the startup script `rcS`, and short code excerpts, each cited by file and line. The golden logs in `testdata/sitl/` were recorded by running unmodified PX4 in simulation; each log's `.provenance.md` gives the PX4 version and commit. PX4 is licensed under the BSD 3-Clause License, as its `LICENSE` file in the PX4-Autopilot repository states:
+`docs/RULES.md`, `examples/rules.default.toml` and `examples/rules.extended.toml` quote short excerpts of the PX4-Autopilot source (message field names and types, command ids from `VehicleCommand.msg`, enum values, lines of the startup script `rcS`), each cited by file and line. The golden logs in `testdata/sitl/` were recorded from unmodified PX4 in simulation; each log's `.provenance.md` gives the version and commit. PX4 is under the BSD 3-Clause License, as the `LICENSE` file in the PX4-Autopilot repository states:
 
 ```text
 BSD 3-Clause License
@@ -40,11 +40,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## pyulog sample log
 
-`testdata/pyulog/sample.ulg` is the sample log of the PX4 pyulog project, copied unmodified (`testdata/pyulog/NOTICE.md` gives the source and commit). It is licensed under the BSD 3-Clause License, Copyright (c) 2016, PX4 Pro Drone Autopilot; the full text is in `testdata/pyulog/LICENSE.md` and stays with the log. The fuzz seeds cut from it (`fuzz/seeds/ulog_ingest/pyulog_sample_first_65516.ulg`, and the record sealed from that cut in `fuzz/seeds/sfr_verify/`) are under the same license.
+`testdata/pyulog/sample.ulg` is the sample log of the PX4 pyulog project, copied unmodified (`testdata/pyulog/NOTICE.md` gives the source and commit). It is under the BSD 3-Clause License, Copyright (c) 2016, PX4 Pro Drone Autopilot; the full text is in `testdata/pyulog/LICENSE.md`. The fuzz seeds cut from it (`fuzz/seeds/ulog_ingest/pyulog_sample_first_65516.ulg` and the record sealed from that cut in `fuzz/seeds/sfr_verify/`) have the same license.
 
 ## Direct dependencies
 
-The crates `sfr` depends on directly, with the licenses `cargo deny --all-features list` reports for them and the license expression each crate declares (`Cargo.lock` pins the versions). Each crate's source carries its license text; the SBOM of each build lists every crate in the dependency graph with its license.
+The crates `sfr` depends on directly, with the licenses `cargo deny --all-features list` reports (`Cargo.lock` pins the versions). Each crate's source carries its license text, and the SBOM of each build lists every crate in the graph with its license.
 
 | Crate | Version | License |
 |---|---|---|
