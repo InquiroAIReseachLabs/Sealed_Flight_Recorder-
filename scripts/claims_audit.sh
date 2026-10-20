@@ -38,7 +38,8 @@ run() { # <id> <title> <command...>
   printf '%-5s %-62s %s\n' "$id" "$title" "$([ $rc -eq 0 ] && echo PASS || echo "FAIL (exit $rc)")" | tee -a "$A_WORK/summary.txt"
 }
 # T1 clones and builds on its own, from a clean toolchain; the others use its binary and the untouched clone.
-A_CLONE_URL="$url" A_COMMIT_FOR_T1="$commit" run T1 "Quickstart, cold start (Rust install + clone + build + seal + verify)" "$here/claims_audit/t01_quickstart.sh"
+export A_COMMIT_FOR_T1="$commit"
+A_CLONE_URL="$url" run T1 "Quickstart, cold start (Rust install + clone + build + seal + verify)" "$here/claims_audit/t01_quickstart.sh"
 export A_SFR="$A_WORK/sfr-from-t01"
 [ -x "$A_SFR" ] || { echo "T1 left no binary; the other tests need one" >&2; exit 1; }
 run T2 "Seal and verify each golden log with --pubkey" "$here/claims_audit/t02_golden.sh"

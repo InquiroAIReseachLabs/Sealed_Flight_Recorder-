@@ -3,6 +3,7 @@
 # CARGO_HOME and RUSTUP_HOME (so Rust is installed again), a fresh shallow clone, then the README
 # commands in its order. Network needed: the Rust toolchain, crates.io and the clone URL.
 #   A_CLONE_URL  what to clone (default: the origin of A_REPO, else A_REPO itself)
+#   A_COMMIT_FOR_T1  the commit to build (default: the head of the clone's default branch)
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 url="${A_CLONE_URL:-$(git -C "$A_REPO" remote get-url origin 2> /dev/null || echo "$A_REPO")}"
@@ -24,7 +25,13 @@ fi
 check "rustup is installed" "$([ -x "$CARGO_HOME/bin/rustup" ]; echo $?)"
 step "README step 1: git clone --depth 1"
 clone="$A_WORK/t01/clone"; git clone --depth 1 "$url" "$clone" 2>&1 | tail -1; cd "$clone" || exit 1
+# The audit's commit, when it is not the head of the default branch the clone took.
+if [ -n "${A_COMMIT_FOR_T1:-}" ] && [ "$(git rev-parse HEAD)" != "$A_COMMIT_FOR_T1" ]; then
+  echo "DEVIATION: the README clones the default branch; the audited commit $A_COMMIT_FOR_T1 is fetched and checked out"
+  git fetch -q --depth 1 origin "$A_COMMIT_FOR_T1" && git checkout -q FETCH_HEAD
+fi
 echo "commit $(git rev-parse HEAD)"
+check "the clone is the audited commit" "$([ -z "${A_COMMIT_FOR_T1:-}" ] || [ "$(git rev-parse HEAD)" = "$A_COMMIT_FOR_T1" ]; echo $?)"
 step "README step 2: cargo build --release --locked (rust-toolchain.toml installs the pinned toolchain)"
 cargo build --release --locked 2>&1 | grep -v -E '^\s*(Compiling|Downloaded|Downloading)' | tail -6
 check "target/release/sfr exists" "$([ -x target/release/sfr ]; echo $?)"
