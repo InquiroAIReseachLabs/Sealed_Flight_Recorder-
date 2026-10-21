@@ -1,6 +1,6 @@
 # Design notes: five things a record does not do yet
 
-These are design documents. **None of them is built.** `sfr` does what [README.md](../../README.md) and [THREAT_MODEL.md](../THREAT_MODEL.md) say. Each page covers what the change would add, what it would still not do, the standards it relies on, how it can fail, and its size.
+These are design documents. **None of them is built except a part of the second verifier** (`tools/reference_verifier`, a Python verifier with test vectors; [B4](B4_VERIFIER_INDEPENDENCE.md) says what it covers). `sfr` does what [README.md](../../README.md) and [THREAT_MODEL.md](../THREAT_MODEL.md) say. Each page covers what the change would add, what it would still not do, the standards it relies on, how it can fail, and its size.
 
 Each page answers one question that a signed record cannot answer today:
 

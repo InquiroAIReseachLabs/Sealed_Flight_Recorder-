@@ -1,6 +1,6 @@
 # B4: a verifier that does not trust the `sfr` binary
 
-Design only; not built. A record is worth what the checker's answer is worth. Today the only complete checker is `sfr verify`, written by the same people as `sfr seal` and built from the same code, so a flaw in the shared code could make both agree on something wrong. [RECORD_FORMAT.md](../RECORD_FORMAT.md) already lets a reader check a golden record with `openssl`, `b3sum` and a short Python script. This page designs the next step: a second minimal verifier written from the format alone, test vectors every verifier must agree on, and a plan for signing what is released.
+Design, partly built: the Python verifier in `tools/reference_verifier` and its vectors exist; the rest of this page is not built. A record is worth what the checker's answer is worth. Today the only complete checker is `sfr verify`, written by the same people as `sfr seal` and built from the same code, so a flaw in the shared code could make both agree on something wrong. [RECORD_FORMAT.md](../RECORD_FORMAT.md) already lets a reader check a golden record with `openssl`, `b3sum` and a short Python script. This page designs the next step: a second minimal verifier written from the format alone, test vectors every verifier must agree on, and a plan for signing what is released.
 
 ## What it adds, and what it does not
 

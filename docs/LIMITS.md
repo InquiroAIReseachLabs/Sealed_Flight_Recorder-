@@ -11,7 +11,7 @@ sfr: log flight.ulg: the number of events exceeds the input limit of 100000 even
 sfr: rules file rules.toml: line 3: `required_topics` exceeds the input limit of 256 entries (SPEC B1.4)
 ```
 
-A message for a name, version or length rule ends with a parenthesis that states the rule and cites SPEC B1.4, for example `` `P!` is not a parameter name (1 to 16 letters, digits, `_`; SPEC B1.4) ``. `seal` names the byte offset (log) or line (rules file, baseline) where it met the limit. It names only the file for two counts (parameters at log start, events), the file sizes and TOML dotted-key depth. `verify` reports a limit in the record or in the `--ulog` log as its first mismatch (`FAILED: ...`); a public key over its limit exits 4.
+A message for a name or array length rule ends with a parenthesis that states the rule and cites SPEC B1.4, for example `` `P!` is not a parameter name (1 to 16 letters, digits, `_`; SPEC B1.4) ``. `seal` names the byte offset (log) or line (rules file, baseline) where it met the limit. It names only the file for the counts of parameters at log start, events and kept records (data records, data-section parameter records, warning-level log records, dropouts), the file sizes and TOML dotted-key depth. `verify` reports a limit in the record or in the `--ulog` log as its first mismatch (`FAILED: ...`); a public key over its limit exits 4.
 
 | Command | Input | Exit code |
 |---|---|---|
@@ -60,7 +60,7 @@ The log has no size limit. It is read once, as a stream, and every byte is hashe
 
 ## One limit that truncates
 
-R3's changes in flight, R4, R5, R6, R7, X2 and X3 list at most 1,000 `detail` lines (`evaluate.rs` `MAX_DETAIL_LINES`). Past that, the detail ends with one line saying where the rest are counted: `and N more; the events list every one` for R4, R5, R6, R7 and X2 (their cases are events), and `and N more; the count above includes every sample` for X3. This limits output, not input: it is not an error and the rule's status is unchanged. R3's differences are not capped: SPEC B1.6 has it list every differing parameter, so at most the parameter limit for the baseline, the parameter limit at log start, and the limit on data-section parameter records together.
+R3's changes in flight, R4, R5, R6, R7, X2 and X3 list at most 1,000 cases in `detail` (`evaluate.rs` `MAX_DETAIL_LINES`); R6 on a VTOL puts a line naming the VTOL type before them. Past that, the detail ends with one line saying where the rest are counted: `and N more; the events list every one` for R4, R5, R6, R7 and X2 (their cases are events), and `and N more; the count above includes every sample` for X3. This limits output, not input: it is not an error and the rule's status is unchanged. R3's differences are not capped: SPEC B1.6 has it list every differing parameter, so at most the parameter limit for the baseline, the parameter limit at log start, and the limit on data-section parameter records together.
 
 ## Testing
 
