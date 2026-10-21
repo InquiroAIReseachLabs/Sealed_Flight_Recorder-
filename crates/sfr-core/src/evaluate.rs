@@ -2018,42 +2018,63 @@ mod tests {
 
     #[test]
     fn r4_lists_at_most_the_detail_cap_and_counts_the_rest() {
-        let rows = (0..3000u64)
-            .map(|i| VehicleStatusRow {
-                id: RowId {
-                    ts: i,
-                    instance: 0,
-                    index: i,
-                },
-                file_order: 0,
-                arming_state: Some(2),
-                nav_state: Some(4),
-                failsafe: Some(i % 2 == 0),
-                is_vtol: Some(false),
-                in_transition_mode: Some(false),
-                in_transition_to_fw: Some(false),
-                vehicle_type: Some(1),
-                system_type: Some(2),
-                latest_arming_reason: None,
-                latest_disarming_reason: None,
-            })
-            .collect();
-        let fields = VEHICLE_STATUS_FIELDS
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let flight = FlightLog {
-            vehicle_status: rows,
-            vehicle_status_fields: fields,
-            ..FlightLog::default()
+        let run = |n: u64| {
+            let rows = (0..n)
+                .map(|i| VehicleStatusRow {
+                    id: RowId {
+                        ts: i,
+                        instance: 0,
+                        index: i,
+                    },
+                    file_order: 0,
+                    arming_state: Some(2),
+                    nav_state: Some(4),
+                    failsafe: Some(i % 2 == 0),
+                    is_vtol: Some(false),
+                    in_transition_mode: Some(false),
+                    in_transition_to_fw: Some(false),
+                    vehicle_type: Some(1),
+                    system_type: Some(2),
+                    latest_arming_reason: None,
+                    latest_disarming_reason: None,
+                })
+                .collect();
+            let fields = VEHICLE_STATUS_FIELDS
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let flight = FlightLog {
+                vehicle_status: rows,
+                vehicle_status_fields: fields,
+                ..FlightLog::default()
+            };
+            r4(&with_flags(flight.clone()))
         };
-        let r = r4(&with_flags(flight.clone()));
+        // Every second sample is a failsafe: 3000 samples give 1500 cases.
+        let r = run(3000);
         assert_eq!(r.status, Status::Fail);
         assert_eq!(r.found, "true in flight 1500 time(s)");
         assert_eq!(r.detail.len(), MAX_DETAIL_LINES + 1);
         assert_eq!(
             r.detail.last().map(String::as_str),
             Some("and 500 more; the events list every one")
+        );
+        // Exactly at the cap: every case is listed and no line says more follow.
+        let r = run(2 * MAX_DETAIL_LINES as u64);
+        assert_eq!(r.found, "true in flight 1000 time(s)");
+        assert_eq!(r.detail.len(), MAX_DETAIL_LINES);
+        assert!(
+            !r.detail.iter().any(|l| l.starts_with("and ")),
+            "{:?}",
+            r.detail.last()
+        );
+        // One case over: the cap's lines, then one more line.
+        let r = run(2 * MAX_DETAIL_LINES as u64 + 1);
+        assert_eq!(r.found, "true in flight 1001 time(s)");
+        assert_eq!(r.detail.len(), MAX_DETAIL_LINES + 1);
+        assert_eq!(
+            r.detail.last().map(String::as_str),
+            Some("and 1 more; the events list every one")
         );
     }
 

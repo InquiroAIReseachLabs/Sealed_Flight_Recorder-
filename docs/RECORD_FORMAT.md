@@ -4,7 +4,7 @@ This page specifies schema versions 4 and 5 of the record `sfr seal` writes, in 
 
 ## The file
 
-A record is one JSON object stored as its own canonical bytes (RFC 8785, below): UTF-8, no byte order mark, no whitespace between tokens, nothing after the closing brace, not even a newline. `verify` rejects a file that is not exactly the canonical form of its own parse, and names a byte offset: `not in canonical form` for whitespace, key order or escapes, and `not valid JSON` for a value outside the subset below (a float, `-0`, a leading zero, an integer outside the safe range, a duplicate key). `seal` and `verify` refuse a record longer than `MAX_RECORD_BYTES` (536870912 bytes, 512 MiB); one of exactly that length is accepted (`crates/sfr-core/src/verify.rs`).
+A record is one JSON object stored as its own canonical bytes (RFC 8785, below): UTF-8, no byte order mark, no whitespace between tokens, nothing after the closing brace, not even a newline. `verify` rejects a file that is not exactly the canonical form of its own parse, and names a byte offset (a missing or unknown `schema_version` is reported first, without one): `not in canonical form` for whitespace, key order or escapes, and `not valid JSON` for a value outside the subset below (a float, `-0`, a leading zero, an integer outside the safe range, a duplicate key). `seal` and `verify` refuse a record longer than `MAX_RECORD_BYTES` (536870912 bytes, 512 MiB); one of exactly that length is accepted (`crates/sfr-core/src/verify.rs`).
 
 ## Canonical JSON
 
@@ -57,14 +57,14 @@ A record holds exactly these thirteen fields (`RECORD_FIELDS` in `crates/sfr-cor
 
 | Member | Value |
 |---|---|
-| `allow_ignore_all` | `true` when the rules file has an ignore pattern that matches every parameter name (`*`), so R3 compared none, and `seal` was given `--allow-ignore-all`; else `false` |
+| `allow_ignore_all` | `true` when the rules file's ignore patterns together match every parameter name (for example `*`), so R3 compared none, and `seal` was given `--allow-ignore-all`; else `false` |
 | `allow_untested_ulog_version` | schema 5 only: `true` when the log's ULog file format version is above 1 and `seal` was given `--allow-untested-version`; else `false`. It is `true` exactly when `log.ulog_version` is above 1 |
 | `allow_untested_version` | `true` when the log's PX4 version is outside v1.14 to v1.17, or unreadable, and `seal` was given `--allow-untested-version`; else `false` |
-| `certificate_chain` | `null`, or beside a signer certificate, the intermediate CA certificates given with `seal --chain`, nearest the signer first, each the padded standard base64 (RFC 4648) of its DER |
+| `certificate_chain` | `null`, or beside a signer certificate, the intermediate CA certificates given with `seal --chain`, in the file's order (nearest the signer first, as `verify --trust-anchor` needs), each the padded standard base64 (RFC 4648) of its DER |
 | `crypto_crates` | array of `{"name": ..., "version": ...}`, sorted by name: `blake3`, `ed25519-dalek`, `sha2` (`RUSTCRYPTO_CRATES` in `crates/sfr-core/src/crypto.rs`) |
 | `key_custody` | `pkcs11-token`, `tpm-sealed` or `file-evaluation` (below) |
 | `key_fingerprint` | `sha256:` and the lowercase hex SHA-256 of the signing key's SubjectPublicKeyInfo DER |
-| `key_label` | the key file name, token object label, or sealed-key directory |
+| `key_label` | the key file name, token object label (`id=` and the lowercase hex of the key id when the token key has no label, empty when it has neither), or sealed-key directory |
 | `signer_certificate` | `null`, or the padded base64 of the DER of the signer's X.509 certificate given with `seal --cert`; its key is the signing key (`seal` refuses another) |
 | `time_utc` | `YYYY-MM-DDTHH:MM:SSZ`: `--seal-time` converted to UTC, else the sealing machine's clock |
 
@@ -85,7 +85,7 @@ A record holds exactly these thirteen fields (`RECORD_FIELDS` in `crates/sfr-cor
 | `ulog_version` | schema 5 only: the ULog file format version, byte 7 of the file header, an integer from 0 to 255 |
 | `skipped` | what the reader skipped: `unknown_records` (records of a type it does not know), `orphan_data_records` (data records for a message id with no subscription), `regions` (regions skipped to reach an appended-data offset, a record crossing the offset dropped) and `region_bytes` (their bytes, a decimal string); the report says `sealed with N skipped messages` when any count is above 0 |
 | `vehicle_status_instances` | the number of `vehicle_status` instances with data records; the rules read every one |
-| `vehicle` | `system_type` (MAVLink `MAV_TYPE`, integer) and `is_vtol` (boolean) from the first `vehicle_status` sample, each null when absent; `vtol_type`: null for a vehicle that is not VTOL, else `{"name": ..., "value": ...}` from parameter `VT_TYPE` (`tailsitter` for 0, `tiltrotor` for 1, `standard` for 2, `unknown(<n>)` otherwise, and `unknown` with value null without an int32 `VT_TYPE`) |
+| `vehicle` | `system_type` (MAVLink `MAV_TYPE`, integer) and `is_vtol` (boolean) from the first sample of the lowest-numbered `vehicle_status` instance, each null when absent; `vtol_type`: null for a vehicle that is not VTOL, else `{"name": ..., "value": ...}` from parameter `VT_TYPE` (`tailsitter` for 0, `tiltrotor` for 1, `standard` for 2, `unknown(<n>)` otherwise, and `unknown` with value null without an int32 `VT_TYPE`) |
 
 A vehicle counts as VTOL when `vehicle_status.is_vtol` is true on any sample, so `vtol_type` can be set while `is_vtol`, taken from the first sample, is false.
 
@@ -98,7 +98,7 @@ Schema 5 is schema 4 with three more members: `log.truncated`, `log.ulog_version
 - `config`: `firmware` (the log's version string, as `log.firmware.version`, or null); `parameters` (every parameter at log start, the 'P' records before the first subscription, name to typed value, sorted by name); `watched_parameters` (the names in `[watched_parameters]`, sorted; empty without that section).
 - `baseline`: `firmware` (the version, then a space and the git hash prefix if the `# Firmware:` line gives one: `1.17.0 d6f12ad1`); `parameters` (name to typed value); `ignore` (the `parameters.ignore` patterns, in file order); `sha256` (lowercase hex SHA-256 of the baseline file the operator gave, or null). With `rules`, this is everything a deep verify needs besides the log.
 - `rules`: `text` (the whole rules file as UTF-8) and `sha256` (lowercase hex SHA-256 of `text`'s UTF-8 bytes).
-- `results`: one object per rule, R1 to R7 and then each enabled optional rule X1 to X5, with `id`, `name`, `status` (`PASS`, `WARN`, `FAIL` or `N/A`), `expected` and `found` (strings) and `detail` (array of strings, one per finding). An `id` is one uppercase ASCII letter and a decimal number with no leading zero (`R7`, `X1`; not `R01` or `r1`). The array is in strictly increasing id order, by letter then number as an integer (`R2`, `R10`, `X1`). [RULES.md](RULES.md) gives each rule.
+- `results`: one object per rule, R1 to R7 and then each enabled optional rule X1 to X5, with `id`, `name`, `status` (`PASS`, `WARN`, `FAIL` or `N/A`), `expected` and `found` (strings) and `detail` (array of strings, one per finding; for the in-flight lines of R3, R4 to R7, X2 and X3 at most `MAX_DETAIL_LINES` (1000, `crates/sfr-core/src/evaluate.rs`) lines, then one `and N more; ...` line). An `id` is one uppercase ASCII letter and a decimal number with no leading zero (`R7`, `X1`; not `R01` or `r1`). The array is in strictly increasing id order, by letter then number as an integer (`R2`, `R10`, `X1`). [RULES.md](RULES.md) gives each rule.
 - `status`: `FAIL` when any result is `FAIL`; else `NO ARMED FLIGHT` when R5 is `N/A` (the log has no ARM and no DISARM, so no flight was checked); else `WARN` when any result is `WARN`; else `PASS` (`Overall::of` in `crates/sfr-core/src/evaluate.rs`).
 
 ### `sealed_topics`
@@ -114,7 +114,7 @@ Each event has these members, then the members of its kind (`event_json` in `cra
 | `seq` | integer, from 0 |
 | `kind` | one of the kinds below |
 | `boot_us` | microseconds since boot, decimal string |
-| `utc_us` | microseconds since the Unix epoch, decimal string, or null when the log has no GPS time |
+| `utc_us` | microseconds since the Unix epoch, decimal string, or null when the log has no GPS row with `fix_type` 2 or more and a nonzero time, or the result would be before the epoch |
 | `topic` | the source topic, or `ulog.logging`, `ulog.parameter`, `ulog.dropout` for records without one |
 | `instance` | the source topic instance, integer |
 | `index` | the source message's index, integer |
@@ -137,7 +137,7 @@ The names in `reason_name`, `old_name` and `new_name` depend on the PX4 version 
 
 #### Event field `initial`
 
-ARM and FAILSAFE_SET events carry a boolean `initial` (SPEC B1.5); no other kind has it. It is `true` when the event comes from the log's first `vehicle_status` sample because the log starts armed (ARM) or with `failsafe` true (FAILSAFE_SET): the state the log opens in, not a change. It is `false` for a change from the previous `vehicle_status` sample. The report shows it in the event timeline's detail column.
+ARM and FAILSAFE_SET events carry a boolean `initial` (SPEC B1.5); no other kind has it. It is `true` when the event comes from the first sample of a `vehicle_status` instance because the log starts armed (ARM) or with `failsafe` true (FAILSAFE_SET): the state the log opens in, not a change. It is `false` for a change from the previous `vehicle_status` sample. The report shows it in the event timeline's detail column.
 
 ### `merkle` and `signature`
 
@@ -183,7 +183,7 @@ The signature is pure Ed25519 (RFC 8032, no prehash) over that payload, stored a
 
 ## What a verifier checks
 
-`sfr verify --pubkey <sfr.pub>` (standalone) checks, in this order (`standalone` in `crates/sfr-core/src/verify.rs`):
+`sfr verify --pubkey <sfr.pub>` (standalone) checks (`standalone` in `crates/sfr-core/src/verify.rs`). Steps 1 to 4 run in this order; the later checks all run, in the code's own order, so the first fault reported need not be the lowest step:
 
 1. The size is at most `MAX_RECORD_BYTES`.
 2. `schema_version` is `4` or `5`. Any other value is rejected, never guessed at; `sfr` names an unknown version when the file parses within the value subset, even if not canonical, and otherwise reports the parse error.
@@ -203,11 +203,11 @@ With `--trust-anchor` instead of `--pubkey`, step 9 uses the key in `seal.signer
 
 - the certificate chain must reach the anchor, and every certificate must be valid at the verification time (the verifier's clock, or `--at`; not `seal.time_utc`);
 - the signer certificate must carry the sfr record-signing extended key usage `2.25.182460915354635260549596502533646383540`, not also code signing, TLS server authentication or any usage, and its keyUsage must set digitalSignature (`check_signer_purpose` in `crates/sfr/src/certs.rs`);
-- no certificate in the path may be in the current CRL of its issuer. Every CRL given with `--crl` is read in any order; for each issuer the one with the highest `cRLNumber` (RFC 5280 section 5.2.3) is current; every issuer of the signer certificate and the intermediates needs one that is not past its `nextUpdate` by the verifier's clock, unless `--no-crl-check` is given.
+- no certificate in the path may be in the current CRL of its issuer. Every CRL given with `--crl` is read in any order; for each issuer the one with the highest `cRLNumber` (RFC 5280 section 5.2.3; at most 20 significant octets) is current; a CRL whose issuer is not a non-empty Name is refused, and when several CRLs are refused the least message is shown, so the order given does not change the answer; every issuer of the signer certificate and the intermediates needs one whose `nextUpdate` is after the verifier's clock, whose `thisUpdate` is at most `--max-crl-age` before it (default 7 days) and at most 300 s after it, unless `--no-crl-check` is given.
 
-Then the report: the one `--report` names, or `<name>.sfr.md` beside `<name>.sfr`, must be byte for byte the report the record renders (`check` in `crates/sfr-core/src/report.rs`). A record with no report found fails, unless `--no-report` is given, which skips the check and says so. Last, the custody policy (`custody_policy` in `crates/sfr-core/src/verify.rs`) judges a record whose signature and chain are good: a declared `file-evaluation` is `Integrity: REFUSED` unless `--allow-evaluation-key` is given, and `--require-hardware-key` accepts only custody attested by the certificate chain. These refuse an intact record, so they are not reported as failed checks.
+Then the custody policy (`custody_policy` in `crates/sfr-core/src/verify.rs`) judges a record whose signature and chain are good: a declared `file-evaluation` is `Integrity: REFUSED` unless `--allow-evaluation-key` is given, and `--require-hardware-key` accepts only custody attested by the certificate chain. These refuse an intact record, so they are not reported as failed checks. Last, the report: the one `--report` names, or `<name>.sfr.md` beside `<name>.sfr`, must be byte for byte the report the record renders (`check` in `crates/sfr-core/src/report.rs`). A record with no report found fails, unless `--no-report` is given, which skips the check and says so. A refused record's report is not compared.
 
-`seal`, `merkle`, `signature` and `rules` must be objects and `results` an array. A failure in steps 1 to 4 is reported alone. From step 5 on, failed checks are noted and the next one runs, then all are reported together (`FAILED:` with the first, `also:` with the others, exit 1); a missing or wrongly typed member, or an unknown custody, stops verification and is reported alone.
+`seal`, `merkle`, `signature` and `rules` must be objects and `results` an array. A failure in steps 1 to 3 is reported alone. From step 4 on, failed checks are noted and the next one runs, then all are reported together (`FAILED:` with the first, `also:` with the others, exit 1); a missing or wrongly typed member, a fault in the booleans or schema 5 members of step 12, in the certificate members of step 13, or an unknown custody, stops verification and is reported alone, dropping the faults noted before it.
 
 With `--ulog <log>` (deep), `verify` also reads the log again, re-derives `log`, `config`, `results`, `sealed_topics` and `events` from it with the embedded rules and baseline, and requires them to equal the sealed ones. Of `log` it compares every member but `file_name`, so a renamed log still verifies and a `note` line names both names. The first difference is named: a parameter, the config firmware, an event, a result, a sealed topic, the watched parameters, `log digest mismatch`, or the log's firmware or vehicle. A deep verify needs the full `sfr` analysis; the commands below check everything else.
 
@@ -258,7 +258,7 @@ The unit test `sealed_topics_are_digested_per_instance_while_streaming` (`crates
 
 ## Verify without sfr
 
-These commands check the golden record `examples/reports/vtol_transition.sfr`, its key `examples/reports/sfr.pub` and its log `testdata/sitl/v1.17.0/vtol_transition.ulg` from the repository root, with no `sfr` binary. CI runs every one on every commit (`scripts/check_docs.py`) and compares the output shown. Together they do the standalone checks above and the log digest part of a deep verify.
+These commands check the golden record `examples/reports/vtol_transition.sfr`, its key `examples/reports/sfr.pub` and its log `testdata/sitl/v1.17.0/vtol_transition.ulg` from the repository root, with no `sfr` binary. CI runs every one on every commit on main and on the newest push of any other branch (`scripts/check_docs.py`) and compares the output shown. Together they do the standalone checks above, except that the rules file is checked only for TOML syntax and its ignore list, and the log's digests and size.
 
 They need:
 
@@ -336,7 +336,7 @@ Signature Verified Successfully
 
 ### 4. Every standalone check: the reference verifier
 
-`tools/reference_verifier/sfr_ref_verify.py` is a separate program, written from this page alone: it imports nothing from `sfr`, needs only the Python 3.11+ standard library, and implements Ed25519 itself (RFC 8032). It does every standalone check above: strict JSON, canonical form, field set and member types, results R1 to R7 exactly once each with known statuses, leaf order, rules digest, the overall status, the flags, custody value, the Merkle root, the key fingerprint and the signature. Its header lists what it does not check: certificate chains and CRLs, the custody policy (it accepts an evaluation key), the report, the log, and the rules file beyond its TOML syntax and ignore list. Its test vectors (`tools/reference_verifier/vectors/`, written by `make_vectors.py`) include records built to trip a lenient JSON reader; `crates/sfr/tests/reference_verifier.rs` requires it and `sfr verify` to give each vector the verdict `expected.json` lists.
+`tools/reference_verifier/sfr_ref_verify.py` is a separate program, written from this page and the ignore-pattern rule in [RULES.md](RULES.md): it imports nothing from `sfr`, needs only the Python 3.11+ standard library, and implements Ed25519 itself (RFC 8032). It does every standalone check above: strict JSON, canonical form, field set and member types, results R1 to R7 exactly once each with known statuses, leaf order, rules digest, the overall status, the flags, custody value, the Merkle root, the key fingerprint and the signature. Its header lists what it does not check: certificate chains and CRLs, the custody policy (it accepts an evaluation key), the report, the log, the rules file beyond its TOML syntax and ignore list, and the contents of `log`, `config`, `baseline`, `events` and `results` beyond their digests and the checks above. Its test vectors (`tools/reference_verifier/vectors/`, written by `make_vectors.py`) include records built to trip a lenient JSON reader; `crates/sfr/tests/reference_verifier.rs` requires it and `sfr verify` to give each vector the verdict `expected.json` lists.
 
 ```sh doc-test
 python3 -I tools/reference_verifier/sfr_ref_verify.py examples/reports/vtol_transition.sfr examples/reports/sfr.pub
@@ -346,7 +346,7 @@ python3 -I tools/reference_verifier/sfr_ref_verify.py examples/reports/vtol_tran
 VERIFIED
 ```
 
-Steps 2 and 3 show the record is unchanged since the holder of that key signed it. Step 1 shows the log is the one it was sealed from.
+Steps 2 and 3 show that the holder of that key signed the recorded root and counts; step 4 ties the content to that root, so together they show the record is unchanged since it was signed. Step 1 shows the log is the one it was sealed from.
 
 ### A changed record fails
 

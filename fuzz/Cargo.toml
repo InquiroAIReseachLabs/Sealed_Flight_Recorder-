@@ -13,6 +13,10 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "=0.4.13"
 sfr-core = { path = "../crates/sfr-core" }
+# The same pins as the sfr crate (root Cargo.toml [workspace.dependencies]), for crl_parse, which
+# includes crates/sfr/src/certs.rs.
+rustls-webpki = { version = "=0.103.16", default-features = false, features = ["alloc"] }
+rustls-pki-types = { version = "=1.15.1", default-features = false, features = ["alloc"] }
 
 [[bin]]
 name = "ulog_ingest"
@@ -31,6 +35,13 @@ bench = false
 [[bin]]
 name = "rules_parse"
 path = "fuzz_targets/rules_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crl_parse"
+path = "fuzz_targets/crl_parse.rs"
 test = false
 doc = false
 bench = false

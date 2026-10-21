@@ -8,7 +8,7 @@
 //! Every value from the record goes through [`escape`]: each ASCII punctuation character gets a
 //! backslash, which CommonMark defines as that character shown literally, so no value can form
 //! a Markdown or HTML construct (emphasis, a link, an entity, a table cell, a list). A control
-//! character becomes a space, and a character that hides or reorders text (a bidirectional
+//! character (a newline included) and a character that hides or reorders text (a bidirectional
 //! control such as U+202E, a zero-width character, any Unicode format character) is written out
 //! as `<U+202E>`, so it shows. Digests and the key fingerprint are hexadecimal and shown in code
 //! spans. The Merkle root and the key fingerprint come first, under the title, so a reader can
