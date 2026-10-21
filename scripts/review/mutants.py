@@ -12,10 +12,16 @@ be caught by a later tier and is recorded as missed without being run again.
   tier 3  the record-forging and reference-verifier tests (optimized profile, they are slow)
 
 Usage:
-  scripts/review/mutants.py run --tier N --out DIR [--tree DIR] [--jobs 3] [--lines FILE] [FILE...]
+  scripts/review/mutants.py run --tier N|all --out DIR [--tree DIR] [--jobs 3] [--lines FILE]
+                                [--shard K/M] [FILE...]
       Runs cargo-mutants for each file (default: every production source file, in review order)
       into DIR/tier<N>/<file>. Tiers 2 and 3 take only the survivors of the tiers before
-      (found in DIR), on lines that tests reach (--lines).
+      (found in DIR), on lines that tests reach (--lines). With `--tier all` each file goes
+      through tiers 1, 2 and 3 in turn. With `--shard K/M` only every Mth file, from the Kth
+      (counting from 0), is run, so M jobs together cover the list exactly once.
+  scripts/review/mutants.py merge-metrics LEDGER.json...
+      Copies the mutation metrics of the chunks that each given ledger holds into docs/review/
+      ledger.json (the ledgers of the shards of one run: no two hold the same chunk).
   scripts/review/mutants.py collect --out DIR [--lines FILE] [--missed-dir DIR]
       Merges the tiers, writes metrics.mutants of every chunk into docs/review/ledger.json and, with
       --missed-dir, one file per chunk listing its missed mutants.
@@ -105,12 +111,16 @@ def survivors(out, path, tiers_before, uncovered):
 
 
 def run(argv):
-    tier, out, tree, jobs, lines_file, files = None, None, ROOT, "3", None, []
+    tier, out, tree, jobs, lines_file, files, shard = None, None, ROOT, "3", None, [], None
     a = list(argv)
     while a:
         x = a.pop(0)
         if x == "--tier":
-            tier = int(a.pop(0))
+            t = a.pop(0)
+            tier = t if t == "all" else int(t)
+        elif x == "--shard":
+            k, m = a.pop(0).split("/")
+            shard = (int(k), int(m))
         elif x == "--out":
             out = os.path.abspath(a.pop(0))
         elif x == "--tree":
@@ -121,40 +131,52 @@ def run(argv):
             lines_file = a.pop(0)
         else:
             files.append(x)
-    if tier not in (1, 2, 3) or not out:
+    if tier not in (1, 2, 3, "all") or not out:
         print(__doc__)
         return 2
+    if shard and not 0 <= shard[0] < shard[1]:
+        print("--shard K/M needs 0 <= K < M", file=sys.stderr)
+        return 2
     uncovered = {}
-    if tier > 1:
+    if tier != 1:
         if not lines_file:
             print("tiers 2 and 3 need --lines (coverage.py --lines)", file=sys.stderr)
             return 2
         with open(lines_file) as f:
             uncovered = {k: set(v["uncovered"]) for k, v in json.load(f).items()}
-    for path in files or review_order():
-        if tier == 3 and path not in TIER3_FILES:
-            continue
-        d = os.path.join(out, f"tier{tier}", slug(path))
-        os.makedirs(d, exist_ok=True)
-        cmd = ["cargo", "mutants", "-f", path, "-j", jobs, "--cargo-arg=--locked", "-o", d]
-        if tier == 1:
-            cmd += ["--timeout-multiplier", "5", "--minimum-test-timeout", "60"] + tier1_args(path)
-        else:
-            todo = survivors(out, path, range(1, tier), uncovered)
-            if not todo:
-                print(f"{path}: no survivors to try in tier {tier}", flush=True)
-                continue
-            rx = "^(" + "|".join(re.escape(m) for m in todo) + ")$"
-            cmd += ["--baseline", "skip", "--timeout", "300" if tier == 2 else "600", "--test-package", "sfr",
-                    "-F", rx]
-            if tier == 3:
-                cmd += ["--cargo-arg=--profile=qemu-test"]
-            cmd += ["--"] + (SFR_E2E if tier == 2 else FORGING + (["--test", "canonical"] if path.endswith("json.rs") else []))
-        print("+", path, "tier", tier, flush=True)
-        r = subprocess.run(cmd, cwd=tree)
-        if r.returncode not in (0, 2, 3):  # 0 all caught, 2 survivors, 3 timeouts; others are failures
-            print(f"cargo mutants failed on {path} with status {r.returncode}", file=sys.stderr, flush=True)
+    todo_files = files or review_order()
+    if shard:
+        todo_files = todo_files[shard[0]::shard[1]]
+    for path in todo_files:
+        for t in (1, 2, 3) if tier == "all" else (tier,):
+            run_one(path, t, out, tree, jobs, uncovered)
     return 0
+
+
+def run_one(path, tier, out, tree, jobs, uncovered):
+    """cargo-mutants on one file in one tier, into out/tier<N>/<file>."""
+    if tier == 3 and path not in TIER3_FILES:
+        return
+    d = os.path.join(out, f"tier{tier}", slug(path))
+    os.makedirs(d, exist_ok=True)
+    cmd = ["cargo", "mutants", "-f", path, "-j", jobs, "--cargo-arg=--locked", "-o", d]
+    if tier == 1:
+        cmd += ["--timeout-multiplier", "5", "--minimum-test-timeout", "60"] + tier1_args(path)
+    else:
+        todo = survivors(out, path, range(1, tier), uncovered)
+        if not todo:
+            print(f"{path}: no survivors to try in tier {tier}", flush=True)
+            return
+        rx = "^(" + "|".join(re.escape(m) for m in todo) + ")$"
+        cmd += ["--baseline", "skip", "--timeout", "300" if tier == 2 else "600", "--test-package", "sfr",
+                "-F", rx]
+        if tier == 3:
+            cmd += ["--cargo-arg=--profile=qemu-test"]
+        cmd += ["--"] + (SFR_E2E if tier == 2 else FORGING + (["--test", "canonical"] if path.endswith("json.rs") else []))
+    print("+", path, "tier", tier, flush=True)
+    r = subprocess.run(cmd, cwd=tree)
+    if r.returncode not in (0, 2, 3):  # 0 all caught, 2 survivors, 3 timeouts; others are failures
+        print(f"cargo mutants failed on {path} with status {r.returncode}", file=sys.stderr, flush=True)
 
 
 def collect(argv):
@@ -224,6 +246,34 @@ def collect(argv):
     return 0
 
 
+def merge_metrics(argv):
+    if not argv:
+        print(__doc__)
+        return 2
+    data = ledger.load()
+    seen = {}
+    for p in argv:
+        with open(p) as f:
+            shard = json.load(f)
+        for c in shard["chunks"]:
+            m = c.get("metrics", {}).get("mutants")
+            if m is None:
+                continue
+            if c["id"] in seen:
+                print(f"chunk {c['id']} is in {seen[c['id']]} and {p}", file=sys.stderr)
+                return 1
+            seen[c["id"]] = p
+            mine = next((x for x in data["chunks"] if x["id"] == c["id"]), None)
+            if mine is None:
+                print(f"{p}: chunk {c['id']} is not in the ledger", file=sys.stderr)
+                return 1
+            mine.setdefault("metrics", {})["mutants"] = m
+    ledger.save(data)
+    ledger.render()
+    print(f"mutation metrics of {len(seen)} chunks merged from {len(argv)} ledgers")
+    return 0
+
+
 def self_test():
     m = {"file": "crates/a/src/x.rs", "name": "replace f -> u8 with 0", "span": {"start": {"line": 7, "column": 5}}}
     assert mutant_id(m) == "crates/a/src/x.rs:7:5: replace f -> u8 with 0"
@@ -233,6 +283,9 @@ def self_test():
     rx = "^(" + "|".join(re.escape(x) for x in [mutant_id(m)]) + ")$"
     assert re.match(rx, mutant_id(m))
     assert review_order()[0] == "crates/sfr-core/src/ulog.rs" and len(set(review_order())) == len(review_order())
+    files = review_order()
+    parts = [files[k::3] for k in range(3)]
+    assert sorted(sum(parts, [])) == sorted(files) and all(parts)
     print("mutants self-test: ok")
     return 0
 
@@ -244,6 +297,8 @@ def main(argv):
         return run(argv[2:])
     if len(argv) >= 2 and argv[1] == "collect":
         return collect(argv[2:])
+    if len(argv) >= 2 and argv[1] == "merge-metrics":
+        return merge_metrics(argv[2:])
     print(__doc__)
     return 2
 
