@@ -63,13 +63,28 @@ def vectors():
         out[name] = (sign(r), verdict)
 
     def raw(name, verdict, f):
-        out[name] = (f(good), verdict)
+        data = f(good)
+        assert data != good, name + ": the edit changed nothing"
+        out[name] = (data, verdict)
 
     out["valid.sfr"] = (good, "accept")
     # Types: a boolean where an integer belongs and the other way round.
     edit("bool_as_int.sfr", "reject", lambda r: r["seal"].__setitem__("allow_untested_version", 0))
     edit("int_as_bool_schema.sfr", "reject", lambda r: r.__setitem__("schema_version", True))
     edit("string_count.sfr", "reject", lambda r: r["events"][0].__setitem__("seq", "0"))
+    # A boolean where a count belongs, in the recorded tree shape and in the event numbers: Python
+    # compares False with 0 and True with 1, the canonical form does not. The tree-shape edit is
+    # to the signed bytes only (the signed payload is built from the counts a verifier computes, so
+    # the signature stays good); the event numbers are in the leaves, so that record is signed again.
+    raw("merkle_sections_bool.sfr", "reject",
+        lambda b: b.replace(b'"sealed_topics":0}', b'"sealed_topics":false}', 1))
+    edit("seq_bool.sfr", "reject",
+         lambda r: (r["events"][0].__setitem__("seq", False), r["events"][1].__setitem__("seq", True)))
+    # The certificate members are standard base64 with padding and zero trailing bits, and not empty.
+    edit("base64_loose.sfr", "reject", lambda r: r["seal"].__setitem__("signer_certificate", "A"))
+    edit("chain_not_base64.sfr", "reject", lambda r: set_chain(r, ["!!!not base64!!!"]))
+    edit("chain_empty_member.sfr", "reject", lambda r: set_chain(r, [""]))
+    edit("chain_base64.sfr", "accept", lambda r: set_chain(r, ["AAAA"]))
     # Integers at and over 2^53.
     edit("int_2_53_minus_1.sfr", "accept", lambda r: r["events"][0].__setitem__("index", 2 ** 53 - 1))
     edit("int_2_53.sfr", "reject", lambda r: r["events"][0].__setitem__("index", 2 ** 53))
@@ -154,6 +169,12 @@ def schema5(r, cut=0, version=1):
 
 IGNORE_UNION = ('format = "sfr-rules/1"\n\n[required_topics]\ntopics = []\n\n[parameters]\nignore = ['
                 + ", ".join('"%s*"' % c for c in ref.NAME_CHARS) + ']\n')
+
+
+def set_chain(r, chain):
+    """A signer certificate and a certificate chain; only their base64 shape is read without a trust anchor."""
+    r["seal"]["signer_certificate"] = "AAAA"
+    r["seal"]["certificate_chain"] = chain
 
 
 def set_rules(r, text):
