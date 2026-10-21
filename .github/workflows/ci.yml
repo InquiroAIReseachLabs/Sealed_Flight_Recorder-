@@ -184,7 +184,7 @@ jobs:
           tail -1 oracle-differential.log >> "$GITHUB_STEP_SUMMARY"
 
   fuzz:
-    name: fuzz ulog_ingest, sfr_verify and rules_parse for 60 s each (SPEC B1.10)
+    name: fuzz ulog_ingest, sfr_verify, rules_parse and crl_parse for 60 s each (SPEC B1.10)
     runs-on: ubuntu-24.04
     env:
       # cargo-fuzz sets its own sanitizer flags; -D warnings still applies to the target.
@@ -201,7 +201,7 @@ jobs:
           set -euo pipefail
           echo "| Target | libFuzzer summary |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
-          for t in ulog_ingest sfr_verify rules_parse; do
+          for t in ulog_ingest sfr_verify rules_parse crl_parse; do
             mkdir -p fuzz/corpus/$t
             cp fuzz/seeds/$t/* fuzz/corpus/$t/
             cargo +nightly-2026-10-18 fuzz run $t fuzz/corpus/$t -- \
