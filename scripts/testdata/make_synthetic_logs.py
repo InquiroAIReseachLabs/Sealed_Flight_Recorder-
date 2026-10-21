@@ -20,6 +20,7 @@ ulog_version_2.ulg: the same complete flight with ULog file format version 2 in 
 
 usage: make_synthetic_logs.py <out dir>
 """
+import json
 import os
 import struct
 import sys
@@ -28,7 +29,29 @@ MAGIC = b"ULog\x01\x12\x35"
 VS = ("vehicle_status:uint64_t timestamp;uint8_t arming_state;uint8_t nav_state;bool failsafe;"
       "bool is_vtol;bool in_transition_mode;bool in_transition_to_fw;uint8_t vehicle_type;"
       "uint8_t system_type;uint8_t latest_arming_reason;uint8_t latest_disarming_reason;")
-FS = "failsafe_flags:uint64_t timestamp;bool vtol_fixed_wing_system_failure;"
+
+
+def px4_fields(tag, topic):
+    """The fields of a topic's message at a PX4 release tag, as (type, name), from
+    scripts/testdata/px4_tables.json, which scripts/px4/px4_tables.py writes from the
+    PX4-Autopilot source at that tag."""
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "px4_tables.json")) as f:
+        tables = json.load(f)
+    rel = next(r for r in tables["releases"] if r["tag"] == tag)
+    return [(t, n) for n, t in tables["msgs"][rel["topics"][topic]]["fields"]]
+
+
+# Every log here states PX4 v1.17.0, and R1 requires the failsafe_flags fields R4 reads at the
+# log's tag, so the format is that tag's message (msg/FailsafeFlags.msg) and a row sets every
+# field to 0 but the timestamp.
+FS_FIELDS = px4_fields("v1.17.0", "failsafe_flags")
+FS = "failsafe_flags:" + "".join("%s %s;" % f for f in FS_FIELDS)
+FS_PACK = {"uint64_t": "Q", "uint32_t": "I", "uint8_t": "B", "bool": "B"}
+
+
+def fs_row(ts):
+    return struct.pack("<" + "".join(FS_PACK[t] for t, _ in FS_FIELDS),
+                       *[ts if n == "timestamp" else 0 for _, n in FS_FIELDS])
 
 
 def rec(ty, body):
@@ -81,7 +104,7 @@ def r4_quadchute_on_disarm():
         (12 * s, False, 0, 0, False),
     ]
     for ts, armed, in_tr, to_fw, fw in rows:
-        out += data(1, struct.pack("<QB", ts, 0))
+        out += data(1, fs_row(ts))
         out += data(0, vs(ts, armed, in_tr, to_fw, fw))
     return out
 
@@ -115,7 +138,7 @@ def custom_detection():
     s = 1_000_000
     for i in range(8):
         ts = (i + 1) * s
-        out += data(1, struct.pack("<QB", ts, 0))
+        out += data(1, fs_row(ts))
         out += data(0, mc_vs(ts, 2 <= i + 1 <= 6))  # armed from 2 s through 6 s
         if 2 <= i <= 6:
             out += data(2, detection(ts + 500, 7, 0.5 + i / 20, i, 2.0 * i, 1.5, 0.25))
@@ -143,7 +166,7 @@ def mc_flight(version=1):
     for i in range(1, 9):
         ts = i * s
         starts.append((len(out), "failsafe_flags", ts))
-        out += data(1, struct.pack("<QB", ts, 0))
+        out += data(1, fs_row(ts))
         starts.append((len(out), "vehicle_status", ts))
         out += data(0, mc_vs(ts, 2 <= i <= 6))  # ARM at 2 s, DISARM at 7 s
     return out, starts

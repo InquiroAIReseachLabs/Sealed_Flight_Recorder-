@@ -219,6 +219,26 @@ def px4_types(releases, topic, field):
     return out
 
 
+def ff_fields_r4_reads(releases):
+    """The failsafe_flags fields R4 reads that PX4 defines at every one of these releases (read
+    from msg/FailsafeFlags.msg at each tag): each flag, a bool or battery_warning, a uint8, and
+    the mode_req_* mask PX4 pairs with it. R1 requires them (sfr's px4::failsafe_flags_fields)."""
+    common = None
+    for r in releases:
+        i = r['topics'].get('failsafe_flags')
+        if i is None:
+            return set()
+        reqs = dict(r['mode_requirements'])
+        here = set()
+        for n, t in PX4['msgs'][i]['fields']:
+            if t == 'bool' or (n == 'battery_warning' and t == 'uint8_t'):
+                here.add(n)
+                if n in reqs:
+                    here.add(reqs[n])
+        common = here if common is None else common & here
+    return common or set()
+
+
 # failsafe_flags flag -> mode_req field, at any supported release.
 MODE_REQ = {f: m for r in PX4['releases'] for f, m in r['mode_requirements']}
 
@@ -611,7 +631,7 @@ def run(path, rules, required, ptime, param_index, debug):
     if ff is None:
         missing.add('failsafe_flags')
     else:
-        for f in FF_REQUIRED_FIELDS:
+        for f in sorted(set(FF_REQUIRED_FIELDS) | ff_fields_r4_reads(px4_releases(info.get('ver_sw_release')))):
             if not ff.has(f):
                 missing.add('failsafe_flags.' + f)
     # With [authorized_sources], the vehicle_command fields R7 reads (SPEC B1.6 R1), in every

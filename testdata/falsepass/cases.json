@@ -819,6 +819,88 @@
     "what": "control for failsafe_flags_gap"
   },
   {
+    "baseline": "failsafe_flags_mask_missing.params",
+    "case": "failsafe_flags_mask_missing",
+    "expect": {
+      "exit": 2,
+      "found": {
+        "R1": "missing: failsafe_flags.mode_req_global_position"
+      },
+      "results": {
+        "R1": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "3.10",
+    "kind": "attack",
+    "log": "failsafe_flags_mask_missing.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "failsafe_flags format without the mode requirement mask of a flag that was true in flight"
+  },
+  {
+    "baseline": "failsafe_flags_mask_missing_control.params",
+    "case": "failsafe_flags_mask_missing_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "required failsafe_flags global_position_invalid true in flight"
+      },
+      "results": {
+        "R1": "PASS",
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "3.10",
+    "kind": "control",
+    "log": "failsafe_flags_mask_missing_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for failsafe_flags_mask_missing"
+  },
+  {
+    "baseline": "failsafe_flags_flag_missing.params",
+    "case": "failsafe_flags_flag_missing",
+    "expect": {
+      "exit": 2,
+      "found": {
+        "R1": "missing: failsafe_flags.global_position_invalid"
+      },
+      "results": {
+        "R1": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "3.10",
+    "kind": "attack",
+    "log": "failsafe_flags_flag_missing.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "failsafe_flags format without a flag that the flight mode requires clear"
+  },
+  {
+    "baseline": "failsafe_flags_flag_missing_control.params",
+    "case": "failsafe_flags_flag_missing_control",
+    "expect": {
+      "exit": 1,
+      "found": {
+        "R4": "required failsafe_flags global_position_invalid true in flight"
+      },
+      "results": {
+        "R1": "PASS",
+        "R4": "FAIL"
+      },
+      "status": "FAIL"
+    },
+    "item": "3.10",
+    "kind": "control",
+    "log": "failsafe_flags_flag_missing_control.ulg",
+    "options": [],
+    "rules": "rules.toml",
+    "what": "control for failsafe_flags_flag_missing"
+  },
+  {
     "baseline": "failsafe_flags_end_gap.params",
     "case": "failsafe_flags_end_gap",
     "expect": {

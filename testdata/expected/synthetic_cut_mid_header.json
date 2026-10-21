@@ -75,15 +75,15 @@
     }
   ],
   "log": {
-    "blake3": "208c04dc2004c0131d9dd9e960983379c8e030c81013d2b5676c1f7112abf72c",
+    "blake3": "71c9f0359081fbc29602e82f61f563d6ceb83cd7d201782da6fdbe542c71e23b",
     "file_name": "cut_mid_header.ulg",
     "firmware": {
       "git": "d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
       "ver_sw_release": "0x011100ff",
       "version": "1.17.0"
     },
-    "sha256": "9bec748e3aae4b4ef24c34e049a973928f330770a00d3e925c1822b9ad40abe7",
-    "size": "851",
+    "sha256": "6806db86f111a19305209ec7209e8a8fe643e93de31a34343394c0ed857a0957",
+    "size": "2689",
     "skipped": {
       "orphan_data_records": 0,
       "region_bytes": "0",
@@ -91,7 +91,7 @@
       "unknown_records": 0
     },
     "truncated": {
-      "offset": "849",
+      "offset": "2687",
       "trailing_bytes": "2"
     },
     "ulog_version": 1,

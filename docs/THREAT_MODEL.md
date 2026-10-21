@@ -75,7 +75,7 @@ Every input that can change a rule result or the verify verdict, who supplies it
 | Input | Supplied by | If it is wrong | Mitigation |
 |---|---|---|---|
 | `vehicle_status` arming state, flight mode and failsafe | log | R4 and R5 judge the wrong flight | field types must be PX4's (else the rule FAILs and names the field); every instance is read; a log with no ARM and no DISARM is NO ARMED FLIGHT, not PASS. A consistent rewrite before sealing is not detected. |
-| `failsafe_flags` | log | R4 misses a failsafe | required flags come from the flight mode's requirement masks, with PX4's types; missing data FAILs R4; other flags true in flight WARN |
+| `failsafe_flags` | log | R4 misses a failsafe | required flags come from the flight mode's requirement masks, with PX4's types; missing data FAILs R4, and R1 fails a format that lacks a flag or a mask PX4 defines at the log's tag; other flags true in flight WARN |
 | `is_vtol`, transition fields, `vehicle_type`, `system_type` | log | R6 skips a VTOL | a VTOL `system_type` with `is_vtol` false FAILs R6 |
 | Parameter records | log | R3 compares the wrong values | compared at every ARM in file order; a change in flight WARNs |
 | `ver_sw_release`, `ver_sw` | log | R2 matches a false version | the R2 line labels the version self-reported |
