@@ -539,7 +539,7 @@ fn check_vehicle_status(
 
 /// Most detail lines R3, R4, R5, R6, X2, and X3 list. Real logs need a handful; the cap keeps a
 /// crafted log from making one result enormous. R3's differences are not capped: SPEC B1.6 has
-/// it list every differing parameter, at most the two parameter limits together.
+/// it list every differing parameter, at most the baseline and log-start parameter limits and the data-section parameter record limit together.
 pub const MAX_DETAIL_LINES: usize = 1000;
 
 /// Detail lines with a running total, capped at [`MAX_DETAIL_LINES`].
@@ -1155,7 +1155,7 @@ fn r6(f: &FlightLog, events: &[Event], vtol: Option<&crate::ingest::VtolType>) -
         f,
         &["in_transition_mode", "in_transition_to_fw", "vehicle_type"],
     ) {
-        return r;
+        return with_vtol_type(r, vtol);
     }
     let mut detail = Lines::new();
     let mut open: BTreeMap<u8, &Event> = BTreeMap::new();
@@ -1203,12 +1203,18 @@ fn r6(f: &FlightLog, events: &[Event], vtol: Option<&crate::ingest::VtolType>) -
     } else {
         Status::Fail
     };
-    let mut lines = detail.finish();
+    let result = RuleResult::new("R6", NAME, status, expected, found, detail.finish());
+    with_vtol_type(result, vtol)
+}
+
+/// R6's first detail line on a VTOL vehicle: its type, also when the rule fails for a missing
+/// field.
+fn with_vtol_type(mut r: RuleResult, vtol: Option<&crate::ingest::VtolType>) -> RuleResult {
     if let Some(t) = vtol {
         let value = t.value.map_or(String::new(), |v| format!(" (VT_TYPE {v})"));
-        lines.insert(0, format!("VTOL type {}{value}", t.name));
+        r.detail.insert(0, format!("VTOL type {}{value}", t.name));
     }
-    RuleResult::new("R6", NAME, status, expected, found, lines)
+    r
 }
 
 fn in_armed(armed: &[ArmedInterval], t: u64) -> bool {
@@ -2768,6 +2774,40 @@ mod tests {
             missing(&unknown, &common)
         );
         assert_eq!(r1(&flight(&only_ts), &unknown, &rules).status, Status::Fail);
+    }
+
+    #[test]
+    fn r6_names_the_vtol_type_when_a_transition_field_is_missing() {
+        let rows = vec![
+            vtol_row(0, 2, false, false, 1),
+            vtol_row(1, 2, false, false, 1),
+        ];
+        let flight = FlightLog {
+            vehicle_status: rows,
+            vehicle_status_fields: VEHICLE_STATUS_FIELDS
+                .iter()
+                .filter(|f| **f != "in_transition_mode")
+                .map(|s| s.to_string())
+                .collect(),
+            ..FlightLog::default()
+        };
+        let vtol = crate::ingest::VtolType {
+            value: Some(2),
+            name: "standard".to_string(),
+        };
+        let r = r6(&flight, &[], Some(&vtol));
+        assert_eq!(r.status, Status::Fail);
+        assert_eq!(
+            r.detail,
+            [
+                "VTOL type standard (VT_TYPE 2)",
+                "missing vehicle_status.in_transition_mode"
+            ]
+        );
+        assert_eq!(
+            r6(&flight, &[], None).detail,
+            ["missing vehicle_status.in_transition_mode"]
+        );
     }
 
     #[test]
