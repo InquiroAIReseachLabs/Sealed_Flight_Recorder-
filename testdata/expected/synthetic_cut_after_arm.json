@@ -64,15 +64,15 @@
     }
   ],
   "log": {
-    "blake3": "5f6e9f3cfb6aa66acdc720729bda5aca314bc9c10539edde406936365cc23c8d",
+    "blake3": "eb53f7241d8471ca81b0de9d76c4a8dec3d12a4a5b5313ae5eece26673a5b8bb",
     "file_name": "cut_after_arm.ulg",
     "firmware": {
       "git": "d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
       "ver_sw_release": "0x011100ff",
       "version": "1.17.0"
     },
-    "sha256": "9dad4165260915489a282dd1a8d9496ce787d8cc23b8801850529ad4280bbf3b",
-    "size": "660",
+    "sha256": "91d4deae4d58792a84fa46b888d44975f3dd8534d7a4b39101e19ce3b149273c",
+    "size": "2006",
     "skipped": {
       "orphan_data_records": 0,
       "region_bytes": "0",
@@ -80,7 +80,7 @@
       "unknown_records": 0
     },
     "truncated": {
-      "offset": "650",
+      "offset": "1996",
       "trailing_bytes": "10"
     },
     "ulog_version": 1,
@@ -126,7 +126,7 @@
     },
     {
       "detail": [
-        "ARM seq 1 at boot_us 2000000 has no DISARM: the log ends armed (log ended mid-record at byte 650; 10 trailing bytes not parsed)"
+        "ARM seq 1 at boot_us 2000000 has no DISARM: the log ends armed (log ended mid-record at byte 1996; 10 trailing bytes not parsed)"
       ],
       "expected": "every ARM followed by a DISARM; log does not end armed",
       "found": "1 unmatched",

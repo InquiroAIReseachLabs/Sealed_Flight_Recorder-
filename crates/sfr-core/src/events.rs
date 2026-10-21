@@ -518,6 +518,11 @@ fn instance_events(b: &mut Builder, flight: &FlightLog, rows: &[VehicleStatusRow
     };
     let fs = flags_for_instance(flight, instance);
     let flag_rows = sorted_flag_rows(fs);
+    // As R4 reads it: a vehicle is a VTOL when is_vtol is true on some sample.
+    let is_vtol = flight
+        .vehicle_status
+        .iter()
+        .any(|r| r.is_vtol == Some(true));
     let mut prev: Option<&VehicleStatusRow> = None;
     let mut last_arm: Option<u64> = None;
     for r in rows {
@@ -624,7 +629,7 @@ fn instance_events(b: &mut Builder, flight: &FlightLog, rows: &[VehicleStatusRow
                         };
                         b.push(ts, topic, inst, idx, 3, kind);
                     }
-                    Some(VtolState::Fw) if cur == VtolState::Mc => {
+                    Some(VtolState::Fw) if cur == VtolState::Mc && is_vtol => {
                         let fixed_wing_system_failure =
                             flag_at(fs, &flag_rows, "vtol_fixed_wing_system_failure", ts);
                         b.push(
@@ -1084,6 +1089,32 @@ mod tests {
             active: active.into(),
             mode_req: vec![0; active.len()].into(),
         }
+    }
+
+    #[test]
+    fn a_fixed_wing_to_multicopter_change_is_a_quadchute_only_on_a_vtol_vehicle() {
+        // PX4 raises the quadchute failsafe only for a VTOL (is_vtol, v1.14 to v1.17); on any
+        // other vehicle the vehicle_type change is not one.
+        let run = |is_vtol: Option<bool>| {
+            let mut rows = vec![
+                vs(0, 0, 2, 4, false, false, false, 2),
+                vs(10, 1, 2, 4, false, false, false, 1),
+            ];
+            for r in &mut rows {
+                r.is_vtol = is_vtol;
+            }
+            let flight = FlightLog {
+                vehicle_status: rows,
+                ..FlightLog::default()
+            };
+            kinds(&build(&flight, &Config::default()).unwrap())
+                .into_iter()
+                .filter(|k| k == "QUADCHUTE")
+                .count()
+        };
+        assert_eq!(run(Some(true)), 1);
+        assert_eq!(run(Some(false)), 0);
+        assert_eq!(run(None), 0);
     }
 
     fn quadchute_flag(ev: &[Event]) -> Vec<Option<bool>> {

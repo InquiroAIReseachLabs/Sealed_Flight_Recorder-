@@ -75,15 +75,15 @@
     }
   ],
   "log": {
-    "blake3": "449c01f1e290c76d370b8359bce8b2b5ed613132cacba6d8e1100e88b60f8e99",
+    "blake3": "63711c4697093b63a5197220c4637f20b82af7b34d738a067ee0b0981565aa63",
     "file_name": "cut_control.ulg",
     "firmware": {
       "git": "d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
       "ver_sw_release": "0x011100ff",
       "version": "1.17.0"
     },
-    "sha256": "70fabfd41bb9602e2616407e96672801aa6016f06d9d46459c80184ece7871a3",
-    "size": "872",
+    "sha256": "1b3cd3874e0a905940d67db595d2a4047e70fdac98913a3aee095be59b5f4052",
+    "size": "2710",
     "skipped": {
       "orphan_data_records": 0,
       "region_bytes": "0",

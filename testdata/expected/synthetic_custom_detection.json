@@ -75,15 +75,15 @@
     }
   ],
   "log": {
-    "blake3": "025a921c1bb6477300aef7809847c229f7c9af45fcdfd979f25b8a403ed462ad",
+    "blake3": "3a1c6b7572af6094228b724b93edc845116082cf7887f250dd1375da30fca8d5",
     "file_name": "custom_detection.ulg",
     "firmware": {
       "git": "d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
       "ver_sw_release": "0x011100ff",
       "version": "1.17.0"
     },
-    "sha256": "80fb3f281fb9642a75e8289d9080a24be85669328d4f044cafdb3da68d4ae108",
-    "size": "1338",
+    "sha256": "2f3849f34664a5cad3dad3e35f74791bd0b2659e59d902da89a6422976941ab1",
+    "size": "3176",
     "skipped": {
       "orphan_data_records": 0,
       "region_bytes": "0",

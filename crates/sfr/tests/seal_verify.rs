@@ -1587,9 +1587,9 @@ fn a_log_cut_mid_record_seals_says_where_and_its_digests_cover_every_byte() {
     let control = root().join("testdata/synthetic/cut_control.ulg");
     let whole = std::fs::read(&control).unwrap();
     for (name, offset, trailing, code, r5) in [
-        ("cut_mid_message", 849u64, 10u64, 0, "PASS"),
-        ("cut_mid_header", 849, 2, 0, "PASS"),
-        ("cut_after_arm", 650, 10, 1, "FAIL"),
+        ("cut_mid_message", 2687u64, 10u64, 0, "PASS"),
+        ("cut_mid_header", 2687, 2, 0, "PASS"),
+        ("cut_after_arm", 1996, 10, 1, "FAIL"),
     ] {
         let log = format!("testdata/synthetic/{name}.ulg");
         let bytes = std::fs::read(root().join(&log)).unwrap();

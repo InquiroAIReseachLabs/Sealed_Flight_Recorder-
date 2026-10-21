@@ -114,6 +114,39 @@ pub fn mode_requirement(releases: &[&Release], flag: &str) -> Option<&'static st
         .map(|(_, m)| *m)
 }
 
+/// The `failsafe_flags` fields R4 reads, which PX4 defines at every one of the given releases:
+/// each flag (a `bool`, and `battery_warning`, a `uint8`) and the `mode_req_*` mask that PX4's
+/// mode checks pair with it, sorted. Read from `msg/FailsafeFlags.msg` at each tag, v1.14.0 to
+/// v1.17.0 (v1.17.0 is commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`), as the tables record
+/// it. The fields differ by tag (`primary_geofence_breached` became `geofence_breached` at
+/// v1.15.0, `navigator_failure` is new at v1.16.0, and `mode_req_global_position_relaxed` and
+/// `global_position_invalid_relaxed` are new at v1.17.0), so a log of one tag is held to that
+/// tag's fields, and one that names no tag, or a series, to those every tag in it defines.
+pub fn failsafe_flags_fields(releases: &[&Release]) -> Vec<&'static str> {
+    let mut common: Option<Vec<&'static str>> = None;
+    for r in releases {
+        let Some(m) = msg(r, "failsafe_flags") else {
+            return Vec::new();
+        };
+        let mut here: Vec<&'static str> = Vec::new();
+        for (name, ty) in m.fields {
+            if *ty == Scalar::Bool || (*name == "battery_warning" && *ty == Scalar::U8) {
+                here.push(name);
+                if let Some((_, mask)) = r.mode_requirements.iter().find(|(f, _)| f == name) {
+                    here.push(mask);
+                }
+            }
+        }
+        here.sort_unstable();
+        here.dedup();
+        common = Some(match common {
+            None => here,
+            Some(c) => c.into_iter().filter(|n| here.contains(n)).collect(),
+        });
+    }
+    common.unwrap_or_default()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {

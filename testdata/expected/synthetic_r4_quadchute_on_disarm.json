@@ -158,15 +158,15 @@
     }
   ],
   "log": {
-    "blake3": "37740f2f5fcb080d972f5970f12a223f8a00d6cae791b4d8b5595171daa858a3",
+    "blake3": "4294397768c3527c75c2779d005677465152c953c268278420a4148691eb5768",
     "file_name": "r4_quadchute_on_disarm.ulg",
     "firmware": {
       "git": "d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
       "ver_sw_release": "0x011100ff",
       "version": "1.17.0"
     },
-    "sha256": "29a263a9f582d66b912c69c74915f40b03c9e7bd054641cd5af1b62219813604",
-    "size": "1020",
+    "sha256": "eaeb70d58a196984e700d88a4561eb17dcd4d3278163a2343358a334b73b4e39",
+    "size": "3186",
     "skipped": {
       "orphan_data_records": 0,
       "region_bytes": "0",

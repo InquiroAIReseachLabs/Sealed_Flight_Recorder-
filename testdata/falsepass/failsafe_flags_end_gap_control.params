@@ -1,0 +1,7 @@
+# Onboard parameters for Vehicle 1
+#
+# Firmware: 1.17.0 d6f12ad1c4f70ad3230afd7d86e971421e02fef4
+#
+# Vehicle-Id Component-Id Name Value Type
+1	1	MPC_XY_VEL_MAX	12.0	9
+1	1	SYS_AUTOSTART	4001	6
