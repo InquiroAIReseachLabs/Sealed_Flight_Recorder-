@@ -554,6 +554,26 @@ fn ingest_px4(
     sealed_topics: &[String],
     max_kept_rows: usize,
 ) -> Result<Ingested, IngestError> {
+    ingest_px4_limited(
+        file_name,
+        input,
+        crypto,
+        sealed_topics,
+        KeptLimits {
+            rows: max_kept_rows,
+            ..KeptLimits::default()
+        },
+    )
+}
+
+/// [`ingest_px4`] with every kept-record limit given.
+fn ingest_px4_limited(
+    file_name: &str,
+    input: &mut dyn Read,
+    crypto: &dyn CryptoBackend,
+    sealed_topics: &[String],
+    limits: KeptLimits,
+) -> Result<Ingested, IngestError> {
     {
         let mut hashing = Hashing {
             inner: input,
@@ -567,7 +587,7 @@ fn ingest_px4(
                 names: sealed_topics.iter().cloned().collect(),
                 ..Sealing::default()
             },
-            max_kept_rows: Some(max_kept_rows),
+            limits,
             ..Collector::default()
         };
         let summary = {
@@ -778,6 +798,41 @@ struct SealAcc {
 /// most about 600 MB (docs/LIMITS.md). A log over it is refused (SPEC B1.4).
 pub const MAX_KEPT_ROWS: usize = 8_000_000;
 
+/// The most parameter records kept from the data section of a log. A flight changes a handful;
+/// the limit is the parameter limit, so a log cannot hold more changes than there are
+/// parameters in the worst case it could otherwise describe (SPEC B1.4).
+pub const MAX_KEPT_PARAM_RECORDS: usize = crate::params::MAX_PARAMS;
+
+/// The most warning-level (or worse) log records kept, and the most bytes of their text.
+pub const MAX_KEPT_LOG_RECORDS: usize = 100_000;
+/// See [`MAX_KEPT_LOG_RECORDS`].
+pub const MAX_KEPT_LOG_BYTES: usize = 64 * 1024 * 1024;
+
+/// The most dropout records kept.
+pub const MAX_KEPT_DROPOUTS: usize = 1_000_000;
+
+/// The limits on what the collector keeps; tests give smaller ones.
+#[derive(Clone, Copy)]
+struct KeptLimits {
+    rows: usize,
+    param_records: usize,
+    log_records: usize,
+    log_bytes: usize,
+    dropouts: usize,
+}
+
+impl Default for KeptLimits {
+    fn default() -> Self {
+        KeptLimits {
+            rows: MAX_KEPT_ROWS,
+            param_records: MAX_KEPT_PARAM_RECORDS,
+            log_records: MAX_KEPT_LOG_RECORDS,
+            log_bytes: MAX_KEPT_LOG_BYTES,
+            dropouts: MAX_KEPT_DROPOUTS,
+        }
+    }
+}
+
 /// Sealed topic digests, computed while streaming; no data record is kept.
 #[derive(Default)]
 struct Sealing<'c> {
@@ -818,8 +873,9 @@ struct Collector<'c> {
     limit: Option<String>,
     /// Data records kept as rows so far, and the most it may keep ([`MAX_KEPT_ROWS`]).
     kept_rows: usize,
-    /// `None` is [`MAX_KEPT_ROWS`]; tests give a smaller limit.
-    max_kept_rows: Option<usize>,
+    limits: KeptLimits,
+    /// Bytes of log text kept so far.
+    log_bytes: usize,
     // Position of the next data or parameter record, in file order.
     order: u64,
 }
@@ -875,13 +931,26 @@ impl Visitor for Collector<'_> {
                     self.params.insert(name.to_string(), value);
                 }
             }
-            Section::Data => self.flight.param_records.push(ParamRecord {
-                name: name.to_string(),
-                value,
-                time: last_timestamp,
-                index,
-                file_order,
-            }),
+            Section::Data => {
+                let max = self.limits.param_records;
+                if self.flight.param_records.len() >= max {
+                    self.limit.get_or_insert_with(|| {
+                        crate::limit_exceeded(
+                            "the number of parameter records in the data section",
+                            max,
+                            "records",
+                        )
+                    });
+                    return;
+                }
+                self.flight.param_records.push(ParamRecord {
+                    name: name.to_string(),
+                    value,
+                    time: last_timestamp,
+                    index,
+                    file_order,
+                })
+            }
         }
     }
 
@@ -1034,7 +1103,7 @@ impl Visitor for Collector<'_> {
         // Every data record a rule reads is kept as a row; the rest are only counted. The rows
         // are bounded so that memory is (SPEC B1.4).
         if !matches!(sub.decoder, Decoder::Count) {
-            let max = self.max_kept_rows.unwrap_or(MAX_KEPT_ROWS);
+            let max = self.limits.rows;
             if self.kept_rows >= max {
                 self.limit.get_or_insert_with(|| {
                     crate::limit_exceeded(
@@ -1198,6 +1267,24 @@ impl Visitor for Collector<'_> {
         self.log_index = self.log_index.saturating_add(1);
         // PX4 writes the level as an ASCII digit, '0' emergency to '7' debug.
         if (b'0'..=b'4').contains(&level) {
+            let (max, max_bytes) = (self.limits.log_records, self.limits.log_bytes);
+            if self.flight.log_records.len() >= max {
+                self.limit.get_or_insert_with(|| {
+                    crate::limit_exceeded("the number of warning-level log records", max, "records")
+                });
+                return;
+            }
+            if self.log_bytes.saturating_add(text.len()) > max_bytes {
+                self.limit.get_or_insert_with(|| {
+                    crate::limit_exceeded(
+                        "the text of warning-level log records",
+                        max_bytes,
+                        "bytes",
+                    )
+                });
+                return;
+            }
+            self.log_bytes += text.len();
             self.flight.log_records.push(LogRecord {
                 level: level - b'0',
                 time: timestamp,
@@ -1210,6 +1297,13 @@ impl Visitor for Collector<'_> {
     fn dropout(&mut self, duration_ms: u16, last_timestamp: u64) {
         let index = self.dropout_index;
         self.dropout_index = self.dropout_index.saturating_add(1);
+        let max = self.limits.dropouts;
+        if self.flight.dropouts.len() >= max {
+            self.limit.get_or_insert_with(|| {
+                crate::limit_exceeded("the number of dropout records", max, "records")
+            });
+            return;
+        }
         self.flight.dropouts.push(DropoutRecord {
             duration_ms,
             time: last_timestamp,
@@ -1588,6 +1682,70 @@ mod tests {
                 "the number of data records kept for the rules exceeds the input limit of 100 records (SPEC B1.4)"
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn data_section_parameter_log_and_dropout_records_are_capped() {
+        use crate::ulog::tests::Builder;
+        let limits = KeptLimits {
+            param_records: 3,
+            log_records: 3,
+            log_bytes: 12,
+            dropouts: 3,
+            ..KeptLimits::default()
+        };
+        // The records follow a data record, so they are in the data section.
+        let run = |add: &dyn Fn(Builder) -> Builder| {
+            let b = Builder::new(0)
+                .flags(&[])
+                .format("t:uint64_t timestamp;")
+                .sub(0, 0, "t")
+                .data(0, &1u64.to_le_bytes());
+            let b = add(b);
+            ingest_px4_limited("x.ulg", &mut &b.bytes[..], &TestBackend, &[], limits)
+        };
+        let limit = |what: &str, max: &str, unit: &str| {
+            Err(IngestError::Limit(format!(
+                "{what} exceeds the input limit of {max} {unit} (SPEC B1.4)"
+            )))
+        };
+        let params =
+            |n: usize| move |b: Builder| (0..n).fold(b, |b, i| b.param_f(&format!("P{i}"), 1.0));
+        assert_eq!(run(&params(3)).map(|i| i.flight.param_records.len()), Ok(3));
+        assert_eq!(
+            run(&params(4)).map(|_| ()),
+            limit(
+                "the number of parameter records in the data section",
+                "3",
+                "records"
+            )
+        );
+        let logs = |n: usize, text: &'static [u8]| {
+            move |b: Builder| {
+                (0..n).fold(b, |b, _| {
+                    b.rec(b'L', &[&b"4"[..], &1u64.to_le_bytes(), text].concat())
+                })
+            }
+        };
+        assert_eq!(
+            run(&logs(3, b"abcd")).map(|i| i.flight.log_records.len()),
+            Ok(3)
+        );
+        assert_eq!(
+            run(&logs(4, b"a")).map(|_| ()),
+            limit("the number of warning-level log records", "3", "records")
+        );
+        assert_eq!(
+            run(&logs(2, b"abcdefg")).map(|_| ()),
+            limit("the text of warning-level log records", "12", "bytes")
+        );
+        let drops =
+            |n: usize| move |b: Builder| (0..n).fold(b, |b, _| b.rec(b'O', &5u16.to_le_bytes()));
+        assert_eq!(run(&drops(3)).map(|i| i.flight.dropouts.len()), Ok(3));
+        assert_eq!(
+            run(&drops(4)).map(|_| ()),
+            limit("the number of dropout records", "3", "records")
         );
     }
 

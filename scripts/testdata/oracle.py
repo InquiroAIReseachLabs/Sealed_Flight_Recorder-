@@ -219,6 +219,26 @@ def px4_types(releases, topic, field):
     return out
 
 
+def ff_fields_r4_reads(releases):
+    """The failsafe_flags fields R4 reads that PX4 defines at every one of these releases (read
+    from msg/FailsafeFlags.msg at each tag): each flag, a bool or battery_warning, a uint8, and
+    the mode_req_* mask PX4 pairs with it. R1 requires them (sfr's px4::failsafe_flags_fields)."""
+    common = None
+    for r in releases:
+        i = r['topics'].get('failsafe_flags')
+        if i is None:
+            return set()
+        reqs = dict(r['mode_requirements'])
+        here = set()
+        for n, t in PX4['msgs'][i]['fields']:
+            if t == 'bool' or (n == 'battery_warning' and t == 'uint8_t'):
+                here.add(n)
+                if n in reqs:
+                    here.add(reqs[n])
+        common = here if common is None else common & here
+    return common or set()
+
+
 # failsafe_flags flag -> mode_req field, at any supported release.
 MODE_REQ = {f: m for r in PX4['releases'] for f, m in r['mode_requirements']}
 
@@ -611,7 +631,7 @@ def run(path, rules, required, ptime, param_index, debug):
     if ff is None:
         missing.add('failsafe_flags')
     else:
-        for f in FF_REQUIRED_FIELDS:
+        for f in sorted(set(FF_REQUIRED_FIELDS) | ff_fields_r4_reads(px4_releases(info.get('ver_sw_release')))):
             if not ff.has(f):
                 missing.add('failsafe_flags.' + f)
     # With [authorized_sources], the vehicle_command fields R7 reads (SPEC B1.6 R1), in every
@@ -949,6 +969,7 @@ def run(path, rules, required, ptime, param_index, debug):
             bad = False
             warned = False
             windows = []
+            window_closed = []  # whether the window ends at a disarming sample
             for t, st in zip(vs_topics, states):
                 rows = st['armed_rows']
                 win = [bool(rows[i]) or (i > 0 and bool(rows[i - 1])) for i in range(t.n)]
@@ -959,8 +980,10 @@ def run(path, rules, required, ptime, param_index, debug):
                 for i in range(t.n):
                     if win[i] and (i == 0 or not win[i - 1]):
                         windows.append([ts[i], ts[i]])
+                        window_closed.append(not bool(rows[i]))
                     elif win[i]:
                         windows[-1][1] = ts[i]
+                        window_closed[-1] = not bool(rows[i])
             # A nav_state in a window at or above NAVIGATION_STATE_MAX of every tag the log's
             # version selects: no mode requirement names it, so R4 cannot evaluate (FAIL).
             nav_max = max(PX4['msgs'][r['topics']['vehicle_status']]['constants']['NAVIGATION_STATE_MAX']
@@ -1013,11 +1036,21 @@ def run(path, rules, required, ptime, param_index, debug):
                             warned = True
             # A gap over 1 s between failsafe_flags samples that overlaps a window: a warning
             # (sfr's FAILSAFE_FLAGS_MAX_GAP_US; PX4 publishes them at least every 600 ms).
+            # The same where no sample lies on that side of a window: from its start (the ARM) to
+            # the first sample, or to its end (the DISARM) when that comes first; and from the last
+            # sample, or the ARM if the last sample precedes it, to the DISARM. A window that does
+            # not end at a disarming sample has no end to measure.
             for fft in ff_by_inst.values():
                 ts = sorted(fft['timestamp'])
                 for x, y in zip(ts, ts[1:]):
                     if y - x > 1_000_000 and any(x < b and y > a for a, b in windows):
                         warned = True
+                if ts:
+                    for (a, b), closed in zip(windows, window_closed):
+                        if ts[0] > a and (min(b, ts[0]) if closed else ts[0]) - a > 1_000_000:
+                            warned = True
+                        if closed and ts[-1] < b and b - max(ts[-1], a) > 1_000_000:
+                            warned = True
             results['R4'] = 'FAIL' if bad else ('WARN' if warned else 'PASS')
         # R5: every ARM followed by a DISARM, per instance; no ARM and no DISARM is N/A.
         if not vs_ok(['arming_state']):

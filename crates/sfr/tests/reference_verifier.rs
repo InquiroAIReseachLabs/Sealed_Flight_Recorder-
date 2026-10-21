@@ -123,3 +123,51 @@ fn the_vectors_are_what_their_generator_writes() {
         .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stdout));
 }
+
+/// Step 3 of docs/RECORD_FORMAT.md builds the signed payload from the recorded tree shape with
+/// shell. A count that is not a number must not read as 0: on a record whose `sealed_topics` count
+/// is `false` (its signature otherwise good), the documented commands must not report a good
+/// signature. The test runs the doc's own block, so it cannot drift from the page.
+#[test]
+fn the_documented_signature_step_refuses_a_tree_shape_that_is_not_a_number() {
+    let doc = std::fs::read_to_string(root().join("docs/RECORD_FORMAT.md")).unwrap();
+    let step = doc
+        .split("### 3. The signature over the recorded Merkle root and tree shape")
+        .nth(1)
+        .expect("the page has step 3");
+    let block = step
+        .split("```sh doc-test\n")
+        .nth(1)
+        .expect("step 3 has a command block")
+        .split("\n```")
+        .next()
+        .unwrap();
+    let dir = root().join("tools/reference_verifier/vectors");
+    let work = std::env::temp_dir().join(format!("sfr-doc-step3-{}", std::process::id()));
+    std::fs::create_dir_all(&work).unwrap();
+    let verifies = |vector: &str| -> bool {
+        let script = block
+            .replace(
+                "examples/reports/vtol_transition.sfr",
+                dir.join(vector).to_str().unwrap(),
+            )
+            .replace(
+                "examples/reports/sfr.pub",
+                dir.join("vectors.pub").to_str().unwrap(),
+            );
+        Command::new("bash")
+            .current_dir(&work)
+            .args(["-c", &script])
+            .output()
+            .expect("bash runs")
+            .status
+            .success()
+    };
+    let (good, bad) = (verifies("valid.sfr"), verifies("merkle_sections_bool.sfr"));
+    std::fs::remove_dir_all(&work).ok();
+    assert!(good, "the documented commands verify the valid vector");
+    assert!(
+        !bad,
+        "the documented commands must not verify a record whose sealed_topics count is `false`"
+    );
+}

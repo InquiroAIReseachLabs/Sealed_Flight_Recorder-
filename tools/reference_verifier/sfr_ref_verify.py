@@ -442,7 +442,9 @@ def check(raw, pem):
         topics.append((t["topic"].encode("utf-8"), t["multi_id"]))
     if any(b <= a for a, b in zip(topics, topics[1:])):
         raise Bad("sealed topics are not in strictly increasing topic and multi_id order")
-    if [e.get("seq") if isinstance(e, dict) else None for e in r["events"]] != list(range(len(r["events"]))):
+    # Python compares False with 0 and True with 1; an event number is an integer, nothing else.
+    seqs = [e.get("seq") if isinstance(e, dict) else None for e in r["events"]]
+    if any(type(q) is not int for q in seqs) or seqs != list(range(len(seqs))):
         raise Bad("events are not in sequence order")
     # Rules digest and the ignore-everything flag.
     rules = r["rules"]
@@ -461,21 +463,20 @@ def check(raw, pem):
         raise Bad("seal.allow_ignore_all disagrees with the embedded rules file")
     if seal["key_custody"] not in CUSTODY:
         raise Bad("unknown key custody %r" % seal["key_custody"])
-    for k in ("signer_certificate",):
-        v = seal.get(k)
-        if v is not None and not (string(v) and re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", v)):
-            raise Bad("seal.%s must be null or base64" % k)
+    v = seal.get("signer_certificate")
+    if v is not None and not strict_base64(v):
+        raise Bad("seal.signer_certificate must be null or base64")
     chain = seal.get("certificate_chain")
     if chain is not None and not (isinstance(chain, list) and chain and seal.get("signer_certificate")
-                                  and all(string(c) for c in chain)):
-        raise Bad("seal.certificate_chain must be null or a non-empty array beside a signer certificate")
+                                  and all(strict_base64(c) for c in chain)):
+        raise Bad("seal.certificate_chain must be null or a non-empty array of base64 beside a signer certificate")
     # Merkle tree.
     sections = leaves(r)
     hashes = [sha256(b"\x00" + bytes([tag]) + jcs(x).encode("utf-8")) for _, tag, xs in sections for x in xs]
     root = mth(hashes)
     want = {"algorithm": "sha256-rfc6962", "leaf_count": len(hashes), "root": root.hex(),
             "sections": {name: len(xs) for name, _, xs in sections}}
-    if r["merkle"] != want:
+    if jcs(r["merkle"]) != jcs(want):
         raise Bad("merkle differs from the leaves: root %s over %d leaves" % (root.hex(), len(hashes)))
     # Key and signature.
     public, der = public_key_from_pem(pem)
@@ -489,6 +490,18 @@ def check(raw, pem):
                           bytes.fromhex(sig["value"])):
         raise Bad("signature does not verify")
     return None
+
+
+def strict_base64(v):
+    """RECORD_FORMAT.md: standard base64, no whitespace, padded to a multiple of four, zero bits
+    after the last full byte, and not empty. Decoding and encoding again must give the text back."""
+    if not (isinstance(v, str) and v and len(v) % 4 == 0 and v.isascii()):
+        return False
+    try:
+        raw = base64.b64decode(v, validate=True)
+    except ValueError:
+        return False
+    return bool(raw) and base64.b64encode(raw).decode() == v
 
 
 NAME_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"

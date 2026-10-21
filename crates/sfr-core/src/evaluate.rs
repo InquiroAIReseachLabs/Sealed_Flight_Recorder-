@@ -9,7 +9,7 @@ use crate::events::{
     flight_armed_intervals, vtol_state,
 };
 use crate::exit_code;
-use crate::ingest::{FailsafeFlags, FlightLog, Ingested, VehicleStatusRow};
+use crate::ingest::{FailsafeFlags, Firmware, FlightLog, Ingested, VehicleStatusRow};
 use crate::json::{Obj, Value};
 use crate::params::Baseline;
 use crate::rules::{Compare, R7_TOPIC, Rules};
@@ -181,7 +181,10 @@ pub const VEHICLE_STATUS_FIELDS: [&str; 8] = [
     "vehicle_type",
 ];
 
-/// The `failsafe_flags` fields the core rules read.
+/// The `failsafe_flags` fields the core rules read at every tag: the timestamp. R1 also requires
+/// the flags and `mode_req_*` masks PX4 defines at the log's tag
+/// ([`crate::px4::failsafe_flags_fields`], from `msg/FailsafeFlags.msg`), so a format that leaves
+/// one out is not a pass for the flag R4 would then never see.
 pub const FAILSAFE_FLAGS_FIELDS: [&str; 1] = ["timestamp"];
 
 /// The `vehicle_command` fields R7 reads (R1 checks them when R7 is enabled).
@@ -205,7 +208,7 @@ pub const MAVLINK_ONLY_VTOL_MAV_TYPES: std::ops::RangeInclusive<u8> = 24..=25;
 pub const NO_ARMED_FLIGHT: &str =
     "no armed flight: vehicle_status.arming_state has no ARM and no DISARM";
 
-fn r1(f: &FlightLog, rules: &Rules) -> RuleResult {
+fn r1(f: &FlightLog, fw: &Firmware, rules: &Rules) -> RuleResult {
     let topics = rules.r1_topics();
     let mut missing = Vec::new();
     for t in &topics {
@@ -213,13 +216,19 @@ fn r1(f: &FlightLog, rules: &Rules) -> RuleResult {
             missing.push(t.clone());
             continue;
         }
-        let (fields, have): (&[&str], &[String]) = match t.as_str() {
-            "vehicle_status" => (&VEHICLE_STATUS_FIELDS, &f.vehicle_status_fields),
-            "failsafe_flags" => (&FAILSAFE_FLAGS_FIELDS, &f.failsafe_flags_fields),
-            R7_TOPIC if rules.authorized_sources.is_some() => {
-                (&VEHICLE_COMMAND_FIELDS, &f.vehicle_command_fields)
+        let (fields, have): (Vec<&str>, &[String]) = match t.as_str() {
+            "vehicle_status" => (VEHICLE_STATUS_FIELDS.to_vec(), &f.vehicle_status_fields),
+            "failsafe_flags" => {
+                let mut fields = FAILSAFE_FLAGS_FIELDS.to_vec();
+                fields.extend(crate::px4::failsafe_flags_fields(
+                    &crate::px4::releases_for(fw),
+                ));
+                (fields, &f.failsafe_flags_fields)
             }
-            _ => (&[], &[]),
+            R7_TOPIC if rules.authorized_sources.is_some() => {
+                (VEHICLE_COMMAND_FIELDS.to_vec(), &f.vehicle_command_fields)
+            }
+            _ => (Vec::new(), &[]),
         };
         for field in fields {
             if !have.iter().any(|h| h == field) {
@@ -530,7 +539,7 @@ fn check_vehicle_status(
 
 /// Most detail lines R3, R4, R5, R6, X2, and X3 list. Real logs need a handful; the cap keeps a
 /// crafted log from making one result enormous. R3's differences are not capped: SPEC B1.6 has
-/// it list every differing parameter, at most the two parameter limits together.
+/// it list every differing parameter, at most the baseline and log-start parameter limits and the data-section parameter record limit together.
 pub const MAX_DETAIL_LINES: usize = 1000;
 
 /// Detail lines with a running total, capped at [`MAX_DETAIL_LINES`].
@@ -614,25 +623,53 @@ pub const HAZARD_FLAGS: [(&str, &str); 12] = [
 /// golden logs' longest gap in flight is 600 ms.
 pub const FAILSAFE_FLAGS_MAX_GAP_US: u64 = 1_000_000;
 
-/// Gaps longer than [`FAILSAFE_FLAGS_MAX_GAP_US`] between consecutive `failsafe_flags` samples of
-/// one instance where the gap overlaps a flight: (count, longest, its start), over every instance.
+/// Gaps longer than [`FAILSAFE_FLAGS_MAX_GAP_US`] in which R4 could not see the flags of one
+/// instance during a flight: (count, longest, its start), over every instance. A gap is the time
+/// between two consecutive samples that overlaps a flight, and, where no sample lies on that side
+/// of the flight, the stretch from the ARM to the first sample, or from the last sample to the
+/// DISARM (the whole flight when no sample falls inside it). A stretch the pairs of consecutive
+/// samples already measure (a sample lies before the ARM, or after the disarming sample) is not
+/// counted twice. A flight with no DISARM has no end to measure.
 fn failsafe_flags_gaps(f: &FlightLog, armed: &[ArmedInterval]) -> Option<(usize, u64, u64)> {
     let mut count = 0usize;
     let mut longest: Option<(u64, u64)> = None;
+    let mut note = |gap: u64, start: u64| {
+        if gap > FAILSAFE_FLAGS_MAX_GAP_US {
+            count += 1;
+            if longest.is_none_or(|(g, _)| gap > g) {
+                longest = Some((gap, start));
+            }
+        }
+    };
     for fs in std::iter::once(&f.failsafe_flags).chain(&f.failsafe_flags_others) {
         let mut ts: Vec<u64> = fs.rows.iter().map(|r| r.id.ts).collect();
         ts.sort_unstable();
         for w in ts.iter().zip(ts.iter().skip(1)) {
             let (a, b) = (*w.0, *w.1);
-            let gap = b - a;
             let in_flight = armed
                 .iter()
                 .any(|i| a < i.disarm.unwrap_or(u64::MAX) && b > i.arm);
-            if gap > FAILSAFE_FLAGS_MAX_GAP_US && in_flight {
-                count += 1;
-                if longest.is_none_or(|(g, _)| gap > g) {
-                    longest = Some((gap, a));
-                }
+            if in_flight {
+                note(b - a, a);
+            }
+        }
+        // An instance with no sample at all is a missing input, which R4 fails elsewhere.
+        let (Some(&first), Some(&last)) = (ts.first(), ts.last()) else {
+            continue;
+        };
+        for i in armed {
+            // No sample at or before the ARM: unseen from the ARM to the first sample, or to the
+            // DISARM when that comes first.
+            if first > i.arm {
+                let end = i.disarm.map_or(first, |d| d.min(first));
+                note(end - i.arm, i.arm);
+            }
+            // No sample at or after the DISARM: unseen from the last sample (or the ARM, if the
+            // last sample precedes it) to the DISARM.
+            if let Some(d) = i.disarm
+                && last < d
+            {
+                note(d - last.max(i.arm), last.max(i.arm));
             }
         }
     }
@@ -868,7 +905,7 @@ fn r4(f: &FlightLog) -> RuleResult {
     if let Some((n, g, t)) = gaps {
         detail.push(|| {
             format!(
-                "warning: failsafe_flags has {n} gap(s) over {} ms between samples in flight, the longest {} ms from boot_us {t}: R4 did not see the flags in those gaps",
+                "warning: failsafe_flags has {n} gap(s) over {} ms in flight (between samples, or between the ARM or the DISARM and the nearest sample), the longest {} ms from boot_us {t}: R4 did not see the flags in those gaps",
                 FAILSAFE_FLAGS_MAX_GAP_US / 1000,
                 g / 1000
             )
@@ -1118,7 +1155,7 @@ fn r6(f: &FlightLog, events: &[Event], vtol: Option<&crate::ingest::VtolType>) -
         f,
         &["in_transition_mode", "in_transition_to_fw", "vehicle_type"],
     ) {
-        return r;
+        return with_vtol_type(r, vtol);
     }
     let mut detail = Lines::new();
     let mut open: BTreeMap<u8, &Event> = BTreeMap::new();
@@ -1166,12 +1203,18 @@ fn r6(f: &FlightLog, events: &[Event], vtol: Option<&crate::ingest::VtolType>) -
     } else {
         Status::Fail
     };
-    let mut lines = detail.finish();
+    let result = RuleResult::new("R6", NAME, status, expected, found, detail.finish());
+    with_vtol_type(result, vtol)
+}
+
+/// R6's first detail line on a VTOL vehicle: its type, also when the rule fails for a missing
+/// field.
+fn with_vtol_type(mut r: RuleResult, vtol: Option<&crate::ingest::VtolType>) -> RuleResult {
     if let Some(t) = vtol {
         let value = t.value.map_or(String::new(), |v| format!(" (VT_TYPE {v})"));
-        lines.insert(0, format!("VTOL type {}{value}", t.name));
+        r.detail.insert(0, format!("VTOL type {}{value}", t.name));
     }
-    RuleResult::new("R6", NAME, status, expected, found, lines)
+    r
 }
 
 fn in_armed(armed: &[ArmedInterval], t: u64) -> bool {
@@ -1658,7 +1701,7 @@ pub fn evaluate(ing: &Ingested, rules: &Rules, baseline: &Baseline) -> Evaluatio
     let f = &ing.flight;
     let armed = flight_armed_intervals(f);
     let mut results = vec![
-        r1(f, rules),
+        r1(f, &ing.identity.firmware, rules),
         r2(ing, baseline),
         r3(ing, rules, baseline),
         r4_nav_state_out_of_range(f, &ing.identity.firmware).unwrap_or_else(|| r4(f)),
@@ -2117,7 +2160,7 @@ mod tests {
             .unwrap()
         };
         let check = |ing: &Ingested, r1_missing: Option<&str>, r7_found: &str| {
-            let r1 = r1(&ing.flight, &rules(true));
+            let r1 = r1(&ing.flight, &ing.identity.firmware, &rules(true));
             // R1 names exactly the vehicle_command item expected to be missing, or none.
             let named: Vec<&String> = r1
                 .detail
@@ -2154,7 +2197,7 @@ mod tests {
         );
         // Without [authorized_sources], R1 does not ask for it and R7 is N/A.
         assert!(
-            !r1(&none.flight, &rules(false))
+            !r1(&none.flight, &none.identity.firmware, &rules(false))
                 .detail
                 .iter()
                 .any(|d| d.contains("vehicle_command"))
@@ -2228,7 +2271,7 @@ mod tests {
                     &crate::crypto::test_backend::TestBackend,
                 )
                 .unwrap();
-            let named: Vec<String> = r1(&ing.flight, &rules)
+            let named: Vec<String> = r1(&ing.flight, &ing.identity.firmware, &rules)
                 .detail
                 .into_iter()
                 .filter(|d| d.contains("vehicle_command"))
@@ -2511,6 +2554,260 @@ mod tests {
             .filter(|&t| !(10_600_000..12_000_000).contains(&t))
             .collect();
         assert_eq!(r4(&flight(&straddling)).status, Status::Warn);
+    }
+
+    #[test]
+    fn r4_warns_when_failsafe_flags_stop_or_start_inside_the_flight() {
+        use crate::ingest::{FailsafeFlags, FailsafeRow, RowId};
+        let fields: Vec<String> = VEHICLE_STATUS_FIELDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // Armed at 1 s, disarmed by the sample at 11 s; failsafe_flags samples at the given times.
+        let rows: Vec<_> = (0..14u64)
+            .map(|i| {
+                let mut r = vtol_row(
+                    i,
+                    if (1..=10).contains(&i) { 2 } else { 1 },
+                    false,
+                    false,
+                    1,
+                );
+                r.id.ts = i * 1_000_000;
+                r
+            })
+            .collect();
+        let flight = |times: &[u64]| FlightLog {
+            vehicle_status: rows.clone(),
+            vehicle_status_fields: fields.clone(),
+            failsafe_flags: FailsafeFlags {
+                flags: vec![crate::ingest::FlagDef::for_test("gcs_connection_lost")],
+                rows: times
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &ts)| FailsafeRow {
+                        id: RowId {
+                            ts,
+                            instance: 0,
+                            index: i as u64,
+                        },
+                        active: vec![false].into(),
+                        mode_req: vec![0].into(),
+                    })
+                    .collect(),
+                ..FailsafeFlags::default()
+            },
+            ..FlightLog::default()
+        };
+        let steps = |from: u64, to: u64| (from..=to).step_by(500_000).collect::<Vec<u64>>();
+        let warns = |times: &[u64], longest_ms: u64| {
+            let r = r4(&flight(times));
+            assert_eq!(r.status, Status::Warn, "{times:?}: {}", r.found);
+            let want = format!(
+                "warning: failsafe_flags 1 gap(s) over 1000 ms in flight, longest {longest_ms} ms"
+            );
+            assert!(r.found.contains(&want), "{times:?}: {}", r.found);
+        };
+        // The samples stop at 5 s and none follows the disarming sample: 6 s of flight unseen.
+        warns(&steps(0, 5_000_000), 6000);
+        // The first sample comes at 3 s and none precedes the ARM: 2 s of flight unseen.
+        warns(&steps(3_000_000, 14_000_000), 2000);
+        // No sample inside the flight: a sample before the ARM and none after the disarm.
+        warns(&[0, 500_000], 10_000);
+        // No sample inside the flight: the first comes after the disarming sample.
+        warns(&[12_000_000, 12_500_000], 10_000);
+        // A sample at the ARM and at the disarming sample, then every 500 ms: PASS.
+        assert_eq!(
+            r4(&flight(&steps(1_000_000, 11_000_000))).status,
+            Status::Pass
+        );
+        // The first sample 1 s after the ARM, the last 1 s before the disarming sample: the bound
+        // is "more than", so PASS; 1 ms more at either end: WARN.
+        let mut inside = steps(2_000_000, 10_000_000);
+        assert_eq!(r4(&flight(&inside)).status, Status::Pass);
+        inside[0] += 1;
+        assert_eq!(r4(&flight(&inside)).status, Status::Warn);
+        let mut inside = steps(2_000_000, 10_000_000);
+        *inside.last_mut().unwrap() -= 1;
+        assert_eq!(r4(&flight(&inside)).status, Status::Warn);
+        // Samples before the ARM and after the disarm cover the ends as before.
+        assert_eq!(r4(&flight(&steps(0, 13_000_000))).status, Status::Pass);
+    }
+
+    /// The `failsafe_flags` fields R4 reads at one release, taken straight from the recorded PX4
+    /// message (`msg/FailsafeFlags.msg` at the tag): `timestamp`, each flag (a `bool`, and
+    /// `battery_warning`, a `uint8`) and the `mode_req_*` mask that PX4 pairs with it.
+    fn fields_r4_reads(release: &crate::px4_tables::Release) -> Vec<String> {
+        use crate::ulog::Scalar;
+        let msg = crate::px4::msg(release, "failsafe_flags").expect("failsafe_flags is defined");
+        let mut out = vec!["timestamp".to_string()];
+        for (name, ty) in msg.fields {
+            let flag = *ty == Scalar::Bool || (*name == "battery_warning" && *ty == Scalar::U8);
+            if flag {
+                out.push(name.to_string());
+                if let Some((_, mask)) = release.mode_requirements.iter().find(|(f, _)| f == name) {
+                    out.push(mask.to_string());
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    #[test]
+    fn r1_requires_the_failsafe_flags_fields_r4_reads_at_the_logs_tag() {
+        use crate::ingest::Firmware;
+        let rules =
+            crate::rules::parse_rules("format = \"sfr-rules/1\"\n[required_topics]\ntopics = []\n")
+                .unwrap();
+        let tag = |t: &str| {
+            crate::px4_tables::RELEASES
+                .iter()
+                .find(|r| r.tag == t)
+                .unwrap()
+        };
+        let flight = |fields: &[String]| {
+            let mut f = FlightLog::default();
+            f.topic_rows.insert("vehicle_status".into(), 1);
+            f.topic_rows.insert("failsafe_flags".into(), 1);
+            f.vehicle_status_fields = VEHICLE_STATUS_FIELDS
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            f.failsafe_flags_fields = fields.to_vec();
+            f
+        };
+        let release = |r: &crate::px4_tables::Release| Firmware {
+            release: Some(u32::from_be_bytes([
+                r.version.0,
+                r.version.1,
+                r.version.2,
+                255,
+            ])),
+            ..Firmware::default()
+        };
+        let missing = |fw: &Firmware, fields: &[String]| -> Vec<String> {
+            let r = r1(&flight(fields), fw, &rules);
+            r.detail
+                .iter()
+                .map(|d| d.trim_start_matches("missing ").to_string())
+                .collect()
+        };
+
+        let v117 = tag("v1.17.0");
+        let all = fields_r4_reads(v117);
+        let fw = release(v117);
+        // Every field PX4 defines at the log's tag: nothing missing.
+        assert!(missing(&fw, &all).is_empty(), "{:?}", missing(&fw, &all));
+        assert_eq!(r1(&flight(&all), &fw, &rules).status, Status::Pass);
+        // A format with the timestamp only has nothing for R4 to read: R1 fails, naming the flags
+        // and the masks.
+        let only_ts = vec!["timestamp".to_string()];
+        let r = r1(&flight(&only_ts), &fw, &rules);
+        assert_eq!(r.status, Status::Fail, "{}", r.found);
+        let named = missing(&fw, &only_ts);
+        assert!(
+            named.contains(&"failsafe_flags.global_position_invalid".to_string()),
+            "{named:?}"
+        );
+        assert!(
+            named.contains(&"failsafe_flags.mode_req_global_position".to_string()),
+            "{named:?}"
+        );
+        assert_eq!(named.len(), all.len() - 1, "{named:?}");
+        // One mask left out, the flag it pairs with kept: R4 would read the flag as not required.
+        let no_mask: Vec<String> = all
+            .iter()
+            .filter(|n| *n != "mode_req_global_position")
+            .cloned()
+            .collect();
+        assert_eq!(
+            missing(&fw, &no_mask),
+            vec!["failsafe_flags.mode_req_global_position"]
+        );
+        assert_eq!(r1(&flight(&no_mask), &fw, &rules).status, Status::Fail);
+        // One flag left out, its mask kept.
+        let no_flag: Vec<String> = all
+            .iter()
+            .filter(|n| *n != "global_position_invalid")
+            .cloned()
+            .collect();
+        assert_eq!(
+            missing(&fw, &no_flag),
+            vec!["failsafe_flags.global_position_invalid"]
+        );
+        // The fields differ by tag: v1.14.4 has primary_geofence_breached and no navigator_failure.
+        let v114 = tag("v1.14.4");
+        let old = fields_r4_reads(v114);
+        let fw_old = release(v114);
+        assert!(old.contains(&"primary_geofence_breached".to_string()));
+        assert!(!old.contains(&"navigator_failure".to_string()));
+        assert!(
+            missing(&fw_old, &old).is_empty(),
+            "{:?}",
+            missing(&fw_old, &old)
+        );
+        // Given the v1.17.0 fields instead, it lacks the two its own tag names differently.
+        assert_eq!(
+            missing(&fw_old, &all),
+            vec![
+                "failsafe_flags.local_position_accuracy_low",
+                "failsafe_flags.primary_geofence_breached"
+            ]
+        );
+        // A log that names no PX4 release is held to the fields every supported tag defines.
+        let unknown = Firmware::default();
+        let common: Vec<String> = fields_r4_reads(v117)
+            .into_iter()
+            .filter(|n| {
+                crate::px4_tables::RELEASES
+                    .iter()
+                    .all(|r| fields_r4_reads(r).contains(n))
+            })
+            .collect();
+        assert!(!common.contains(&"navigator_failure".to_string()));
+        assert!(common.contains(&"global_position_invalid".to_string()));
+        assert!(
+            missing(&unknown, &common).is_empty(),
+            "{:?}",
+            missing(&unknown, &common)
+        );
+        assert_eq!(r1(&flight(&only_ts), &unknown, &rules).status, Status::Fail);
+    }
+
+    #[test]
+    fn r6_names_the_vtol_type_when_a_transition_field_is_missing() {
+        let rows = vec![
+            vtol_row(0, 2, false, false, 1),
+            vtol_row(1, 2, false, false, 1),
+        ];
+        let flight = FlightLog {
+            vehicle_status: rows,
+            vehicle_status_fields: VEHICLE_STATUS_FIELDS
+                .iter()
+                .filter(|f| **f != "in_transition_mode")
+                .map(|s| s.to_string())
+                .collect(),
+            ..FlightLog::default()
+        };
+        let vtol = crate::ingest::VtolType {
+            value: Some(2),
+            name: "standard".to_string(),
+        };
+        let r = r6(&flight, &[], Some(&vtol));
+        assert_eq!(r.status, Status::Fail);
+        assert_eq!(
+            r.detail,
+            [
+                "VTOL type standard (VT_TYPE 2)",
+                "missing vehicle_status.in_transition_mode"
+            ]
+        );
+        assert_eq!(
+            r6(&flight, &[], None).detail,
+            ["missing vehicle_status.in_transition_mode"]
+        );
     }
 
     #[test]
