@@ -238,7 +238,9 @@ where
 }
 
 /// Leaf bytes: arbitrary bytes, one repeated byte, runs of the two prefix bytes 0x00 and 0x01,
-/// and 65 bytes that start with a prefix byte (the length of a node preimage).
+/// 65 bytes that start with a prefix byte (the length of a node preimage), and now and then a
+/// long leaf (up to 5000 bytes), since a real leaf (a log, a config) is far longer than a
+/// block of SHA-256.
 fn leaf_bytes() -> BoxedStrategy<Vec<u8>> {
     prop_oneof![
         4 => vec(any::<u8>(), 0..48),
@@ -247,6 +249,9 @@ fn leaf_bytes() -> BoxedStrategy<Vec<u8>> {
         1 => (0u8..2, vec(any::<u8>(), 64)).prop_map(|(prefix, mut v)| {
             v.insert(0, prefix);
             v
+        }),
+        1 => (any::<u8>(), 64usize..5000).prop_map(|(b, n)| {
+            (0..n).map(|i| b.wrapping_add((i % 251) as u8)).collect::<Vec<u8>>()
         }),
     ]
     .boxed()
@@ -898,6 +903,42 @@ fn no_tag_makes_a_leaf_hash_equal_a_node_hash_or_another_tag_s_hash() {
 // ---------------------------------------------------------------------------------------------
 // 4. tagged_leaf_hash and tagged_leaf_hashes.
 // ---------------------------------------------------------------------------------------------
+
+#[test]
+fn leaves_of_every_length_are_hashed_whole() {
+    // Lengths around the block size of SHA-256 (55, 56, 63, 64, 65, 119, 120) and well beyond
+    // (1023 to 1025, 4096, 70000): no leaf is cut, padded or hashed in part. The bytes are all
+    // different from their neighbours, so a cut or a shift shows.
+    let tag = 0x05;
+    for n in [
+        0usize, 1, 31, 32, 33, 54, 55, 56, 57, 63, 64, 65, 119, 120, 121, 255, 256, 257, 1023,
+        1024, 1025, 4095, 4096, 4097, 70_000,
+    ] {
+        let leaf: Vec<u8> = (0..n).map(|i| (i * 7 + i / 251) as u8).collect();
+        let recorder = Recorder::new();
+        let plain = merkle::leaf_hash(&recorder, &leaf);
+        assert_eq!(
+            recorder.take(),
+            vec![[&[0x00][..], &leaf].concat()],
+            "plain, n = {n}"
+        );
+        assert_eq!(plain, ref_leaf(&leaf), "plain, n = {n}");
+        let tagged = merkle::tagged_leaf_hash(&recorder, tag, &leaf);
+        assert_eq!(
+            recorder.take(),
+            vec![[&[0x00, tag][..], &leaf].concat()],
+            "tagged, n = {n}"
+        );
+        assert_eq!(tagged, ref_tagged_leaf(tag, &leaf), "tagged, n = {n}");
+        let many = merkle::tagged_leaf_hashes(&recorder, tag, [leaf.as_slice()].into_iter());
+        assert_eq!(
+            recorder.take(),
+            vec![[&[0x00, tag][..], &leaf].concat()],
+            "many, n = {n}"
+        );
+        assert_eq!(many, vec![tagged], "many, n = {n}");
+    }
+}
 
 #[test]
 fn the_buffer_of_tagged_leaf_hashes_leaves_no_stale_bytes() {
