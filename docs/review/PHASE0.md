@@ -47,7 +47,7 @@ Per-mutant lists, counterexamples found by the new tests or the fuzz runs, and d
 
 ## Measure again
 
-Each command writes into the work tree and reads the commit it is run at; run them from a clean checkout of the commit named in `docs/review/ledger.json`. The commands are not run in CI.
+Each command writes into the work tree and reads the commit it is run at; run them from a clean checkout of the commit named in `docs/review/ledger.json`. The commands are not run in CI on a push or a pull request, because they take hours. The `review-measurements` workflow (`.github/workflows/review-measurements.yml`, run by hand from the Actions tab) runs them on GitHub's runners: the ledger, lint baseline and coverage first, then the mutation testing in 12 shards (each file goes through all three tiers in one job), and the fuzz runs on one runner per target. It uploads one artifact, `review-results`, with the merged ledger, the rendered pages and the fuzz report; a maintainer commits those files. Per-mutant lists and crash inputs are findings, so they are not uploaded unless the repository variable `REVIEW_AGE_RECIPIENT` holds an `age` public key, and then only encrypted to it.
 
 ```sh doc-syntax
 cargo build --release --locked --manifest-path tools/review_metrics/Cargo.toml
@@ -62,7 +62,7 @@ python3 -I scripts/review/fuzz_phase0.py
 python3 -I scripts/review/ledger.py check
 ```
 
-Install what they need (not run in CI):
+Install what they need (not run in CI; the workflow does this itself):
 
 ```sh doc-syntax
 cargo install cargo-llvm-cov cargo-mutants --locked

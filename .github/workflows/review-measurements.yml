@@ -1,0 +1,179 @@
+# The Phase 0 measurements of the chunked code review (docs/review/PHASE0.md), by hand: line and
+# branch coverage, mutation testing split over shards, and the long fuzz runs, one runner each.
+# Nothing here runs on a push or a pull request, and nothing is committed: the results are an
+# artifact (the ledger, its rendered pages and the fuzz report) that a maintainer commits.
+#
+# Per-mutant results and fuzz crashes are findings that stay private until fixed (docs/review/
+# PLAN.txt, section 8), and an artifact of a public repository is public. So the only artifacts are
+# counts per chunk and run statistics. A list of missed mutants, or a crash input, is kept only
+# when the repository variable REVIEW_AGE_RECIPIENT holds an age public key (a recipient, not a
+# secret); it is then encrypted to that key before it is uploaded. Without the variable it is not
+# kept, and the job still fails on a crash.
+name: Review measurements
+
+on:
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: Seconds of fuzzing per target
+        default: "900"
+
+permissions:
+  contents: read
+
+env:
+  NIGHTLY: nightly-2026-10-18
+
+jobs:
+  base:
+    name: chunk ledger, lint baseline and coverage for this commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned nightly and cargo-llvm-cov
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
+      - name: Rebuild the ledger for this commit, then measure
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --manifest-path tools/review_metrics/Cargo.toml
+          python3 -I scripts/review/ledger.py build --keep
+          python3 -I scripts/review/lint_baseline.py
+          python3 -I scripts/review/coverage.py --lines covered-lines.json
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: base
+          path: |
+            docs/review/ledger.json
+            docs/review/lint-baseline.txt
+            covered-lines.json
+
+  mutants:
+    name: mutation testing, shard ${{ matrix.shard }} of 12
+    needs: base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: base
+          path: base
+      - name: Use the ledger of this commit and install cargo-mutants
+        run: |
+          set -euo pipefail
+          cp base/docs/review/ledger.json docs/review/ledger.json
+          cargo install cargo-mutants --locked
+      - name: Mutate this shard's files through the three tiers
+        run: |
+          set -euo pipefail
+          python3 -I scripts/review/mutants.py run --tier all --jobs 3 \
+            --shard "${{ matrix.shard }}/12" \
+            --lines base/covered-lines.json --out target/mutants
+      - name: Count the outcomes per chunk
+        run: |
+          set -euo pipefail
+          python3 -I scripts/review/mutants.py collect --out target/mutants \
+            --lines base/covered-lines.json --missed-dir target/missed
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: ledger-mutants-${{ matrix.shard }}
+          path: docs/review/ledger.json
+      - name: Keep the lists of missed mutants, encrypted
+        if: always() && vars.REVIEW_AGE_RECIPIENT != ''
+        env:
+          RECIPIENT: ${{ vars.REVIEW_AGE_RECIPIENT }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -q age
+          [ -d target/missed ] || exit 0
+          tar -C target -czf - missed | age -r "$RECIPIENT" -o missed-${{ matrix.shard }}.tar.gz.age
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        if: always() && vars.REVIEW_AGE_RECIPIENT != ''
+        with:
+          name: missed-mutants-encrypted-${{ matrix.shard }}
+          path: missed-${{ matrix.shard }}.tar.gz.age
+          if-no-files-found: ignore
+
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [ulog_ingest, sfr_verify, crl_parse]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned nightly and cargo-fuzz
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$NIGHTLY" --profile minimal
+          cargo +"$NIGHTLY" install cargo-fuzz --version 0.13.2 --locked
+      - name: Run the target and minimize its corpus
+        run: |
+          set -euo pipefail
+          python3 -I scripts/review/fuzz_phase0.py --targets "${{ matrix.target }}" \
+            --seconds "${{ inputs.fuzz_seconds }}" --no-seeds
+          cp docs/review/FUZZ_RUN.txt "fuzz-run-${{ matrix.target }}.txt"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        if: always()
+        with:
+          name: fuzz-run-${{ matrix.target }}
+          path: fuzz-run-${{ matrix.target }}.txt
+          if-no-files-found: ignore
+      - name: Keep a crash input, encrypted
+        if: failure() && vars.REVIEW_AGE_RECIPIENT != ''
+        env:
+          RECIPIENT: ${{ vars.REVIEW_AGE_RECIPIENT }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -q age
+          tar -czf - fuzz/artifacts | age -r "$RECIPIENT" -o "crash-${{ matrix.target }}.tar.gz.age"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        if: failure() && vars.REVIEW_AGE_RECIPIENT != ''
+        with:
+          name: crash-encrypted-${{ matrix.target }}
+          path: crash-${{ matrix.target }}.tar.gz.age
+          if-no-files-found: ignore
+
+  results:
+    name: merge the shards into one ledger
+    needs: [base, mutants, fuzz]
+    if: always() && needs.base.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          path: parts
+      - name: Merge, render and check
+        run: |
+          set -euo pipefail
+          cp parts/base/docs/review/ledger.json docs/review/ledger.json
+          cp parts/base/docs/review/lint-baseline.txt docs/review/lint-baseline.txt
+          python3 -I scripts/review/mutants.py merge-metrics parts/ledger-mutants-*/ledger.json
+          # The report of the fuzz runs: the first run's header, then each target's section.
+          first=1
+          for f in parts/fuzz-run-*/fuzz-run-*.txt; do
+            [ -f "$f" ] || continue
+            if [ "$first" = 1 ]; then cat "$f" > docs/review/FUZZ_RUN.txt; first=0
+            else awk '/^== /{p=1} p' "$f" >> docs/review/FUZZ_RUN.txt; fi
+          done
+          python3 -I scripts/review/ledger.py check
+          mkdir results
+          cp docs/review/ledger.json docs/review/LEDGER.md docs/review/LONG_FUNCTIONS.md \
+             docs/review/PHASE0.md docs/review/lint-baseline.txt results/
+          [ -f docs/review/FUZZ_RUN.txt ] && cp docs/review/FUZZ_RUN.txt results/ || true
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: review-results
+          path: results/
