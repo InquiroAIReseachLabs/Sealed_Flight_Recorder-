@@ -1595,6 +1595,45 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_tagged_logged_string_does_not_end_the_definitions_section() {
+        // The ULog specification (PX4-Autopilot docs/en/dev_log/ulog_file_format.md, main branch,
+        // read 2026-10-20) ends the section at a named message: "This section ends before the
+        // start of the first Subscription Message or Logging message, whichever comes first."
+        // "Logging" there links to the 'L' message, "Logged String Message". The 'C' message is a
+        // separate type, "Tagged Logged String Message", which the specification lists among the
+        // Data section messages and does not name as ending the definitions section. So a format
+        // record after only a 'C' record is still in the definitions section and is read, as
+        // after an information or parameter record; refusing it would refuse a log the
+        // specification allows.
+        let t = "t:uint64_t timestamp;uint8_t x;";
+        let row = [&1u64.to_le_bytes()[..], &[7]].concat();
+        let mut tagged = vec![6u8];
+        tagged.extend_from_slice(&7u16.to_le_bytes());
+        tagged.extend_from_slice(&5u64.to_le_bytes());
+        tagged.extend_from_slice(b"hello");
+        let b = Builder::new(0)
+            .flags(&[])
+            .format(t)
+            .rec(b'C', &tagged)
+            .format("u:uint64_t timestamp;")
+            .sub(0, 0, "t")
+            .data(0, &row);
+        let mut c = Collect::default();
+        read(&b.bytes[..], &mut c).unwrap();
+        assert_eq!(c.data.len(), 1);
+        // The 'L' message does end it (the test above), so the same log with an 'L' is refused.
+        let mut logged = vec![6u8];
+        logged.extend_from_slice(&5u64.to_le_bytes());
+        logged.extend_from_slice(b"hello");
+        let b = Builder::new(0)
+            .flags(&[])
+            .format(t)
+            .rec(b'L', &logged)
+            .format("u:uint64_t timestamp;");
+        assert!(read(&b.bytes[..], &mut Collect::default()).is_err());
+    }
+
+    #[test]
     fn an_instance_subscribed_again_with_the_same_format_is_read() {
         // A second subscription of (t, 0) with no new format: both message ids are read with
         // the one layout.
