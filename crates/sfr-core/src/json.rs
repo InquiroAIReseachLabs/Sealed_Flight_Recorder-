@@ -705,7 +705,11 @@ impl Scanner<'_> {
         }
         loop {
             let start = self.pos;
-            self.seq = None;
+            // Only the top-level array that records spans owns `seq`: an array inside an event
+            // must leave the event's `seq` alone.
+            if spans.is_some() {
+                self.seq = None;
+            }
             self.value(depth + 1)?;
             if let Some((s, q)) = spans.as_mut() {
                 s.push(start..self.pos);

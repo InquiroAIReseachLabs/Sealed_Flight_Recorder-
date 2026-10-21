@@ -4,7 +4,7 @@ cargo-fuzz targets (SPEC B1.2, B1.10 "Fuzzing"). This is a separate package with
 
 Gate: 60 seconds per CI run (`.github/workflows/ci.yml`) and 10 minutes nightly (`.github/workflows/fuzz-nightly.yml`) with zero panics, hangs, or out-of-memory.
 
-Targets: `ulog_ingest` (the ULog reader and the whole dry-run path), `sfr_verify` (the `.sfr` reader), and `rules_parse` (the rules file parser and what reads a rules file).
+Targets: `ulog_ingest` (the ULog reader and the whole dry-run path), `sfr_verify` (the `.sfr` reader), `rules_parse` (the rules file parser and what reads a rules file), and `crl_parse` (the CRL and certificate readers of `sfr verify --trust-anchor --crl`).
 
 ## Target `ulog_ingest`
 
@@ -23,6 +23,10 @@ Arbitrary bytes go to `sfr_core::verify::verify` without a log: the canonical-fo
 ## Target `rules_parse`
 
 UTF-8 input goes to `sfr_core::rules::parse_rules`, which reads every section a rules file may hold, the optional sections `[watched_parameters]`, `[sealed_topics]`, `[payload_commands]` and `[authorized_sources]` included. A file that parses is then used to ingest the shrunk payload flight seed (`seeds/ulog_ingest/sitl_v1.17.0_payload_two_sources_shrunk.ulg`, commands from several sources) with its sealed topics, evaluate it against the golden baseline of that flight, and build the dry-run JSON, so the fuzzed sections reach the code that uses them. The target checks that the sealed topic and watched parameter lists are sorted and unique, that the sealed topic limit holds, and that every sealed topic is required (R1). Its seeds in `seeds/rules_parse/` are copies of `examples/rules.default.toml`, `examples/rules.extended.toml`, the extended rules with every commented section enabled (as `ulog_ingest` uses them), and each golden rules file in `testdata/rules/` (prefixed `golden_`).
+
+## Target `crl_parse`
+
+Arbitrary bytes go to the CRL and certificate readers in `crates/sfr/src/certs.rs`. The `sfr` crate is a binary with no library target, so the target includes that file with `#[path = "../../crates/sfr/src/certs.rs"] mod certs;`, and the fuzz package has the same `rustls-webpki` and `rustls-pki-types` pins as the `sfr` crate (the dead code warnings the whole module causes are allowed in the target). The bytes go to `parse_crl`, `check_crl_der`, `check_anchor_der`, `certificate_key` and `certificate_fingerprint`, and to `current_crls` as one CRL and as two (split after the first byte, in both orders). The target checks that a CRL that parses has a non-empty issuer text of printable ASCII, a decimal CRL number without a leading zero (or `0`), and `thisUpdate` and `nextUpdate` texts of the form `YYYY-MM-DDTHH:MM:SSZ`; that `check_crl_der` accepts only what `parse_crl` reads; that `current_crls` of one CRL succeeds exactly when it parses; and that `current_crls` of two CRLs gives the same answer in either order. Its seeds in `seeds/crl_parse/` are the DER of every CRL in `testdata/pki/` (`crl_*.crl`) and of eight of its certificates (`cert_*.der`), converted from the PEM files with `openssl crl` and `openssl x509 -outform DER`. Run it with the same commands as below, with `crl_parse` and `seeds/crl_parse` in place of `ulog_ingest` and `seeds/ulog_ingest`.
 
 ## Seed corpus
 
