@@ -404,7 +404,25 @@ fn ingest(bytes: &[u8]) -> Result<Ingested, IngestError> {
 const PY_VS: &str = "vehicle_status:uint64_t timestamp;uint8_t arming_state;uint8_t nav_state;bool failsafe;\
     bool is_vtol;bool in_transition_mode;bool in_transition_to_fw;uint8_t vehicle_type;\
     uint8_t system_type;uint8_t latest_arming_reason;uint8_t latest_disarming_reason;";
-const PY_FS: &str = "failsafe_flags:uint64_t timestamp;bool vtol_fixed_wing_system_failure;";
+const PY_FS: &str = "failsafe_flags:uint64_t timestamp;uint32_t mode_req_angular_velocity;\
+    uint32_t mode_req_attitude;uint32_t mode_req_local_alt;uint32_t mode_req_local_position;\
+    uint32_t mode_req_local_position_relaxed;uint32_t mode_req_global_position;\
+    uint32_t mode_req_global_position_relaxed;uint32_t mode_req_mission;\
+    uint32_t mode_req_offboard_signal;uint32_t mode_req_home_position;\
+    uint32_t mode_req_wind_and_flight_time_compliance;uint32_t mode_req_prevent_arming;\
+    uint32_t mode_req_manual_control;uint32_t mode_req_other;bool angular_velocity_invalid;\
+    bool attitude_invalid;bool local_altitude_invalid;bool local_position_invalid;\
+    bool local_position_invalid_relaxed;bool local_velocity_invalid;\
+    bool global_position_invalid;bool global_position_invalid_relaxed;\
+    bool auto_mission_missing;bool offboard_control_signal_lost;bool home_position_invalid;\
+    bool manual_control_signal_lost;bool gcs_connection_lost;uint8_t battery_warning;\
+    bool battery_low_remaining_time;bool battery_unhealthy;bool geofence_breached;\
+    bool mission_failure;bool vtol_fixed_wing_system_failure;bool wind_limit_exceeded;\
+    bool flight_time_limit_exceeded;bool position_accuracy_low;bool navigator_failure;\
+    bool fd_critical_failure;bool fd_esc_arming_failure;bool fd_imbalanced_prop;\
+    bool fd_motor_failure;";
+/// Bytes of one `failsafe_flags` row (every field 0 but the timestamp).
+const PY_FS_LEN: usize = 91;
 const PY_BOX: &str = "detection_box:float x;float y;float w;float h;";
 const PY_DET: &str =
     "custom_detection:uint64_t timestamp;uint32_t class_id;float confidence;detection_box box;";
@@ -452,7 +470,7 @@ fn py_mc_flight(version: u8) -> Vec<u8> {
     for i in 1..=8u64 {
         let ts = i * 1_000_000;
         let mut fs = ts.to_le_bytes().to_vec();
-        fs.push(0);
+        fs.resize(PY_FS_LEN, 0);
         out.extend(data_rec(1, &fs));
         let armed = if (2..=6).contains(&i) { 2 } else { 1 };
         out.extend(data_rec(0, &py_vs(ts, armed, 0, 0, 0, 0, 1, 2)));
@@ -486,7 +504,7 @@ fn py_r4_quadchute_on_disarm() -> Vec<u8> {
     for (k, (armed, in_tr, to_fw, fw)) in rows.into_iter().enumerate() {
         let ts = (k as u64 + 1) * 1_000_000;
         let mut fs = ts.to_le_bytes().to_vec();
-        fs.push(0);
+        fs.resize(PY_FS_LEN, 0);
         out.extend(data_rec(1, &fs));
         // `vs()`: is_vtol 1, vehicle_type 2 (fixed wing) or 1, system_type 22.
         out.extend(data_rec(
@@ -530,7 +548,7 @@ fn py_custom_detection() -> Vec<u8> {
     for i in 0..8u64 {
         let ts = (i + 1) * 1_000_000;
         let mut fs = ts.to_le_bytes().to_vec();
-        fs.push(0);
+        fs.resize(PY_FS_LEN, 0);
         out.extend(data_rec(1, &fs));
         let armed = if (2..=6).contains(&(i + 1)) { 2 } else { 1 };
         out.extend(data_rec(0, &py_vs(ts, armed, 0, 0, 0, 0, 1, 2)));
@@ -1370,10 +1388,16 @@ fn py_formats() -> Vec<Fmt> {
         },
         Fmt {
             name: "failsafe_flags".into(),
-            fields: vec![
-                field("timestamp", S_U64),
-                field("vtol_fixed_wing_system_failure", b),
-            ],
+            // The fields of PY_FS, "type name;" each after the name of the message.
+            fields: PY_FS
+                .strip_prefix("failsafe_flags:")
+                .expect("the message name")
+                .split_terminator(';')
+                .map(|f| {
+                    let (ty, name) = f.split_once(' ').expect("type and name");
+                    field(name, scalar_index(ty))
+                })
+                .collect(),
         },
     ]
 }
@@ -1417,7 +1441,7 @@ fn the_model_renders_the_python_flight_and_flattens_its_nested_format() {
                         sub: 1,
                         dt: 1_000_000,
                         len_sel: 0,
-                        fill: vec![0; 9],
+                        fill: vec![0; PY_FS_LEN],
                     },
                     Item::Row {
                         sub: 0,
