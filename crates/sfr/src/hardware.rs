@@ -31,7 +31,7 @@ pub const PUBLIC_KEY_FILE: &str = "sfr.pub";
 /// Runs `program` with `args`, writes `input` to its stdin, and returns its stdout. A failure
 /// names the program and the end of what it printed on stderr.
 fn run(program: &Path, args: &[&str], input: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
-    let shown = program.display();
+    let shown = crate::vis(program);
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::piped())
@@ -112,15 +112,15 @@ fn helper_path() -> Result<PathBuf, String> {
     let dir = exe.parent().ok_or_else(|| {
         format!(
             "cannot find the directory of {} to run {name} from",
-            exe.display()
+            crate::vis(&exe)
         )
     })?;
     let helper = dir.join(&name);
     if !helper.is_file() {
         return Err(format!(
             "{} does not exist: sfr runs {name} only from its own directory, {}",
-            helper.display(),
-            dir.display()
+            crate::vis(helper),
+            crate::vis(dir)
         ));
     }
     Ok(helper)
@@ -164,20 +164,24 @@ impl Signer for Pkcs11Key {
 /// Debian, Ubuntu and Fedora install them in.
 pub const DEFAULT_TPM2_TOOLS_DIR: &str = "/usr/bin";
 
-/// Whether `path` and every directory above it are owned by root and writable by no one else, so
+/// Whether `path`, once every symlink in it is resolved, and every directory above its real place
+/// are owned by root and writable by no one else, so
 /// only root can change what runs from there. A directory with the sticky bit set (such as
 /// `/tmp`) may be writable by others above the tools, since others cannot rename or remove root's
 /// entries in it. `Err` names the first path that fails.
 #[cfg(unix)]
 fn root_owned_and_closed(path: &std::path::Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
+    // The real path: a symlink on the way would otherwise hide the parents that matter, those of
+    // the directory it leads to.
+    let real = std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", crate::vis(path)))?;
     let mut first = true;
-    for p in path.ancestors() {
-        let m = std::fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
+    for p in real.ancestors() {
+        let m = std::fs::metadata(p).map_err(|e| format!("{}: {e}", crate::vis(p)))?;
         if m.uid() != 0 {
             return Err(format!(
                 "{} is owned by uid {}, not root",
-                p.display(),
+                crate::vis(p),
                 m.uid()
             ));
         }
@@ -186,7 +190,7 @@ fn root_owned_and_closed(path: &std::path::Path) -> Result<(), String> {
         if open && (first || !sticky) {
             return Err(format!(
                 "{} is writable by group or others (mode {:04o})",
-                p.display(),
+                crate::vis(p),
                 m.mode() & 0o7777
             ));
         }
@@ -207,7 +211,7 @@ fn tpm2(name: &str) -> Result<PathBuf, String> {
             if !d.is_absolute() {
                 return Err(format!(
                     "SFR_TPM2_TOOLS_DIR is {}, not an absolute directory; sfr runs tpm2-tools only by an absolute path",
-                    d.display()
+                    crate::vis(d)
                 ));
             }
             d
@@ -218,7 +222,7 @@ fn tpm2(name: &str) -> Result<PathBuf, String> {
     if !tool.is_file() {
         return Err(format!(
             "{} does not exist: install tpm2-tools, or set SFR_TPM2_TOOLS_DIR to the absolute directory that holds them (sfr never searches PATH)",
-            tool.display()
+            crate::vis(tool)
         ));
     }
     // A directory named in the environment is trusted only if only root can change it.
@@ -227,7 +231,7 @@ fn tpm2(name: &str) -> Result<PathBuf, String> {
         root_owned_and_closed(&tool).map_err(|why| {
             format!(
                 "SFR_TPM2_TOOLS_DIR {}: {why}; sfr runs tpm2-tools only from a directory only root can change",
-                dir.display()
+                crate::vis(dir)
             )
         })?;
         #[cfg(not(unix))]
@@ -254,7 +258,7 @@ impl Scratch {
         }
         builder
             .create(&dir)
-            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+            .map_err(|e| format!("cannot create {}: {e}", crate::vis(&dir)))?;
         Ok(Scratch(dir))
     }
     fn path(&self, name: &str) -> String {
@@ -361,11 +365,11 @@ pub fn tpm_keygen(
         if f.symlink_metadata().is_ok() {
             return Err(format!(
                 "{} exists; keygen never overwrites a key",
-                f.display()
+                crate::vis(f)
             ));
         }
     }
-    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", crate::vis(dir)))?;
     let scratch = Scratch::new()?;
     // Sealed data object: fixedtpm|fixedparent (no other TPM, no other parent can load it).
     // Without a PCR policy it is authorized by its empty password (userwithauth); with one,
@@ -424,7 +428,7 @@ pub fn tpm_keygen(
             .create_new(true)
             .open(path)
             .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
-            .map_err(|e| format!("cannot write {}: {e}", path.display()))
+            .map_err(|e| format!("cannot write {}: {e}", crate::vis(path)))
     };
     let contents: [Vec<u8>; 4] = [
         std::fs::read(&pub_blob).map_err(|e| format!("cannot read {pub_blob}: {e}"))?,
@@ -486,11 +490,11 @@ fn unseal(
 pub fn tpm_key(dir: &Path) -> Result<FileKey, String> {
     let read = |name: &str| {
         let p = dir.join(name);
-        std::fs::read_to_string(&p).map_err(|e| format!("cannot read {}: {e}", p.display()))
+        std::fs::read_to_string(&p).map_err(|e| format!("cannot read {}: {e}", crate::vis(p)))
     };
     let settings = TpmSettings::parse(&read(TPM_SETTINGS)?)?;
     let expected = parse_public_key_pem(&read(PUBLIC_KEY_FILE)?)
-        .map_err(|e| format!("{}: {e}", dir.join(PUBLIC_KEY_FILE).display()))?;
+        .map_err(|e| format!("{}: {e}", crate::vis(dir.join(PUBLIC_KEY_FILE))))?;
     let scratch = Scratch::new()?;
     let seed = unseal(
         &scratch,
@@ -506,7 +510,7 @@ pub fn tpm_key(dir: &Path) -> Result<FileKey, String> {
     if key.public_key() != expected {
         return Err(format!(
             "the seed this TPM unsealed is not the key in {}",
-            dir.join(PUBLIC_KEY_FILE).display()
+            crate::vis(dir.join(PUBLIC_KEY_FILE))
         ));
     }
     Ok(key)

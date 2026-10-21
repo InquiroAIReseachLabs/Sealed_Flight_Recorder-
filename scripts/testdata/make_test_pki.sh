@@ -54,6 +54,9 @@
 #                     root.pem issued again, same key and subject, with one defect each: valid
 #                     2020 to 2021; basicConstraints cA FALSE; keyUsage without keyCertSign;
 #                     pathLenConstraint 0, too small for a chain through inter. Refused as anchors.
+#   inter_selfissued.pem  a CA with inter's key and root's subject name, issued by root: its issuer
+#                     and subject are the same name, but root's key signed it, so it is not
+#                     self-signed. An intermediate CA as an anchor, though its names match.
 set -euo pipefail
 export LC_ALL=C TZ=UTC
 
@@ -258,6 +261,12 @@ EOF
   anchor root_not_ca v3_root_not_ca 20250101000000Z 20460101000000Z
   anchor root_no_certsign v3_root_no_certsign 20250101000000Z 20460101000000Z
   anchor root_pathlen0 v3_root_pathlen0 20250101000000Z 20460101000000Z
+  # inter's key under root's subject, signed by root: issuer = subject, signature by another key.
+  openssl req -new -config "$work/ca.cnf" -key "$work/inter.key" -subj "/CN=sfr test root" \
+    -out "$work/inter_selfissued.csr"
+  openssl ca -batch -notext -config "$work/ca.cnf" -cert "$out/root.pem" -keyfile "$work/root.key" \
+    -extensions v3_inter -startdate 20250101000000Z -enddate 20460101000000Z \
+    -in "$work/inter_selfissued.csr" -out "$out/inter_selfissued.pem" 2> /dev/null
 }
 
 case "${1:-}" in

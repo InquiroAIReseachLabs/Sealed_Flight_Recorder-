@@ -42,7 +42,7 @@ pub const MAX_LIST_ENTRIES: usize = 256;
 /// arrays, inline tables, and dotted keys. Recorded here so the error can name it.
 pub const TOML_MAX_DEPTH: usize = 80;
 
-/// Most entries in `[sealed_topics]`; more is a usage error (SPEC B1.4, exit 4).
+/// Most entries in `[sealed_topics]`; more is over an input limit (SPEC B1.4, exit 3).
 pub const MAX_SEALED_TOPICS: usize = 64;
 
 /// Topics R1 always requires, because the core rules read them.
@@ -230,8 +230,6 @@ pub struct RulesError {
     pub line: usize,
     /// What is wrong.
     pub reason: String,
-    /// A usage error (SPEC B1.4 exit 4) rather than an unusable file (exit 3).
-    pub usage: bool,
 }
 
 impl fmt::Display for RulesError {
@@ -261,7 +259,6 @@ impl Ctx<'_> {
         RulesError {
             line: self.line(offset),
             reason: reason.into(),
-            usage: false,
         }
     }
 }
@@ -407,11 +404,7 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
         } else {
             format!("not valid TOML: {msg}")
         };
-        RulesError {
-            line,
-            reason,
-            usage: false,
-        }
+        RulesError { line, reason }
     })?;
     let root = doc.get_ref();
     check_keys(
@@ -433,7 +426,6 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
     let format = get(root, "format").ok_or_else(|| RulesError {
         line: 1,
         reason: format!("missing `format = \"{RULES_FORMAT}\"`"),
-        usage: false,
     })?;
     let f = as_str(&ctx, format, "format")?;
     if f != RULES_FORMAT {
@@ -465,7 +457,6 @@ pub fn parse_rules(text: &str) -> Result<Rules, RulesError> {
     let rt = get(root, "required_topics").ok_or_else(|| RulesError {
         line: body.lines().count() + 1,
         reason: "missing `[required_topics]`".into(),
-        usage: false,
     })?;
     let rt_table = as_table(&ctx, rt, "required_topics")?;
     check_keys(&ctx, rt_table, "required_topics", &["topics"])?;
@@ -735,12 +726,10 @@ fn parse_sealed_topics(ctx: &Ctx<'_>, root: &Table<'_>) -> Result<Vec<String>, R
             return Err(ctx.err(at, format!("sealed topic `{t}` listed twice")));
         }
         if out.len() > MAX_SEALED_TOPICS {
-            let mut e = ctx.err(
+            return Err(ctx.err(
                 at,
                 crate::limit_exceeded("`sealed_topics`", MAX_SEALED_TOPICS, "topics"),
-            );
-            e.usage = true;
-            return Err(e);
+            ));
         }
     }
     Ok(out.into_iter().collect())
@@ -1108,14 +1097,13 @@ pub(crate) mod tests {
     #[test]
     fn optional_sections_reject_bad_input() {
         let bad = |extra: &str| parse_rules(&format!("{MIN}{extra}")).expect_err(extra);
-        // More than 64 sealed topics is a usage error (exit 4); 64 is accepted.
+        // More than 64 sealed topics is over an input limit (exit 3); 64 is accepted.
         let topics = |n: usize| {
             let list: Vec<String> = (0..n).map(|i| format!("\"t{i}\"")).collect();
             format!("[sealed_topics]\ntopics = [{}]\n", list.join(", "))
         };
         parse_rules(&format!("{MIN}{}", topics(64))).expect("64 sealed topics");
         let e = bad(&topics(65));
-        assert!(e.usage, "{e}");
         assert!(e.reason.contains("input limit of 64 topics"), "{e}");
         // Every other problem is an unusable file (exit 3).
         for (extra, needle) in [
@@ -1169,7 +1157,6 @@ pub(crate) mod tests {
             ("[sealed_topics]\ntopic = [\"a\"]\n", "unknown key"),
         ] {
             let e = bad(extra);
-            assert!(!e.usage, "{extra}: {e}");
             assert!(e.reason.contains(needle), "{extra}: {e}");
         }
     }

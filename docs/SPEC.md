@@ -61,9 +61,9 @@ Every input except the log's total size is bounded by the limits below, and an i
 | Log: parameter records in the data section (`MAX_KEPT_PARAM_RECORDS`) | 65,536 |
 | Log: warning-level log records kept (`MAX_KEPT_LOG_RECORDS`), and bytes of their text (`MAX_KEPT_LOG_BYTES`) | 100,000 records, 64 MiB |
 | Log: dropout records kept (`MAX_KEPT_DROPOUTS`) | 1,000,000 |
-| Rules file, baseline, key file, public key | 16 MiB (16,777,216 bytes) each |
+| Rules file, baseline, key file, public key, signer certificate, certificate chain, trust anchor file, CRL file | 16 MiB (16,777,216 bytes) each |
 | Rules: `required_topics.topics`, `parameters.ignore`, `watched_parameters.names`, `payload_commands.ids`, `authorized_sources.sources` | 256 entries each |
-| Rules: `sealed_topics.topics` | 64 entries; more is a usage error (exit 4) |
+| Rules: `sealed_topics.topics` | 64 entries; more is refused (exit 3) |
 | Rules: watched parameter name | 1 to 64 letters, digits, `_` |
 | Rules: payload command id; source system id; source component id | 0 to 4,294,967,295; 0 to 255; 0 to 65,535 (`vehicle_command.source_component` is 16 bits in PX4 v1.17) |
 | Rules: topic name | 1 to 64 lowercase letters, digits, `_` |
@@ -160,7 +160,7 @@ Top-level fields: `schema_version` (`4`, or `5` for a log that ends in the middl
 
 **Leaves**, in this fixed order: seal context (`schema_version`, `tool`, `seal` without the signature); log identity; config; baseline; rules; each result in rule-id order; each sealed topic digest in topic and `multi_id` order; each event in sequence order. Each leaf is hashed with a one-byte tag for its section (`0x01` seal context, `0x02` log, `0x03` config, `0x04` baseline, `0x05` rules, `0x06` result, `0x07` sealed topic digest, `0x08` event). Standalone verify checks each order; deep verify (`--ulog`) recomputes every digest and names a changed sealed topic by topic and instance.
 
-**Key custody** is one of `pkcs11-token` (the private key never leaves a PKCS#11 token or HSM), `tpm-sealed` (the seed is sealed to one TPM 2.0 at rest and is in process memory for one signature), or `file-evaluation` (a key file; evaluation only). Custody is signed but declared by the sealer, and verify always reports it as declared (B1.9).
+**Key custody** is one of `pkcs11-token` (the private key never leaves a PKCS#11 token or HSM), `tpm-sealed` (the seed is sealed to one TPM 2.0 at rest and is in process memory from the unseal until the signature is made, then cleared), or `file-evaluation` (a key file; evaluation only). Custody is signed but declared by the sealer, and verify always reports it as declared (B1.9).
 
 **Hashing:** leaf hash = SHA-256(0x00 || section tag || JCS(leaf)). Node hash = SHA-256(0x01 || left || right). Odd-node handling follows RFC 6962 (the left subtree holds the largest power of two below the leaf count; nothing is duplicated); RFC 9162 obsoletes RFC 6962 with the same tree shape, and the leaf here adds a documented section tag (above). `merkle.algorithm` keeps the name `sha256-rfc6962`, `merkle.root` and `signature.value` are lowercase hex. **Signed payload** = ASCII `SFR-RECORD-V1` || 0x00 || schema_version as 4-byte big-endian || tree size as 8-byte big-endian || the leaf count of each of the eight sections as 8-byte big-endian || Merkle root (122 bytes). Ed25519 signature over the signed payload.
 

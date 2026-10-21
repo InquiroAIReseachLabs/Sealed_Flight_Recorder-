@@ -15,9 +15,11 @@ A message for a name, version or length rule ends with a parenthesis that states
 
 | Command | Input | Exit code |
 |---|---|---|
-| `seal` | log, rules file, baseline; a log whose record would be over the record limit (`--dry-run` writes no record and does not apply that limit) | 3 |
-| `seal` | key file; a rules file with more than 64 sealed topics (a usage error) | 4 |
+| `seal` | log, rules file (also one with more than 64 sealed topics), baseline, signer certificate, certificate chain; a log whose record would be over the record limit (`--dry-run` writes no record and does not apply that limit) | 3 |
+| `seal` | key file | 4 |
 | `verify` | public key | 4 |
+| `verify` | trust anchor file, CRL file | 3 |
+| `verify` | report longer than the record limit | 1 (a mismatch) |
 | `verify` | record, or the log given with `--ulog` | 1 (verification failed) |
 
 ## The limits
@@ -41,9 +43,9 @@ A message for a name, version or length rule ends with a parenthesis that states
 | Parameter records in the data section | 65,536 | Parameter changes made in flight. A log with more is refused (exit 3). Counted in R3's bound on differing parameters. | `ingest.rs` `MAX_KEPT_PARAM_RECORDS` |
 | Warning-level log records kept | 100,000 records and 64 MiB of text | Each is kept with its text until the rules run. A log over either is refused (exit 3). | `ingest.rs` `MAX_KEPT_LOG_RECORDS`, `MAX_KEPT_LOG_BYTES` |
 | Dropout records kept | 1,000,000 | A log with more is refused (exit 3). | `ingest.rs` `MAX_KEPT_DROPOUTS` |
-| Rules file, baseline, key file, public key | 16 MiB each | Stops `sfr` reading an unbounded file into memory. | `sfr/src/main.rs` `MAX_TEXT_BYTES` |
+| Rules file, baseline, key file, public key, signer certificate, certificate chain, trust anchor file, CRL file | 16 MiB each; a longer file is refused, not cut (exit 3 for a rules file, baseline, certificate, chain, anchor or CRL, exit 4 for a key) | Stops `sfr` reading an unbounded file into memory. | `sfr/src/main.rs` `MAX_TEXT_BYTES` |
 | `required_topics.topics`, `parameters.ignore`, `watched_parameters.names`, `payload_commands.ids`, `authorized_sources.sources` | 256 entries each | Bounds the work per log. | `rules.rs` `MAX_LIST_ENTRIES` |
-| `sealed_topics.topics` | 64 entries; more is a usage error, exit 4 | Each sealed topic instance keeps a running digest while the log streams. | `rules.rs` `MAX_SEALED_TOPICS` |
+| `sealed_topics.topics` | 64 entries; more is refused, exit 3 | Each sealed topic instance keeps a running digest while the log streams. | `rules.rs` `MAX_SEALED_TOPICS` |
 | Watched parameter name | 1 to 64 letters, digits, `_` | A parameter name pattern without `*`. | `rules.rs` `valid_param_name` |
 | Payload command id; source system id; source component id | 0 to 4,294,967,295; 0 to 255; 0 to 65,535 | 32, 8 and 16 bits in PX4 v1.17. | `rules.rs` `parse_payload_commands`, `parse_authorized_sources` |
 | Topic name | 1 to 64 lowercase letters, digits, `_` | The uORB rule. | `rules.rs` `valid_topic` |

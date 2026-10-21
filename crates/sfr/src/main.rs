@@ -63,12 +63,19 @@ fn shown(path: &Path) -> String {
     with_slashes(&path.display().to_string(), std::path::MAIN_SEPARATOR)
 }
 
+/// A path as a message shows it: control characters and newlines written out as markers
+/// ([`visible`]), so a name cannot start a line of its own or drive the terminal.
+pub(crate) fn vis(path: impl AsRef<Path>) -> String {
+    visible(&path.as_ref().display().to_string())
+}
+
 /// `text` with every `separator` replaced by `/`.
 fn with_slashes(text: &str, separator: char) -> String {
     text.replace(separator, "/")
 }
 
-/// Largest rules or baseline file read (real ones are a few kilobytes).
+/// Largest rules, baseline, key, public key, certificate, chain, trust anchor or CRL file read
+/// (real ones are a few kilobytes).
 const MAX_TEXT_BYTES: u64 = 16 * 1024 * 1024;
 
 const EVALUATION_LINE: &str = "EVALUATION KEY: not for operational use";
@@ -154,14 +161,24 @@ impl Args {
     }
 }
 
+/// A certificate or CRL file that could not be used: over the input limit exits 3, anything else 4.
+fn file_failure(e: certs::FileError) -> Failure {
+    let code = match e {
+        certs::FileError::Limit(_) => exit_code::MALFORMED_INPUT,
+        certs::FileError::Other(_) => exit_code::USAGE,
+    };
+    fail(code, e.to_string())
+}
+
 /// Reads at most `cap` bytes, without judging the length.
 fn read_capped(path: &str, what: &str, cap: u64) -> Result<Vec<u8>, Failure> {
+    let shown = visible(path);
     let file = File::open(path)
-        .map_err(|e| fail(exit_code::USAGE, format!("cannot read {what} {path}: {e}")))?;
+        .map_err(|e| fail(exit_code::USAGE, format!("cannot read {what} {shown}: {e}")))?;
     let mut buf = Vec::new();
     file.take(cap)
         .read_to_end(&mut buf)
-        .map_err(|e| fail(exit_code::USAGE, format!("cannot read {what} {path}: {e}")))?;
+        .map_err(|e| fail(exit_code::USAGE, format!("cannot read {what} {shown}: {e}")))?;
     Ok(buf)
 }
 
@@ -172,7 +189,8 @@ fn read_bytes(path: &str, what: &str, max: u64, code: i32) -> Result<Vec<u8>, Fa
         return Err(fail(
             code,
             format!(
-                "{what} {path}: {}",
+                "{what} {}: {}",
+                visible(path),
                 sfr_core::limit_exceeded("the file", max, "bytes")
             ),
         ));
@@ -188,7 +206,8 @@ fn read_text(path: &str, what: &str, code: i32) -> Result<String, Failure> {
         fail(
             code,
             format!(
-                "{what} {path}: not UTF-8 at byte offset {}",
+                "{what} {}: not UTF-8 at byte offset {}",
+                visible(path),
                 e.utf8_error().valid_up_to()
             ),
         )
@@ -231,6 +250,7 @@ fn hardware_key(uri: &str) -> Result<Box<dyn Signer>, Failure> {
 fn key_file_mode_warning(path: &str) -> Option<String> {
     #[cfg(unix)]
     {
+        let path = &visible(path);
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(path).ok()?.permissions().mode() & 0o777;
         if mode & 0o077 != 0 {
@@ -306,14 +326,14 @@ fn keygen(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Resul
         if p.exists() {
             return Err(fail(
                 exit_code::USAGE,
-                format!("{} exists; keygen never overwrites a key", p.display()),
+                format!("{} exists; keygen never overwrites a key", crate::vis(p)),
             ));
         }
     }
     std::fs::create_dir_all(&dir).map_err(|e| {
         fail(
             exit_code::USAGE,
-            format!("cannot create {}: {e}", dir.display()),
+            format!("cannot create {}: {e}", crate::vis(dir)),
         )
     })?;
     // The only randomness in the tool: a 32-byte Ed25519 seed from the operating system's CSPRNG.
@@ -339,7 +359,7 @@ fn keygen(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Resul
             .map_err(|e| {
                 fail(
                     exit_code::USAGE,
-                    format!("cannot write {}: {e}", path.display()),
+                    format!("cannot write {}: {e}", crate::vis(path)),
                 )
             })
     };
@@ -646,11 +666,12 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
     let signer_certificate = match a.value("--cert") {
         None => None,
         Some(path) => {
-            let mut certs = certs::read_certificates(path, "signer certificate")
-                .map_err(|e| fail(exit_code::USAGE, e))?;
+            let mut certs = certs::read_certificates(path, "signer certificate", MAX_TEXT_BYTES)
+                .map_err(file_failure)?;
             if certs.len() != 1 {
                 return Err(usage(format!(
-                    "--cert {path} holds {} certificates; give the signer's alone, intermediates with --chain",
+                    "--cert {} holds {} certificates; give the signer's alone, intermediates with --chain",
+                    visible(path),
                     certs.len()
                 )));
             }
@@ -659,8 +680,8 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
     };
     let certificate_chain = match a.value("--chain") {
         None => Vec::new(),
-        Some(path) => certs::read_certificates(path, "certificate chain")
-            .map_err(|e| fail(exit_code::USAGE, e))?,
+        Some(path) => certs::read_certificates(path, "certificate chain", MAX_TEXT_BYTES)
+            .map_err(file_failure)?,
     };
     // The key source is checked before any work, so a usage error costs nothing.
     if a.value("--key-uri").is_some() && a.value("--key").is_some() {
@@ -689,11 +710,11 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         }
         let der = Zeroizing::new(
             pem_decode(&text, "PRIVATE KEY")
-                .map_err(|e| fail(exit_code::USAGE, format!("key file {path}: {e}")))?,
+                .map_err(|e| fail(exit_code::USAGE, format!("key file {}: {e}", visible(path))))?,
         );
         Some(Box::new(
             FileKey::from_pkcs8_der(&der, &file_name(path))
-                .map_err(|e| fail(exit_code::USAGE, format!("key file {path}: {e}")))?,
+                .map_err(|e| fail(exit_code::USAGE, format!("key file {}: {e}", visible(path))))?,
         ))
     } else {
         return Err(fail(
@@ -720,7 +741,9 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         return Err(fail(
             exit_code::USAGE,
             format!(
-                "log {log}: the record would be named {stem}.sfr, and `{name}` is a device name on Windows, where the record and its report could not be copied; rename the log"
+                "log {}: the record would be named {}.sfr, and `{name}` is a device name on Windows, where the record and its report could not be copied; rename the log",
+                visible(&log),
+                visible(&stem)
             ),
         ));
     }
@@ -738,7 +761,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
                     exit_code::USAGE,
                     format!(
                         "{} exists; seal never overwrites a record or its report",
-                        path.display()
+                        crate::vis(path)
                     ),
                 ));
             }
@@ -746,7 +769,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             Err(e) => {
                 return Err(fail(
                     exit_code::USAGE,
-                    format!("cannot check {}: {e}; nothing written", path.display()),
+                    format!("cannot check {}: {e}; nothing written", crate::vis(path)),
                 ));
             }
         }
@@ -754,42 +777,47 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
 
     let rules_text = read_text(rules_path, "rules file", exit_code::MALFORMED_INPUT)?;
     let rules: Rules = parse_rules(&rules_text).map_err(|e| {
-        let code = if e.usage {
-            exit_code::USAGE
-        } else {
-            exit_code::MALFORMED_INPUT
-        };
-        fail(code, format!("rules file {rules_path}: {e}"))
+        fail(
+            exit_code::MALFORMED_INPUT,
+            format!("rules file {}: {e}", visible(rules_path)),
+        )
     })?;
     let baseline_text = read_text(baseline_path, "baseline", exit_code::MALFORMED_INPUT)?;
     if rules.ignores_everything() && !a.flag("--allow-ignore-all") {
         return Err(fail(
             exit_code::USAGE,
             format!(
-                "rules file {rules_path}: its ignore patterns match every parameter name, so R3 would compare none; \
-                 nothing written. To seal it anyway, add --allow-ignore-all: the record and its report will say so"
+                "rules file {}: its ignore patterns match every parameter name, so R3 would compare none; \
+                 nothing written. To seal it anyway, add --allow-ignore-all: the record and its report will say so",
+                visible(rules_path)
             ),
         ));
     }
     let mut baseline: Baseline = parse_baseline(&baseline_text).map_err(|e| {
         fail(
             exit_code::MALFORMED_INPUT,
-            format!("baseline {baseline_path}: {e}"),
+            format!("baseline {}: {e}", visible(baseline_path)),
         )
     })?;
     baseline.sha256 = Some(crypto.sha256(baseline_text.as_bytes()));
-    let mut file = File::open(&log)
-        .map_err(|e| fail(exit_code::USAGE, format!("cannot open log {log}: {e}")))?;
+    let log_shown = visible(&log);
+    let mut file = File::open(&log).map_err(|e| {
+        fail(
+            exit_code::USAGE,
+            format!("cannot open log {log_shown}: {e}"),
+        )
+    })?;
     let ing = Px4Ingestor
         .ingest_sealing(&file_name(&log), &mut file, crypto, &rules.sealed_topics)
         .map_err(|e| match e {
             IngestError::Malformed(m) => {
-                fail(exit_code::MALFORMED_INPUT, format!("log {log}: {m}"))
+                fail(exit_code::MALFORMED_INPUT, format!("log {log_shown}: {m}"))
             }
-            IngestError::Io(m) => fail(exit_code::USAGE, format!("log {log}: {m}")),
-            limit @ IngestError::Limit(_) => {
-                fail(exit_code::MALFORMED_INPUT, format!("log {log}: {limit}"))
-            }
+            IngestError::Io(m) => fail(exit_code::USAGE, format!("log {log_shown}: {m}")),
+            limit @ IngestError::Limit(_) => fail(
+                exit_code::MALFORMED_INPUT,
+                format!("log {log_shown}: {limit}"),
+            ),
         })?;
     let eval = evaluate(&ing, &rules, &baseline);
     // seal.allow_untested_version is true only for a log sealed because of the flag.
@@ -823,7 +851,10 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
         let _ = writeln!(
             io::stderr().lock(),
             "{}",
-            terminal_safe(&format!("sfr: note: log {log}: {}", t.line()))
+            terminal_safe(&format!(
+                "sfr: note: log {log_shown}: {}",
+                visible(&t.line())
+            ))
         );
     }
 
@@ -880,13 +911,13 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
     check_record_size(sealed.bytes.len()).map_err(|e| {
         fail(
             exit_code::MALFORMED_INPUT,
-            format!("log {log}: the record it gives is refused: {e}"),
+            format!("log {log_shown}: the record it gives is refused: {e}"),
         )
     })?;
     std::fs::create_dir_all(&out_dir).map_err(|e| {
         fail(
             exit_code::USAGE,
-            format!("cannot create {}: {e}", out_dir.display()),
+            format!("cannot create {}: {e}", crate::vis(out_dir)),
         )
     })?;
     // The report comes from the record alone (SPEC B1.8): the bytes just sealed, parsed back.
@@ -927,7 +958,7 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
             exit_code::USAGE,
             format!(
                 "cannot write {}: {e}; seal wrote neither the record nor the report",
-                path.display()
+                crate::vis(path)
             ),
         ));
     }
@@ -1134,7 +1165,7 @@ fn verify_cmd(
             if !Path::new(p).is_file() {
                 return Err(fail(
                     exit_code::USAGE,
-                    format!("cannot read report {p}: not a file"),
+                    format!("cannot read report {}: not a file", visible(p)),
                 ));
             }
             Some(p.to_string())
@@ -1163,7 +1194,12 @@ fn verify_cmd(
             }
             Some(Trust::PublicKey(
                 parse_public_key_pem(&read_text(pub_path, "public key", exit_code::USAGE)?)
-                    .map_err(|e| fail(exit_code::USAGE, format!("public key {pub_path}: {e}")))?,
+                    .map_err(|e| {
+                        fail(
+                            exit_code::USAGE,
+                            format!("public key {}: {e}", visible(pub_path)),
+                        )
+                    })?,
             ))
         }
         (None, Some(anchor_path)) => {
@@ -1185,23 +1221,27 @@ fn verify_cmd(
                     "sfr: warning: --no-crl-check: revocation is NOT checked, so a record signed with a revoked certificate would verify"
                 );
             }
-            let anchors = certs::read_certificates(anchor_path, "trust anchor")
-                .map_err(|e| fail(exit_code::USAGE, e))?;
+            let anchors = certs::read_certificates(anchor_path, "trust anchor", MAX_TEXT_BYTES)
+                .map_err(file_failure)?;
             for der in &anchors {
                 certs::check_anchor_der(der).map_err(|e| {
-                    fail(exit_code::USAGE, format!("trust anchor {anchor_path}: {e}"))
+                    fail(
+                        exit_code::USAGE,
+                        format!("trust anchor {}: {e}", visible(anchor_path)),
+                    )
                 })?;
             }
             // Each CRL is read as it is loaded, so a refusal names its file.
             let crls = crl_paths
                 .iter()
                 .map(|p| {
-                    let der = certs::read_crl(p)?;
-                    certs::check_crl_der(&der).map_err(|e| format!("CRL {p}: {e}"))?;
+                    let der = certs::read_crl(p, MAX_TEXT_BYTES)?;
+                    certs::check_crl_der(&der)
+                        .map_err(|e| certs::FileError::Other(format!("CRL {}: {e}", visible(p))))?;
                     Ok(der)
                 })
-                .collect::<Result<Vec<_>, String>>()
-                .map_err(|e| fail(exit_code::USAGE, e))?;
+                .collect::<Result<Vec<_>, certs::FileError>>()
+                .map_err(file_failure)?;
             Some(Trust::Anchors {
                 anchors,
                 crls,
@@ -1254,10 +1294,12 @@ fn verify_cmd(
             }),
     };
     let mut log_file = match a.value("--ulog") {
-        Some(p) => Some(
-            File::open(p)
-                .map_err(|e| fail(exit_code::USAGE, format!("cannot open log {p}: {e}")))?,
-        ),
+        Some(p) => Some(File::open(p).map_err(|e| {
+            fail(
+                exit_code::USAGE,
+                format!("cannot open log {}: {e}", visible(p)),
+            )
+        })?),
         None => None,
     };
     let deep = log_file.is_some();
@@ -1327,7 +1369,7 @@ fn verify_cmd(
                     // A finding about the anchor names the file it came from.
                     first: match a.value("--trust-anchor") {
                         Some(path) if e.starts_with("the trust anchor ") => {
-                            format!("certificate chain: {e} (from {path})")
+                            format!("certificate chain: {e} (from {})", visible(path))
                         }
                         _ => format!("certificate chain: {e}"),
                     },
@@ -1365,11 +1407,21 @@ fn verify_cmd(
     // report a reader has in front of them. Only --no-report skips it.
     let outcome = match (outcome, &report_path) {
         (Ok((v, chain)), Some(path)) => {
-            let report = read_capped(path, "report", MAX_RECORD_BYTES as u64)?;
-            match sfr_core::report::check(&record, &report) {
+            let report = read_capped(path, "report", MAX_RECORD_BYTES as u64 + 1)?;
+            // A report longer than any record can render is refused, never cut and compared.
+            let checked = if report.len() > MAX_RECORD_BYTES {
+                Err(sfr_core::limit_exceeded(
+                    "the file",
+                    MAX_RECORD_BYTES,
+                    "bytes",
+                ))
+            } else {
+                sfr_core::report::check(&record, &report).map_err(|e| e.to_string())
+            };
+            match checked {
                 Ok(()) => Ok((v, chain, Some(path.as_str()))),
                 Err(e) => Err(VerifyError::Mismatch(Mismatch {
-                    first: format!("report {path}: {e}"),
+                    first: format!("report {}: {e}", visible(path)),
                     also: Vec::new(),
                     custody: Some(v.custody),
                 })),
@@ -1380,7 +1432,7 @@ fn verify_cmd(
             first: format!(
                 "report: no report found beside the record: expected {}. A verified record whose report was not checked proves nothing about the report you read. Give the report with --report <file>, or verify the record alone with --no-report",
                 if record_path.ends_with(".sfr") {
-                    format!("{record_path}.md")
+                    format!("{}.md", visible(&record_path))
                 } else {
                     "<record>.sfr.md (the record's name does not end in .sfr, so it cannot be found by name)".to_string()
                 }

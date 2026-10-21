@@ -454,6 +454,30 @@ fn certificate_names(der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((issuer.to_vec(), subject.to_vec()))
 }
 
+/// Whether the certificate's signature verifies under its own public key. The names do not say:
+/// a CA can carry its issuer's name as its own subject and still be signed by another key.
+fn is_self_signed(der: &[u8]) -> bool {
+    let Some((_, certificate, _)) = element(der) else {
+        return false;
+    };
+    let Some((tbs, rest)) = whole_element(certificate) else {
+        return false;
+    };
+    let Some((_, _, rest)) = element(rest) else {
+        return false;
+    };
+    // signatureValue: a BIT STRING with no unused bits.
+    let Some((0x03, bits, _)) = element(rest) else {
+        return false;
+    };
+    let Some((&0, signature)) = bits.split_first() else {
+        return false;
+    };
+    let der = CertificateDer::from(der);
+    EndEntityCert::try_from(&der)
+        .is_ok_and(|cert| cert.verify_signature(&Ed25519, tbs, signature).is_ok())
+}
+
 /// What `verify` reads of a CRL besides its signature, which webpki checks (RFC 5280 section 5.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrlInfo {
@@ -724,31 +748,72 @@ impl SignatureVerificationAlgorithm for Ed25519 {
 
 static ALGORITHMS: &[&dyn SignatureVerificationAlgorithm] = &[&Ed25519];
 
-/// Certificates from a file: every PEM `CERTIFICATE` block, or one DER certificate.
-pub fn read_certificates(path: &str, what: &str) -> Result<Vec<Vec<u8>>, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("cannot read {what} {path}: {e}"))?;
+/// Why a certificate or CRL file could not be used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileError {
+    /// The file is longer than the input limit (SPEC B1.4, exit 3).
+    Limit(String),
+    /// Anything else: unreadable, or not what it should be (exit 4).
+    Other(String),
+}
+
+impl std::fmt::Display for FileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (Self::Limit(m) | Self::Other(m)) = self;
+        f.write_str(m)
+    }
+}
+
+/// The whole file, if it is at most `max` bytes; a longer one is refused, never cut.
+fn read_limited(path: &str, what: &str, max: u64) -> Result<Vec<u8>, FileError> {
+    use std::io::Read;
+    let shown = sfr_core::display::visible(path);
+    let other = |e: std::io::Error| FileError::Other(format!("cannot read {what} {shown}: {e}"));
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(other)?
+        .take(max.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(other)?;
+    if bytes.len() as u64 > max {
+        return Err(FileError::Limit(format!(
+            "{what} {shown}: {}",
+            sfr_core::limit_exceeded("the file", max, "bytes")
+        )));
+    }
+    Ok(bytes)
+}
+
+/// Certificates from a file of at most `max` bytes: every PEM `CERTIFICATE` block, or one DER
+/// certificate.
+pub fn read_certificates(path: &str, what: &str, max: u64) -> Result<Vec<Vec<u8>>, FileError> {
+    let shown = sfr_core::display::visible(path);
+    let bytes = read_limited(path, what, max)?;
     if bytes.first() == Some(&0x30) {
         return Ok(vec![bytes]);
     }
-    let text =
-        String::from_utf8(bytes).map_err(|_| format!("{what} {path} is neither PEM nor DER"))?;
-    pem_decode_all(&text, "CERTIFICATE").map_err(|e| format!("{what} {path}: {e}"))
+    let text = String::from_utf8(bytes)
+        .map_err(|_| FileError::Other(format!("{what} {shown} is neither PEM nor DER")))?;
+    pem_decode_all(&text, "CERTIFICATE")
+        .map_err(|e| FileError::Other(format!("{what} {shown}: {e}")))
 }
 
-/// A CRL from a file: a PEM `X509 CRL` block, or DER.
-pub fn read_crl(path: &str) -> Result<Vec<u8>, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("cannot read CRL {path}: {e}"))?;
+/// A CRL from a file of at most `max` bytes: a PEM `X509 CRL` block, or DER.
+pub fn read_crl(path: &str, max: u64) -> Result<Vec<u8>, FileError> {
+    let shown = sfr_core::display::visible(path);
+    let bytes = read_limited(path, "CRL", max)?;
     if bytes.first() == Some(&0x30) {
         return Ok(bytes);
     }
-    let text =
-        String::from_utf8(bytes).map_err(|_| format!("CRL {path} is neither PEM nor DER"))?;
-    let mut blocks = pem_decode_all(&text, "X509 CRL").map_err(|e| format!("CRL {path}: {e}"))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| FileError::Other(format!("CRL {shown} is neither PEM nor DER")))?;
+    let mut blocks = pem_decode_all(&text, "X509 CRL")
+        .map_err(|e| FileError::Other(format!("CRL {shown}: {e}")))?;
     if blocks.len() != 1 {
-        return Err(format!(
-            "CRL {path} holds {} CRLs; give one per --crl",
+        return Err(FileError::Other(format!(
+            "CRL {shown} holds {} CRLs; give one per --crl",
             blocks.len()
-        ));
+        )));
     }
     Ok(blocks.remove(0))
 }
@@ -972,9 +1037,10 @@ pub fn check_chain(
     policy: &ChainPolicy,
 ) -> Result<ChainOk, String> {
     let mode = policy.crl_check;
-    // A trust anchor that is not its own issuer is an intermediate CA: a chain that stops there
+    // A trust anchor that its own key did not sign is an intermediate CA: a chain that stops there
     // leaves everything above it unchecked, so it needs --allow-partial-chain.
-    let intermediate_anchor = |der: &[u8]| certificate_names(der).is_some_and(|(i, s)| i != s);
+    // The names are not enough: it is a root only if its own key signed it.
+    let intermediate_anchor = |der: &[u8]| !is_self_signed(der);
     if !policy.allow_partial_chain
         && let Some(a) = anchors.iter().find(|a| intermediate_anchor(a))
     {
@@ -1227,10 +1293,13 @@ mod tests {
 
     /// The DER of a CRL in `testdata/pki/`.
     fn crl(name: &str) -> Vec<u8> {
-        read_crl(&format!(
-            "{}/../../testdata/pki/{name}.crl",
-            env!("CARGO_MANIFEST_DIR")
-        ))
+        read_crl(
+            &format!(
+                "{}/../../testdata/pki/{name}.crl",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+            1 << 20,
+        )
         .unwrap()
     }
 
