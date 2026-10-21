@@ -58,7 +58,7 @@ Every input except the log's total size is bounded by the limits below, and an i
 | Log: parameters at log start | 65,536 |
 | Log: events (B1.5) | 100,000 |
 | Log: data records kept for the rules (`MAX_KEPT_ROWS`, the records of the topics a rule reads) | 8,000,000 |
-| Rules file, baseline, key file, public key | 16 MiB (16,777,216 bytes) each |
+| Rules file, baseline, key file, public key, signer certificate, certificate chain, trust anchor file, CRL file | 16 MiB (16,777,216 bytes) each |
 | Rules: `required_topics.topics`, `parameters.ignore`, `watched_parameters.names`, `payload_commands.ids`, `authorized_sources.sources` | 256 entries each |
 | Rules: `sealed_topics.topics` | 64 entries; more is refused (exit 3) |
 | Rules: watched parameter name | 1 to 64 letters, digits, `_` |

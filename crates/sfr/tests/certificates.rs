@@ -1043,6 +1043,89 @@ fn a_past_verification_time_needs_its_flag_and_says_so_first() {
     );
 }
 
+/// Every certificate, chain, trust anchor and CRL file is read up to the same 16 MiB as the rules
+/// file; a longer one is refused as over an input limit (exit 3), not cut and not read whole.
+#[test]
+fn a_certificate_chain_anchor_or_crl_file_over_the_limit_is_refused() {
+    let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let dir = scratch();
+    let big = dir.join("big.pem");
+    let mut bytes = vec![b'#'; 16 * 1024 * 1024 + 1];
+    bytes.push(b'\n');
+    std::fs::write(&big, &bytes).unwrap();
+    let big = big.to_str().unwrap();
+    let limit = "the file exceeds the input limit of 16777216 bytes (SPEC B1.4)";
+    let key = key_file(SIGNER);
+    let out = key.parent().unwrap().join("out2");
+    for (flag, label) in [
+        ("--cert", "signer certificate"),
+        ("--chain", "certificate chain"),
+    ] {
+        let mut args = vec![
+            "seal",
+            LOG,
+            "--rules",
+            RULES,
+            "--baseline",
+            BASELINE,
+            "--key",
+            key.to_str().unwrap(),
+            "--evaluation-only",
+            "--out",
+            out.to_str().unwrap(),
+        ];
+        let signer = pki("signer.pem");
+        if flag == "--chain" {
+            args.extend(["--cert", signer.as_str()]);
+        }
+        args.extend([flag, big]);
+        let o = sfr(&args);
+        assert_eq!(o.status.code(), Some(3), "{flag}: {}", text(&o));
+        assert!(
+            text(&o).contains(label) && text(&o).contains(limit),
+            "{flag}: {}",
+            text(&o)
+        );
+    }
+    let rec = record.to_str().unwrap();
+    let (root_pem, root_crl, inter_crl) = (pki("root.pem"), pki("root.crl"), pki("inter.crl"));
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        rec,
+        "--trust-anchor",
+        big,
+        "--crl",
+        &root_crl,
+        "--crl",
+        &inter_crl,
+    ]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+    assert!(
+        text(&o).contains("trust anchor") && text(&o).contains(limit),
+        "{}",
+        text(&o)
+    );
+    let o = sfr(&[
+        "verify",
+        "--allow-evaluation-key",
+        rec,
+        "--trust-anchor",
+        &root_pem,
+        "--crl",
+        &root_crl,
+        "--crl",
+        big,
+    ]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+    assert!(
+        text(&o).contains("CRL") && text(&o).contains(limit),
+        "{}",
+        text(&o)
+    );
+}
+
 /// A CA whose issuer and subject names are the same but that another key signed is an
 /// intermediate, not a root: as an anchor it needs --allow-partial-chain.
 #[test]

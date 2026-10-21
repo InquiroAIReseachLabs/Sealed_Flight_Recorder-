@@ -68,7 +68,8 @@ fn with_slashes(text: &str, separator: char) -> String {
     text.replace(separator, "/")
 }
 
-/// Largest rules or baseline file read (real ones are a few kilobytes).
+/// Largest rules, baseline, key, public key, certificate, chain, trust anchor or CRL file read
+/// (real ones are a few kilobytes).
 const MAX_TEXT_BYTES: u64 = 16 * 1024 * 1024;
 
 const EVALUATION_LINE: &str = "EVALUATION KEY: not for operational use";
@@ -152,6 +153,15 @@ impl Args {
             _ => Err(usage(format!("more than one {what} given"))),
         }
     }
+}
+
+/// A certificate or CRL file that could not be used: over the input limit exits 3, anything else 4.
+fn file_failure(e: certs::FileError) -> Failure {
+    let code = match e {
+        certs::FileError::Limit(_) => exit_code::MALFORMED_INPUT,
+        certs::FileError::Other(_) => exit_code::USAGE,
+    };
+    fail(code, e.to_string())
 }
 
 /// Reads at most `cap` bytes, without judging the length.
@@ -646,8 +656,8 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
     let signer_certificate = match a.value("--cert") {
         None => None,
         Some(path) => {
-            let mut certs = certs::read_certificates(path, "signer certificate")
-                .map_err(|e| fail(exit_code::USAGE, e))?;
+            let mut certs = certs::read_certificates(path, "signer certificate", MAX_TEXT_BYTES)
+                .map_err(file_failure)?;
             if certs.len() != 1 {
                 return Err(usage(format!(
                     "--cert {path} holds {} certificates; give the signer's alone, intermediates with --chain",
@@ -659,8 +669,8 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
     };
     let certificate_chain = match a.value("--chain") {
         None => Vec::new(),
-        Some(path) => certs::read_certificates(path, "certificate chain")
-            .map_err(|e| fail(exit_code::USAGE, e))?,
+        Some(path) => certs::read_certificates(path, "certificate chain", MAX_TEXT_BYTES)
+            .map_err(file_failure)?,
     };
     // The key source is checked before any work, so a usage error costs nothing.
     if a.value("--key-uri").is_some() && a.value("--key").is_some() {
@@ -1183,8 +1193,8 @@ fn verify_cmd(
                     "sfr: warning: --no-crl-check: revocation is NOT checked, so a record signed with a revoked certificate would verify"
                 );
             }
-            let anchors = certs::read_certificates(anchor_path, "trust anchor")
-                .map_err(|e| fail(exit_code::USAGE, e))?;
+            let anchors = certs::read_certificates(anchor_path, "trust anchor", MAX_TEXT_BYTES)
+                .map_err(file_failure)?;
             for der in &anchors {
                 certs::check_anchor_der(der).map_err(|e| {
                     fail(exit_code::USAGE, format!("trust anchor {anchor_path}: {e}"))
@@ -1194,12 +1204,13 @@ fn verify_cmd(
             let crls = crl_paths
                 .iter()
                 .map(|p| {
-                    let der = certs::read_crl(p)?;
-                    certs::check_crl_der(&der).map_err(|e| format!("CRL {p}: {e}"))?;
+                    let der = certs::read_crl(p, MAX_TEXT_BYTES)?;
+                    certs::check_crl_der(&der)
+                        .map_err(|e| certs::FileError::Other(format!("CRL {p}: {e}")))?;
                     Ok(der)
                 })
-                .collect::<Result<Vec<_>, String>>()
-                .map_err(|e| fail(exit_code::USAGE, e))?;
+                .collect::<Result<Vec<_>, certs::FileError>>()
+                .map_err(file_failure)?;
             Some(Trust::Anchors {
                 anchors,
                 crls,
@@ -1363,8 +1374,18 @@ fn verify_cmd(
     // report a reader has in front of them. Only --no-report skips it.
     let outcome = match (outcome, &report_path) {
         (Ok((v, chain)), Some(path)) => {
-            let report = read_capped(path, "report", MAX_RECORD_BYTES as u64)?;
-            match sfr_core::report::check(&record, &report) {
+            let report = read_capped(path, "report", MAX_RECORD_BYTES as u64 + 1)?;
+            // A report longer than any record can render is refused, never cut and compared.
+            let checked = if report.len() > MAX_RECORD_BYTES {
+                Err(sfr_core::limit_exceeded(
+                    "the file",
+                    MAX_RECORD_BYTES,
+                    "bytes",
+                ))
+            } else {
+                sfr_core::report::check(&record, &report).map_err(|e| e.to_string())
+            };
+            match checked {
                 Ok(()) => Ok((v, chain, Some(path.as_str()))),
                 Err(e) => Err(VerifyError::Mismatch(Mismatch {
                     first: format!("report {path}: {e}"),

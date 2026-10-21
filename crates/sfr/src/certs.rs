@@ -748,31 +748,69 @@ impl SignatureVerificationAlgorithm for Ed25519 {
 
 static ALGORITHMS: &[&dyn SignatureVerificationAlgorithm] = &[&Ed25519];
 
-/// Certificates from a file: every PEM `CERTIFICATE` block, or one DER certificate.
-pub fn read_certificates(path: &str, what: &str) -> Result<Vec<Vec<u8>>, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("cannot read {what} {path}: {e}"))?;
+/// Why a certificate or CRL file could not be used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileError {
+    /// The file is longer than the input limit (SPEC B1.4, exit 3).
+    Limit(String),
+    /// Anything else: unreadable, or not what it should be (exit 4).
+    Other(String),
+}
+
+impl std::fmt::Display for FileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (Self::Limit(m) | Self::Other(m)) = self;
+        f.write_str(m)
+    }
+}
+
+/// The whole file, if it is at most `max` bytes; a longer one is refused, never cut.
+fn read_limited(path: &str, what: &str, max: u64) -> Result<Vec<u8>, FileError> {
+    use std::io::Read;
+    let other = |e: std::io::Error| FileError::Other(format!("cannot read {what} {path}: {e}"));
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(other)?
+        .take(max.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(other)?;
+    if bytes.len() as u64 > max {
+        return Err(FileError::Limit(format!(
+            "{what} {path}: {}",
+            sfr_core::limit_exceeded("the file", max, "bytes")
+        )));
+    }
+    Ok(bytes)
+}
+
+/// Certificates from a file of at most `max` bytes: every PEM `CERTIFICATE` block, or one DER
+/// certificate.
+pub fn read_certificates(path: &str, what: &str, max: u64) -> Result<Vec<Vec<u8>>, FileError> {
+    let bytes = read_limited(path, what, max)?;
     if bytes.first() == Some(&0x30) {
         return Ok(vec![bytes]);
     }
-    let text =
-        String::from_utf8(bytes).map_err(|_| format!("{what} {path} is neither PEM nor DER"))?;
-    pem_decode_all(&text, "CERTIFICATE").map_err(|e| format!("{what} {path}: {e}"))
+    let text = String::from_utf8(bytes)
+        .map_err(|_| FileError::Other(format!("{what} {path} is neither PEM nor DER")))?;
+    pem_decode_all(&text, "CERTIFICATE")
+        .map_err(|e| FileError::Other(format!("{what} {path}: {e}")))
 }
 
-/// A CRL from a file: a PEM `X509 CRL` block, or DER.
-pub fn read_crl(path: &str) -> Result<Vec<u8>, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("cannot read CRL {path}: {e}"))?;
+/// A CRL from a file of at most `max` bytes: a PEM `X509 CRL` block, or DER.
+pub fn read_crl(path: &str, max: u64) -> Result<Vec<u8>, FileError> {
+    let bytes = read_limited(path, "CRL", max)?;
     if bytes.first() == Some(&0x30) {
         return Ok(bytes);
     }
-    let text =
-        String::from_utf8(bytes).map_err(|_| format!("CRL {path} is neither PEM nor DER"))?;
-    let mut blocks = pem_decode_all(&text, "X509 CRL").map_err(|e| format!("CRL {path}: {e}"))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| FileError::Other(format!("CRL {path} is neither PEM nor DER")))?;
+    let mut blocks = pem_decode_all(&text, "X509 CRL")
+        .map_err(|e| FileError::Other(format!("CRL {path}: {e}")))?;
     if blocks.len() != 1 {
-        return Err(format!(
+        return Err(FileError::Other(format!(
             "CRL {path} holds {} CRLs; give one per --crl",
             blocks.len()
-        ));
+        )));
     }
     Ok(blocks.remove(0))
 }
@@ -1252,10 +1290,13 @@ mod tests {
 
     /// The DER of a CRL in `testdata/pki/`.
     fn crl(name: &str) -> Vec<u8> {
-        read_crl(&format!(
-            "{}/../../testdata/pki/{name}.crl",
-            env!("CARGO_MANIFEST_DIR")
-        ))
+        read_crl(
+            &format!(
+                "{}/../../testdata/pki/{name}.crl",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+            1 << 20,
+        )
         .unwrap()
     }
 

@@ -15,9 +15,11 @@ A message for a name, version or length rule ends with a parenthesis that states
 
 | Command | Input | Exit code |
 |---|---|---|
-| `seal` | log, rules file (also one with more than 64 sealed topics), baseline; a log whose record would be over the record limit (`--dry-run` writes no record and does not apply that limit) | 3 |
+| `seal` | log, rules file (also one with more than 64 sealed topics), baseline, signer certificate, certificate chain; a log whose record would be over the record limit (`--dry-run` writes no record and does not apply that limit) | 3 |
 | `seal` | key file | 4 |
 | `verify` | public key | 4 |
+| `verify` | trust anchor file, CRL file | 3 |
+| `verify` | report longer than the record limit | 1 (a mismatch) |
 | `verify` | record, or the log given with `--ulog` | 1 (verification failed) |
 
 ## The limits
@@ -38,7 +40,7 @@ A message for a name, version or length rule ends with a parenthesis that states
 | Parameters at log start; baseline parameters | 65,536 | Bounds the parameter table. | `ingest.rs` with `params.rs` `MAX_PARAMS` |
 | Events | 100,000 | A log where a failsafe toggles on every row could otherwise exhaust memory. Well above the 10,000 events at which SPEC B1.10 measures verify. | `events.rs` `MAX_EVENTS` |
 | Data records kept for the rules | 8,000,000 | Each record of a topic a rule reads is kept as a row until the rules run; every other record is only counted. The golden flights keep 120 to 145 a second, so this is about 15 hours of flight. Measured on x86_64 with a log of nothing but `vehicle_status` and `failsafe_flags` samples, the costliest rows: 89 MB peak for 100 MB, 343 MB for 400 MB, 598 MB with 7,999,981 kept records (700 MB), and one record more is refused (exit 3). A 100 MB or 400 MB log of the golden flight's mix peaks at 7 MB or 14 MB. | `ingest.rs` `MAX_KEPT_ROWS` |
-| Rules file, baseline, key file, public key | 16 MiB each | Stops `sfr` reading an unbounded file into memory. | `sfr/src/main.rs` `MAX_TEXT_BYTES` |
+| Rules file, baseline, key file, public key, signer certificate, certificate chain, trust anchor file, CRL file | 16 MiB each; a longer file is refused, not cut (exit 3 for a rules file, baseline, certificate, chain, anchor or CRL, exit 4 for a key) | Stops `sfr` reading an unbounded file into memory. | `sfr/src/main.rs` `MAX_TEXT_BYTES` |
 | `required_topics.topics`, `parameters.ignore`, `watched_parameters.names`, `payload_commands.ids`, `authorized_sources.sources` | 256 entries each | Bounds the work per log. | `rules.rs` `MAX_LIST_ENTRIES` |
 | `sealed_topics.topics` | 64 entries; more is refused, exit 3 | Each sealed topic instance keeps a running digest while the log streams. | `rules.rs` `MAX_SEALED_TOPICS` |
 | Watched parameter name | 1 to 64 letters, digits, `_` | A parameter name pattern without `*`. | `rules.rs` `valid_param_name` |
