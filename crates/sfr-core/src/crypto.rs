@@ -118,6 +118,9 @@ pub trait Signer {
     fn label(&self) -> String;
     /// Signs `message`.
     fn sign(&self, message: &[u8]) -> Result<[u8; 64], SignError>;
+    /// Called as soon as the one signature of a run is made: a signer that holds a secret in
+    /// this process clears it, and signs no more.
+    fn wipe(&self) {}
 }
 
 /// `sha2`, `ed25519-dalek`, and `blake3`: the one backend of every build.
@@ -174,7 +177,10 @@ pub mod rustcrypto {
     /// (custody `file-evaluation`), or a seed just unsealed from a TPM (custody `tpm-sealed`,
     /// [`FileKey::unsealed_from_tpm`]).
     pub struct FileKey {
-        key: ed25519_dalek::SigningKey,
+        /// The seed; cleared by [`Signer::wipe`]. A signing key is made from it for each
+        /// signature and dropped (zeroized) with it.
+        seed: std::sync::Mutex<zeroize::Zeroizing<[u8; 32]>>,
+        public: [u8; 32],
         label: String,
         custody: Custody,
     }
@@ -191,15 +197,18 @@ pub mod rustcrypto {
         /// A key from its 32-byte seed (RFC 8032 private key).
         pub fn from_seed(seed: &[u8; 32], label: &str) -> FileKey {
             FileKey {
-                key: ed25519_dalek::SigningKey::from_bytes(seed),
+                seed: std::sync::Mutex::new(zeroize::Zeroizing::new(*seed)),
+                public: ed25519_dalek::SigningKey::from_bytes(seed)
+                    .verifying_key()
+                    .to_bytes(),
                 label: label.to_string(),
                 custody: Custody::FileEvaluation,
             }
         }
 
         /// A seed that a TPM 2.0 has just unsealed (custody `tpm-sealed`): the seed rests sealed
-        /// to that TPM and is in this process's memory for one signature. `ed25519-dalek`
-        /// zeroizes it when the key is dropped.
+        /// to that TPM and is in this process's memory until the one signature is made
+        /// ([`Signer::wipe`]).
         pub fn unsealed_from_tpm(seed: &[u8; 32], label: &str) -> FileKey {
             FileKey {
                 custody: Custody::TpmSealed,
@@ -224,7 +233,7 @@ pub mod rustcrypto {
 
     impl Signer for FileKey {
         fn public_key(&self) -> [u8; 32] {
-            self.key.verifying_key().to_bytes()
+            self.public
         }
         fn custody(&self) -> Custody {
             self.custody
@@ -234,7 +243,33 @@ pub mod rustcrypto {
         }
         fn sign(&self, message: &[u8]) -> Result<[u8; 64], SignError> {
             use ed25519_dalek::Signer as _;
-            Ok(self.key.sign(message).to_bytes())
+            let seed = self
+                .seed
+                .lock()
+                .map_err(|_| SignError("the signing key is not available".into()))?;
+            if seed.iter().all(|b| *b == 0) {
+                return Err(SignError(
+                    "the signing key was cleared after its signature".into(),
+                ));
+            }
+            // Dropped, and so zeroized by ed25519-dalek, when this call returns.
+            let key = ed25519_dalek::SigningKey::from_bytes(&seed);
+            Ok(key.sign(message).to_bytes())
+        }
+        fn wipe(&self) {
+            use zeroize::Zeroize as _;
+            if let Ok(mut seed) = self.seed.lock() {
+                seed.zeroize();
+            }
+        }
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::expect_used)]
+    impl FileKey {
+        /// The seed bytes held now.
+        pub(crate) fn seed_bytes(&self) -> [u8; 32] {
+            **self.seed.lock().expect("seed lock")
         }
     }
 }
@@ -282,11 +317,21 @@ pub(crate) mod test_backend {
     }
 
     /// A deterministic test key.
-    pub(crate) struct TestKey(pub(crate) ed25519_dalek::SigningKey);
+    pub(crate) struct TestKey(
+        pub(crate) ed25519_dalek::SigningKey,
+        pub(crate) std::cell::Cell<bool>,
+    );
 
     impl TestKey {
         pub(crate) fn new(seed: u8) -> TestKey {
-            TestKey(ed25519_dalek::SigningKey::from_bytes(&[seed; 32]))
+            TestKey(
+                ed25519_dalek::SigningKey::from_bytes(&[seed; 32]),
+                std::cell::Cell::new(false),
+            )
+        }
+        /// Whether [`Signer::wipe`] has been called.
+        pub(crate) fn wiped(&self) -> bool {
+            self.1.get()
         }
     }
 
@@ -303,6 +348,9 @@ pub(crate) mod test_backend {
         fn sign(&self, message: &[u8]) -> Result<[u8; 64], SignError> {
             use ed25519_dalek::Signer as _;
             Ok(self.0.sign(message).to_bytes())
+        }
+        fn wipe(&self) {
+            self.1.set(true);
         }
     }
 }
@@ -396,6 +444,19 @@ mod tests {
         let err = FileKey::from_pkcs8_der(&v2, "v2").expect_err("mismatch refused");
         assert!(err.0.contains("does not match"), "{err}");
         assert!(FileKey::from_pkcs8_der(b"junk", "x").is_err());
+    }
+
+    #[test]
+    fn wipe_clears_the_seed_and_no_more_signatures_are_made() {
+        let key = FileKey::from_seed(&[7u8; 32], "k");
+        let public = key.public_key();
+        assert_eq!(key.seed_bytes(), [7u8; 32]);
+        let signature = key.sign(b"m").expect("signs before the wipe");
+        assert!(RustCrypto.ed25519_verify(&public, b"m", &signature));
+        key.wipe();
+        assert_eq!(key.seed_bytes(), [0u8; 32], "the seed buffer is cleared");
+        assert!(key.sign(b"m").is_err());
+        assert_eq!(key.public_key(), public);
     }
 
     #[test]

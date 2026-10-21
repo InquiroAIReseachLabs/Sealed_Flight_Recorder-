@@ -533,9 +533,9 @@ pub fn seal(
 
     let (root, shape) = merkle_root(crypto, &record).map_err(SealError)?;
     let payload = signed_payload(schema, &shape, &root);
-    let signature = signer
-        .sign(&payload)
-        .map_err(|e| SealError(format!("signing failed: {e}")))?;
+    let signature = signer.sign(&payload);
+    signer.wipe();
+    let signature = signature.map_err(|e| SealError(format!("signing failed: {e}")))?;
     if !crypto.ed25519_verify(&public, &payload, &signature) {
         return Err(SealError(
             "the signature does not verify against the signing public key; nothing was written"

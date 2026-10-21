@@ -168,3 +168,53 @@ fn tpm2_tools_come_from_an_absolute_directory_never_from_path() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The tools directory is judged by where it really is: a symlink from a closed directory into
+/// one whose parent others can write to is refused, because that parent can rename the real
+/// directory away and put another in its place.
+#[cfg(unix)]
+#[test]
+fn a_tools_directory_reached_by_a_symlink_is_judged_by_its_real_parents() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = scratch("tpm-link");
+    // Only root-owned parents tell this case from the plain "not root" refusal.
+    if !dir
+        .ancestors()
+        .all(|p| std::fs::metadata(p).is_ok_and(|m| m.uid() == 0))
+    {
+        std::fs::remove_dir_all(dir).unwrap();
+        return;
+    }
+    let marker = dir.join("ran");
+    let (open, closed) = (dir.join("open"), dir.join("closed"));
+    let real = open.join("bin");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::create_dir_all(&closed).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+    std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for tool in [
+        "tpm2_createpolicy",
+        "tpm2_create",
+        "tpm2_load",
+        "tpm2_unseal",
+    ] {
+        planted(&real.join(tool), &marker, "exit 1");
+    }
+    std::os::unix::fs::symlink(&real, closed.join("link")).unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_sfr"))
+        .args(["keygen", "--tpm-sealed", "--out"])
+        .arg(dir.join("key"))
+        .env("SFR_TPM2_TOOLS_DIR", closed.join("link"))
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(4), "{}", text(&o));
+    assert!(
+        text(&o).contains("is writable by group or others"),
+        "{}",
+        text(&o)
+    );
+    assert!(!marker.exists(), "a tool behind a writable parent ran");
+    std::fs::remove_dir_all(dir).unwrap();
+}

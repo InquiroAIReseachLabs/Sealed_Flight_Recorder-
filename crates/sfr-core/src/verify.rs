@@ -1354,7 +1354,10 @@ mod tests {
             allow_untested_ulog_version: false,
             allow_ignore_all: false,
         };
+        assert!(!key.wiped());
         let sealed = seal(&ing, &eval, &rules, &baseline, &params, &TestBackend, &key).unwrap();
+        // The seed is cleared as soon as the signature is made, not when the run ends.
+        assert!(key.wiped());
         (log, sealed.bytes, key)
     }
 

@@ -1074,7 +1074,7 @@ fn sealed_topics_give_one_digest_per_instance_on_real_and_custom_topics() {
 }
 
 #[test]
-fn more_than_64_sealed_topics_is_a_usage_error() {
+fn more_than_64_sealed_topics_is_over_an_input_limit() {
     let list: Vec<String> = (0..65).map(|i| format!("\"t{i}\"")).collect();
     let rules = rules_plus(&format!(
         "[sealed_topics]\ntopics = [{}]\n",
@@ -1086,7 +1086,7 @@ fn more_than_64_sealed_topics_is_a_usage_error() {
         "testdata/baselines/v1.17.0_mc_flight_1.params",
         false,
     );
-    assert_eq!(out.status.code(), Some(4), "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
     assert!(
         stderr(&out).contains("`sealed_topics` exceeds the input limit of 64 topics (SPEC B1.4)"),
         "{}",

@@ -142,7 +142,7 @@ TOML, read by `parse_rules` in `crates/sfr-core/src/rules.rs`. Unknown keys and 
 | `[authorized_sources]` `category` | no | `"PAYLOAD"` or `"GENERAL"` |
 | `[extended.*]` | no | the X rules above |
 
-Limits (`crates/sfr-core/src/rules.rs`): a list holds at most `MAX_LIST_ENTRIES` entries, `[sealed_topics]` at most `MAX_SEALED_TOPICS` (more is a usage error, exit 4), TOML nesting at most `TOML_MAX_DEPTH` levels, and the file at most `MAX_TEXT_BYTES` (`crates/sfr/src/main.rs`). Every other rules file error exits 3 and names the line. [LIMITS.md](LIMITS.md) lists every limit.
+Limits (`crates/sfr-core/src/rules.rs`): a list holds at most `MAX_LIST_ENTRIES` entries, `[sealed_topics]` at most `MAX_SEALED_TOPICS` (more is refused, exit 3), TOML nesting at most `TOML_MAX_DEPTH` levels, and the file at most `MAX_TEXT_BYTES` (`crates/sfr/src/main.rs`). Every other rules file error exits 3 and names the line. [LIMITS.md](LIMITS.md) lists every limit.
 
 The whole rules file is embedded in the record, so a deep verify uses the rules that sealed it.
 
