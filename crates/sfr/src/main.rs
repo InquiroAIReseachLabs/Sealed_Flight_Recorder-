@@ -754,12 +754,10 @@ fn seal_cmd(args: &[String], crypto: &RustCrypto, stdout: &mut dyn Write) -> Res
 
     let rules_text = read_text(rules_path, "rules file", exit_code::MALFORMED_INPUT)?;
     let rules: Rules = parse_rules(&rules_text).map_err(|e| {
-        let code = if e.usage {
-            exit_code::USAGE
-        } else {
-            exit_code::MALFORMED_INPUT
-        };
-        fail(code, format!("rules file {rules_path}: {e}"))
+        fail(
+            exit_code::MALFORMED_INPUT,
+            format!("rules file {rules_path}: {e}"),
+        )
     })?;
     let baseline_text = read_text(baseline_path, "baseline", exit_code::MALFORMED_INPUT)?;
     if rules.ignores_everything() && !a.flag("--allow-ignore-all") {

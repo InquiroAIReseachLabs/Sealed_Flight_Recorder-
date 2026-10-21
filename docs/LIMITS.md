@@ -15,8 +15,8 @@ A message for a name, version or length rule ends with a parenthesis that states
 
 | Command | Input | Exit code |
 |---|---|---|
-| `seal` | log, rules file, baseline; a log whose record would be over the record limit (`--dry-run` writes no record and does not apply that limit) | 3 |
-| `seal` | key file; a rules file with more than 64 sealed topics (a usage error) | 4 |
+| `seal` | log, rules file (also one with more than 64 sealed topics), baseline; a log whose record would be over the record limit (`--dry-run` writes no record and does not apply that limit) | 3 |
+| `seal` | key file | 4 |
 | `verify` | public key | 4 |
 | `verify` | record, or the log given with `--ulog` | 1 (verification failed) |
 
@@ -40,7 +40,7 @@ A message for a name, version or length rule ends with a parenthesis that states
 | Data records kept for the rules | 8,000,000 | Each record of a topic a rule reads is kept as a row until the rules run; every other record is only counted. The golden flights keep 120 to 145 a second, so this is about 15 hours of flight. Measured on x86_64 with a log of nothing but `vehicle_status` and `failsafe_flags` samples, the costliest rows: 89 MB peak for 100 MB, 343 MB for 400 MB, 598 MB with 7,999,981 kept records (700 MB), and one record more is refused (exit 3). A 100 MB or 400 MB log of the golden flight's mix peaks at 7 MB or 14 MB. | `ingest.rs` `MAX_KEPT_ROWS` |
 | Rules file, baseline, key file, public key | 16 MiB each | Stops `sfr` reading an unbounded file into memory. | `sfr/src/main.rs` `MAX_TEXT_BYTES` |
 | `required_topics.topics`, `parameters.ignore`, `watched_parameters.names`, `payload_commands.ids`, `authorized_sources.sources` | 256 entries each | Bounds the work per log. | `rules.rs` `MAX_LIST_ENTRIES` |
-| `sealed_topics.topics` | 64 entries; more is a usage error, exit 4 | Each sealed topic instance keeps a running digest while the log streams. | `rules.rs` `MAX_SEALED_TOPICS` |
+| `sealed_topics.topics` | 64 entries; more is refused, exit 3 | Each sealed topic instance keeps a running digest while the log streams. | `rules.rs` `MAX_SEALED_TOPICS` |
 | Watched parameter name | 1 to 64 letters, digits, `_` | A parameter name pattern without `*`. | `rules.rs` `valid_param_name` |
 | Payload command id; source system id; source component id | 0 to 4,294,967,295; 0 to 255; 0 to 65,535 | 32, 8 and 16 bits in PX4 v1.17. | `rules.rs` `parse_payload_commands`, `parse_authorized_sources` |
 | Topic name | 1 to 64 lowercase letters, digits, `_` | The uORB rule. | `rules.rs` `valid_topic` |
