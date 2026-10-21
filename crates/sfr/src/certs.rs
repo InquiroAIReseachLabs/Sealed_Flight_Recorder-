@@ -767,7 +767,8 @@ impl std::fmt::Display for FileError {
 /// The whole file, if it is at most `max` bytes; a longer one is refused, never cut.
 fn read_limited(path: &str, what: &str, max: u64) -> Result<Vec<u8>, FileError> {
     use std::io::Read;
-    let other = |e: std::io::Error| FileError::Other(format!("cannot read {what} {path}: {e}"));
+    let shown = sfr_core::display::visible(path);
+    let other = |e: std::io::Error| FileError::Other(format!("cannot read {what} {shown}: {e}"));
     let mut bytes = Vec::new();
     std::fs::File::open(path)
         .map_err(other)?
@@ -776,7 +777,7 @@ fn read_limited(path: &str, what: &str, max: u64) -> Result<Vec<u8>, FileError> 
         .map_err(other)?;
     if bytes.len() as u64 > max {
         return Err(FileError::Limit(format!(
-            "{what} {path}: {}",
+            "{what} {shown}: {}",
             sfr_core::limit_exceeded("the file", max, "bytes")
         )));
     }
@@ -786,29 +787,31 @@ fn read_limited(path: &str, what: &str, max: u64) -> Result<Vec<u8>, FileError> 
 /// Certificates from a file of at most `max` bytes: every PEM `CERTIFICATE` block, or one DER
 /// certificate.
 pub fn read_certificates(path: &str, what: &str, max: u64) -> Result<Vec<Vec<u8>>, FileError> {
+    let shown = sfr_core::display::visible(path);
     let bytes = read_limited(path, what, max)?;
     if bytes.first() == Some(&0x30) {
         return Ok(vec![bytes]);
     }
     let text = String::from_utf8(bytes)
-        .map_err(|_| FileError::Other(format!("{what} {path} is neither PEM nor DER")))?;
+        .map_err(|_| FileError::Other(format!("{what} {shown} is neither PEM nor DER")))?;
     pem_decode_all(&text, "CERTIFICATE")
-        .map_err(|e| FileError::Other(format!("{what} {path}: {e}")))
+        .map_err(|e| FileError::Other(format!("{what} {shown}: {e}")))
 }
 
 /// A CRL from a file of at most `max` bytes: a PEM `X509 CRL` block, or DER.
 pub fn read_crl(path: &str, max: u64) -> Result<Vec<u8>, FileError> {
+    let shown = sfr_core::display::visible(path);
     let bytes = read_limited(path, "CRL", max)?;
     if bytes.first() == Some(&0x30) {
         return Ok(bytes);
     }
     let text = String::from_utf8(bytes)
-        .map_err(|_| FileError::Other(format!("CRL {path} is neither PEM nor DER")))?;
+        .map_err(|_| FileError::Other(format!("CRL {shown} is neither PEM nor DER")))?;
     let mut blocks = pem_decode_all(&text, "X509 CRL")
-        .map_err(|e| FileError::Other(format!("CRL {path}: {e}")))?;
+        .map_err(|e| FileError::Other(format!("CRL {shown}: {e}")))?;
     if blocks.len() != 1 {
         return Err(FileError::Other(format!(
-            "CRL {path} holds {} CRLs; give one per --crl",
+            "CRL {shown} holds {} CRLs; give one per --crl",
             blocks.len()
         )));
     }
