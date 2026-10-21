@@ -1043,6 +1043,35 @@ fn a_past_verification_time_needs_its_flag_and_says_so_first() {
     );
 }
 
+/// A CA whose issuer and subject names are the same but that another key signed is an
+/// intermediate, not a root: as an anchor it needs --allow-partial-chain.
+#[test]
+fn a_self_issued_intermediate_as_trust_anchor_needs_allow_partial_chain() {
+    let (o, record) = seal(SIGNER, Some("signer.pem"), Some("inter.pem"), SEAL_TIME);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let refused = verify_anchor(&record, "inter_selfissued.pem", &BOTH_CRLS);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("is an intermediate CA (issued by CN=sfr test root), not a root"),
+        "{}",
+        text(&refused)
+    );
+    let allowed = verify_anchor_with(
+        &record,
+        "inter_selfissued.pem",
+        &BOTH_CRLS,
+        &["--allow-partial-chain"],
+    );
+    assert!(
+        !text(&allowed).contains("is an intermediate CA (issued by"),
+        "{}",
+        text(&allowed)
+    );
+    // The real root, self-signed, is not refused for this.
+    let root = verify_anchor(&record, "root.pem", &BOTH_CRLS);
+    assert_eq!(root.status.code(), Some(0), "{}", text(&root));
+}
+
 /// An intermediate CA given as the trust anchor stops the chain short of a root: refused
 /// unless --allow-partial-chain is given, which the trust line then states.
 #[test]

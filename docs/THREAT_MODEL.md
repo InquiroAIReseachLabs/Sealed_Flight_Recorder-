@@ -109,7 +109,7 @@ Sealing on the companion computer right after disarm shrinks the window in which
 `verify --trust-anchor` requires:
 
 - the chain reaches the anchor, and every certificate is valid at the verification time (the verifier's clock, or `--at`; a time in the past needs `--allow-past-at`, and the output's first line then says the record verified as of that time and whether the chain is valid now);
-- the anchor is a root (its own issuer); an intermediate CA given as the anchor needs `--allow-partial-chain`, and the trust line then says nothing above it was checked;
+- the anchor is a root (its own key signed it; the same name as issuer and subject is not enough); an intermediate CA given as the anchor needs `--allow-partial-chain`, and the trust line then says nothing above it was checked;
 - every anchor given is valid at the verification time, has basicConstraints cA TRUE and keyUsage keyCertSign, and, with a pathLenConstraint, allows the intermediate certificates the chain gives (RFC 5280 sections 4.2.1.3 and 4.2.1.9); webpki takes only an anchor's subject, key and name constraints, so `sfr` checks these itself (`an_expired_non_ca_non_signing_or_too_short_trust_anchor_is_refused` in `crates/sfr/tests/certificates.rs`);
 - the signer certificate carries the sfr record-signing extended key usage (`2.25.182460915354635260549596502533646383540`) and keyUsage digitalSignature, and not also code signing, TLS server authentication or any usage;
 - no certificate in the path is in the current CRL of its issuer (`--crl`). A listed certificate counts as revoked whatever its revocation date, because a stolen key could backdate a seal.
