@@ -146,7 +146,7 @@ These are GitHub settings made once by the release key holder. No file in the re
 
 ## Hygiene
 
-The release workflow runs `scripts/check_release_hygiene.sh` on every file and every file inside every tarball. It fails on a home directory path, a GitHub runner name, an email address, a session or tool path, an internal word, the build machine's user or host name, or a tarball member that is not relative or not owned by root. The SBOMs carry crate author names but not their email addresses, and name the source tree as `/build/sfr`, as the binary does.
+The release workflow runs `scripts/check_release_hygiene.sh` on every file and every file inside every tarball. It fails on a home directory path, a GitHub runner name, an email address, a session or tool path, an internal word, the build machine's user or host name, or a tarball member that is not relative or not owned by root. A tarball is scanned through its member names, its gzip header and every unpacked member, not through its compressed bytes: those hold no readable text, and a pattern that matched in them would match by chance (about one random 4 MB file in four holds something shaped like an email address). The SBOMs carry crate author names but not their email addresses, and name the source tree as `/build/sfr`, as the binary does.
 
 ## Rotate the key
 
