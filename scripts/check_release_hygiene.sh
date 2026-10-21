@@ -99,7 +99,17 @@ check_tarball() { # check_tarball <path>
   rm -f "$listing"
   stage="$(mktemp -d)"
   tar -C "$stage" --no-same-owner --no-same-permissions -xzf "$tb" 2> /dev/null || { rm -rf "$stage"; echo "HIT $name: tar-unpack: cannot unpack" >&2; return 1; }
-  scan_file "$name" "$tb" || rc=1
+  # The tarball itself is compressed, so its bytes hold no readable text except the gzip header
+  # (a name or a comment would sit there) and what exiftool reports: a pattern that matches
+  # elsewhere in them matches by chance, and about one random 4 MB file in four holds such a match, and a release has three tarballs. The
+  # unpacked members, which hold the text, are scanned in full below.
+  head -c 64 "$tb" > "$stage.head"
+  scan_text "$name (gzip header)" "$stage.head" || rc=1
+  rm -f "$stage.head"
+  exiftool "$tb" 2> /dev/null | grep -v -E '^(File Name|Directory|File Size|File (Modification|Access|Inode Change) Date/Time|File Permissions) ' > "$stage.exif" || true
+  [ -s "$stage.exif" ] || { echo "FAIL $name: exiftool printed nothing" >&2; rc=1; }
+  scan_text "$name (exiftool)" "$stage.exif" || rc=1
+  rm -f "$stage.exif"
   while IFS= read -r -d '' f; do
     scan_file "$name:${f#"$stage"/}" "$f" || rc=1
   done < <(find "$stage" -type f -print0 | sort -z)
@@ -189,6 +199,13 @@ EOF
   rm -rf "$t/link/pkg"
   if (check_dir "$t/link" > "$t/link.out" 2>&1); then die "self-test: a symlink member passed"; fi
   grep -q 'links or special files' "$t/link.out" || die "self-test: the symlink is not named"
+  # an address in the gzip header (the stored file name), which the tarball scan still reads
+  mkdir -p "$t/gzname/pkg/sfr-0.1.0-x"; printf 'x\n' > "$t/gzname/pkg/sfr-0.1.0-x/f"
+  tar -C "$t/gzname/pkg" --owner=0 --group=0 --numeric-owner -cf "$t/gzname/by-someone${at}example.com.tar" sfr-0.1.0-x
+  (cd "$t/gzname" && gzip -N "by-someone${at}example.com.tar" && mv "by-someone${at}example.com.tar.gz" sfr-0.1.0-x.tar.gz)
+  rm -rf "$t/gzname/pkg"
+  if (check_dir "$t/gzname" > "$t/gzname.out" 2>&1); then die "self-test: an address in the gzip header passed"; fi
+  grep -q 'email-address' "$t/gzname.out" || die "self-test: the gzip header address is not named"
   # an empty directory is no pass
   mkdir -p "$t/empty"
   if (check_dir "$t/empty" > /dev/null 2>&1); then die "self-test: an empty directory passed"; fi
