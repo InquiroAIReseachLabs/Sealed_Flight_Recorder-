@@ -89,8 +89,16 @@ mod tests {
                 "3b6cccd7e3e023ff393006f030315ee7ad9eb111b022b41fba7e5b7a3973f688",
             ),
             (
+                4,
+                "9bcd51240af4005168f033121ba85be5a6ed4f0e6a5fac262066729b8fbfdecb",
+            ),
+            (
                 5,
                 "b855b42d6c30f5b087e05266783fbd6e394f7b926013ccaa67700a8b0c5a596f",
+            ),
+            (
+                6,
+                "bb36e7d3d4cee5720cbd323d02fab15962e2ba1dadf5f8fc6eeef4fd6ad056a8",
             ),
             (
                 7,

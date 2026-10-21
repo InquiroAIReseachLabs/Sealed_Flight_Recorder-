@@ -858,6 +858,14 @@ pub(crate) mod tests {
         assert!(e.to_string().contains("1 to 64 letters"), "{e}");
         assert_eq!(e.line, 5);
 
+        // Exactly 80 levels is within the limit: the file is refused for the unknown key, not
+        // for its depth.
+        let at_limit = format!("{MIN}x = {}{}\n", "[".repeat(80), "]".repeat(80));
+        let e = parse_rules(&at_limit).expect_err("an unknown key");
+        assert!(e.to_string().contains("unknown key"), "{e}");
+        let dotted_at_limit = format!("{MIN}{} = 1\n", vec!["a"; 80].join("."));
+        let e = parse_rules(&dotted_at_limit).expect_err("an unknown key");
+        assert!(!e.to_string().contains("input limit"), "{e}");
         let deep = format!("{MIN}x = {}{}\n", "[".repeat(81), "]".repeat(81));
         let e = parse_rules(&deep).expect_err("81 nested arrays");
         assert!(
