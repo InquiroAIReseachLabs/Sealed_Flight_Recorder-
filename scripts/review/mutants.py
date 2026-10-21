@@ -13,12 +13,15 @@ be caught by a later tier and is recorded as missed without being run again.
 
 Usage:
   scripts/review/mutants.py run --tier N|all --out DIR [--tree DIR] [--jobs 3] [--lines FILE]
-                                [--shard K/M] [FILE...]
+                                [--shard K/M] [--quiet] [FILE...]
       Runs cargo-mutants for each file (default: every production source file, in review order)
       into DIR/tier<N>/<file>. Tiers 2 and 3 take only the survivors of the tiers before
       (found in DIR), on lines that tests reach (--lines). With `--tier all` each file goes
       through tiers 1, 2 and 3 in turn. With `--shard K/M` only every Mth file, from the Kth
-      (counting from 0), is run, so M jobs together cover the list exactly once.
+      (counting from 0), is run, so M jobs together cover the list exactly once. With `--quiet` the
+      output of cargo-mutants goes to DIR/log/ instead of the terminal, and only the counts of
+      each run are printed: the names of missed mutants are findings, and the log of a CI run on a
+      public repository is public.
   scripts/review/mutants.py merge-metrics LEDGER.json...
       Copies the mutation metrics of the chunks that each given ledger holds into docs/review/
       ledger.json (the ledgers of the shards of one run: no two hold the same chunk).
@@ -111,13 +114,15 @@ def survivors(out, path, tiers_before, uncovered):
 
 
 def run(argv):
-    tier, out, tree, jobs, lines_file, files, shard = None, None, ROOT, "3", None, [], None
+    tier, out, tree, jobs, lines_file, files, shard, quiet = None, None, ROOT, "3", None, [], None, False
     a = list(argv)
     while a:
         x = a.pop(0)
         if x == "--tier":
             t = a.pop(0)
             tier = t if t == "all" else int(t)
+        elif x == "--quiet":
+            quiet = True
         elif x == "--shard":
             k, m = a.pop(0).split("/")
             shard = (int(k), int(m))
@@ -149,11 +154,14 @@ def run(argv):
         todo_files = todo_files[shard[0]::shard[1]]
     for path in todo_files:
         for t in (1, 2, 3) if tier == "all" else (tier,):
-            run_one(path, t, out, tree, jobs, uncovered)
+            run_one(path, t, out, tree, jobs, uncovered, quiet)
     return 0
 
 
-def run_one(path, tier, out, tree, jobs, uncovered):
+SUMMARY = re.compile(r"^\d+ mutants? tested in [^:]*: .*$", re.M)
+
+
+def run_one(path, tier, out, tree, jobs, uncovered, quiet=False):
     """cargo-mutants on one file in one tier, into out/tier<N>/<file>."""
     if tier == 3 and path not in TIER3_FILES:
         return
@@ -174,7 +182,19 @@ def run_one(path, tier, out, tree, jobs, uncovered):
             cmd += ["--cargo-arg=--profile=qemu-test"]
         cmd += ["--"] + (SFR_E2E if tier == 2 else FORGING + (["--test", "canonical"] if path.endswith("json.rs") else []))
     print("+", path, "tier", tier, flush=True)
-    r = subprocess.run(cmd, cwd=tree)
+    if quiet:
+        # No GITHUB_ACTIONS: cargo-mutants would print each missed mutant as a workflow annotation.
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_ACTIONS"}
+        os.makedirs(os.path.join(out, "log"), exist_ok=True)
+        log = os.path.join(out, "log", f"tier{tier}-{slug(path)}.txt")
+        with open(log, "w") as lf:
+            r = subprocess.run(cmd, cwd=tree, env=env, stdout=lf, stderr=subprocess.STDOUT)
+        with open(log) as lf:
+            found = SUMMARY.findall(lf.read())
+        # The summary line holds counts only.
+        print(found[-1] if found else f"(no summary; cargo mutants exit status {r.returncode})", flush=True)
+    else:
+        r = subprocess.run(cmd, cwd=tree)
     if r.returncode not in (0, 2, 3):  # 0 all caught, 2 survivors, 3 timeouts; others are failures
         print(f"cargo mutants failed on {path} with status {r.returncode}", file=sys.stderr, flush=True)
 
@@ -282,6 +302,8 @@ def self_test():
     assert tier1_args("crates/sfr/src/main.rs") == ["--", "--bins"]
     rx = "^(" + "|".join(re.escape(x) for x in [mutant_id(m)]) + ")$"
     assert re.match(rx, mutant_id(m))
+    assert SUMMARY.findall("x\n13 mutants tested in 86s: 1 missed, 3 caught, 9 unviable\n") == [
+        "13 mutants tested in 86s: 1 missed, 3 caught, 9 unviable"]
     assert review_order()[0] == "crates/sfr-core/src/ulog.rs" and len(set(review_order())) == len(review_order())
     files = review_order()
     parts = [files[k::3] for k in range(3)]
