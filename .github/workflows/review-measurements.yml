@@ -4,8 +4,9 @@
 # artifact (the ledger, its rendered pages and the fuzz report) that a maintainer commits.
 #
 # Per-mutant results and fuzz crashes are findings that stay private until fixed (docs/review/
-# PLAN.txt, section 8), and an artifact of a public repository is public. So the only artifacts are
-# counts per chunk and run statistics. A list of missed mutants, or a crash input, is kept only
+# PLAN.txt, section 8), and an artifact or a log of a public repository is public. So the mutation
+# jobs run cargo-mutants quietly (its output goes to a file that is not uploaded; the log shows
+# counts only), and the only artifacts are counts per chunk and run statistics. A list of missed mutants, or a crash input, is kept only
 # when the repository variable REVIEW_AGE_RECIPIENT holds an age public key (a recipient, not a
 # secret); it is then encrypted to that key before it is uploaded. Without the variable it is not
 # kept, and the job still fails on a crash.
@@ -76,7 +77,7 @@ jobs:
           set -euo pipefail
           python3 -I scripts/review/mutants.py run --tier all --jobs 3 \
             --shard "${{ matrix.shard }}/12" \
-            --lines base/covered-lines.json --out target/mutants
+            --lines base/covered-lines.json --out target/mutants --quiet
       - name: Count the outcomes per chunk
         run: |
           set -euo pipefail
